@@ -48,7 +48,6 @@ ACCOUNTS = [
     {"api_id": 36347986, "api_hash": "2ef08b03748cdf3b688efc18a1e540b7", "phone": "+13347793071"},
     {"api_id": 36037729, "api_hash": "c48c8326dfb577fd4b8d503cb7dce2a4", "phone": "+19316345068"},
     {"api_id": 36360664, "api_hash": "facb9902e2eafe009a2fb43c901c2328", "phone": "+959694410210"},
-    {"api_id": 38047070, "api_hash": "8132d885c41d0db88c345a868de305e5", "phone": "+15029264416"},
     {"api_id": 37487174, "api_hash": "65168477b7764d3163d8a3b2bc3e9006", "phone": "+18633585097"},
     {"api_id": 36689382, "api_hash": "68e81cc3a654222750230c8bafff6c2c", "phone": "+18598807376"},
     {"api_id": 34009805, "api_hash": "64daace78ea1ca5935e8b1f73dfd0280", "phone": "+15029264472"},
