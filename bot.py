@@ -1693,26 +1693,25 @@ async def cb_promo_view(cb: CallbackQuery):
     ptype = promo["ptype"]
 
     if ptype == "ref_contest":
-        text = (
-            "🌸✨ <b>ПРАЗДНИЧНЫЙ КОНКУРС ОТ КОМАНДЫ SwordUser!</b> ✨🌸\n\n"
-            "Друзья! 💖 В честь прекрасного праздника 8 Марта мы, команда SwordUser, "
-            "подготовили для вас глобальное обновление и запускаем большой праздничный конкурс! 🎉\n\n"
-            "🔥 <b>Условия очень простые:</b>\n"
-            "Приглашайте как можно больше друзей по своей реферальной ссылке в бота 🤖\n"
-            "Чем больше друзей зарегистрируется — тем выше ваш шанс занять призовое место! 🏆\n\n"
-            "🎁 <b>Призы для ТОП-5 участников:</b>\n\n"
-            "🥇 1 место — 1 неделя подписки ⭐\n"
-            "🥈 2 место — 5 дней подписки ⭐\n"
-            "🥉 3 место — 1 день подписки + 25 звёзд ⭐✨\n"
-            "🏅 4 место — 1 день подписки + 15 звёзд ⭐\n"
-            "🎖 5 место — 1 день подписки или 15 звёзд ⭐\n\n"
-            "💎 Покажите свою активность, приглашайте друзей и поднимайтесь в топ участников!\n\n"
-            "⏳ Количество мест ограничено, поэтому начинайте приглашать друзей уже сейчас! 🚀\n\n"
-            "🌷 С праздником 8 Марта и удачи всем участникам!\n"
-            "Ваша команда SwordUser ⚔️"
-        )
+        text = "🌸✨ <b>ПРАЗДНИЧНЫЙ КОНКУРС ОТ КОМАНДЫ SwordUser!</b> ✨🌸\n\n"
+        text += "Друзья! 💖 В честь прекрасного праздника 8 Марта мы, команда SwordUser, "
+        text += "подготовили для вас глобальное обновление и запускаем большой праздничный конкурс! 🎉\n\n"
+        text += "🔥 <b>Условия очень простые:</b>\n"
+        text += "Приглашайте как можно больше друзей по своей реферальной ссылке в бота 🤖\n"
+        text += "Чем больше друзей зарегистрируется — тем выше ваш шанс занять призовое место! 🏆\n\n"
+        text += "🎁 <b>Призы для ТОП-5 участников:</b>\n\n"
+        text += "🥇 1 место — 1 неделя подписки ⭐\n"
+        text += "🥈 2 место — 5 дней подписки ⭐\n"
+        text += "🥉 3 место — 1 день подписки + 25 звёзд ⭐✨\n"
+        text += "🏅 4 место — 1 день подписки + 15 звёзд ⭐\n"
+        text += "🎖 5 место — 1 день подписки или 15 звёзд ⭐\n\n"
+        text += "💎 Покажите свою активность, приглашайте друзей и поднимайтесь в топ участников!\n\n"
+        text += "⏳ Количество мест ограничено, поэтому начинайте приглашать друзей уже сейчас! 🚀\n\n"
+        text += "🌷 С праздником 8 Марта и удачи всем участникам!\n"
+        text += "Ваша команда SwordUser ⚔️"
+        
         kb = InlineKeyboardBuilder()
-        kb.button(text="🏆 Посмотреть топ", callback_data=f"pt_{pid}")
+        kb.button(text="🏆 Посмотреть топ", callback_data="pt_" + str(pid))
         kb.button(text="👥 Моя ссылка", callback_data="cmd_referral")
         kb.button(text="🔙 Меню", callback_data="cmd_menu")
         kb.adjust(1)
@@ -1724,26 +1723,13 @@ async def cb_promo_view(cb: CallbackQuery):
         
         try:
             photo = FSInputFile("march8.jpg")
-            await bot.send_photo(
-                uid,
-                photo=photo,
-                caption=text,
-                reply_markup=kb.as_markup(),
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.error(f"Photo error: {e}")
-            await bot.send_message(
-                uid,
-                text,
-                reply_markup=kb.as_markup(),
-                parse_mode="HTML"
-            )
+            await bot.send_photo(uid, photo=photo, caption=text, reply_markup=kb.as_markup(), parse_mode="HTML")
+        except:
+            await bot.send_message(uid, text, reply_markup=kb.as_markup(), parse_mode="HTML")
         return
 
     elif ptype == "discount":
-        text = (f"🔥 <b>{promo['name']}</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"💰 Скидочная акция!\nУспейте воспользоваться!\n\n📅 {promo['created']}")
+        text = "🔥 <b>" + promo["name"] + "</b>\n\n💰 Скидочная акция!"
         kb = InlineKeyboardBuilder()
         kb.button(text="💰 Premium", callback_data="cmd_prices")
         kb.button(text="🔙 Меню", callback_data="cmd_menu")
@@ -1751,8 +1737,7 @@ async def cb_promo_view(cb: CallbackQuery):
         await edit_msg(cb.message, text, kb.as_markup())
 
     elif ptype == "holiday":
-        text = (f"🎉 <b>{promo['name']}</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"🌺 Праздничная акция!\n\n📅 {promo['created']}")
+        text = "🎉 <b>" + promo["name"] + "</b>\n\n🌺 Праздничная акция!"
         kb = InlineKeyboardBuilder()
         kb.button(text="💰 Premium", callback_data="cmd_prices")
         kb.button(text="🔙 Меню", callback_data="cmd_menu")
@@ -1760,59 +1745,12 @@ async def cb_promo_view(cb: CallbackQuery):
         await edit_msg(cb.message, text, kb.as_markup())
 
     else:
-        text = (f"⭐ <b>{promo['name']}</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"🎁 Специальное предложение!\n\n📅 {promo['created']}")
+        text = "⭐ <b>" + promo["name"] + "</b>\n\n🎁 Специальное предложение!"
         kb = InlineKeyboardBuilder()
         kb.button(text="💰 Premium", callback_data="cmd_prices")
         kb.button(text="🔙 Меню", callback_data="cmd_menu")
         kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
-
-
-@dp.callback_query(F.data.startswith("pt_"))
-async def cb_promo_top(cb: CallbackQuery):
-    await answer_cb(cb)
-    pid = int(cb.data[3:]); uid = cb.from_user.id
-    top = get_ref_top(20)
-
-    text = "🏆 <b>Топ рефералов</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
-    if top:
-        for i, t in enumerate(top, 1):
-            if i == 1: medal = "🥇"
-            elif i == 2: medal = "🥈"
-            elif i == 3: medal = "🥉"
-            elif i <= 5: medal = "🏅"
-            elif i <= 10: medal = "🎖"
-            else: medal = f"{i}."
-            name = _d(t['uid'], t['uname'])
-            you = " ← <b>ты</b>" if t['uid'] == uid else ""
-            text += f"{medal} {name} — <code>{t['ref_count']}</code> чел.{you}\n"
-    else:
-        text += "<i>Пока никто не пригласил друзей</i>\n"
-
-    text += "\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-
-    my_place, my_refs = get_my_ref_place(uid)
-
-    if my_refs > 0:
-        text += f"\n📍 <b>Твоё место:</b> #{my_place}\n"
-        text += f"👥 <b>Твои рефералы:</b> <code>{my_refs}</code> чел.\n"
-        if my_place > 1 and top:
-            for t in top:
-                if t["ref_count"] > my_refs:
-                    need = t["ref_count"] - my_refs
-                    text += f"⬆️ До #{my_place - 1} нужно ещё <code>{need}</code> реф.\n"
-                    break
-    else:
-        text += "\n📍 <b>Ты ещё не пригласил друзей</b>\n"
-        text += "👥 Пригласи первого и попади в топ!\n"
-
-    kb = InlineKeyboardBuilder()
-    kb.button(text="👥 Моя ссылка", callback_data="cmd_referral")
-    kb.button(text="🔙 К акции", callback_data=f"pv_{pid}")
-    kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
-    await edit_msg(cb.message, text, kb.as_markup())
 
 
 # ─── ТИКТОК ───
