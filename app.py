@@ -375,33 +375,53 @@ def close_db(exc):
 def init_web_db():
     db = sqlite3.connect(DB_PATH); c = db.cursor()
     c.executescript("""
+    CREATE TABLE IF NOT EXISTS users (
+        uid INTEGER PRIMARY KEY, uname TEXT DEFAULT '', joined TEXT DEFAULT '',
+        free INTEGER DEFAULT 3, searches INTEGER DEFAULT 0, sub_end TEXT DEFAULT '',
+        referred_by INTEGER DEFAULT 0, ref_count INTEGER DEFAULT 0,
+        sub_bonus INTEGER DEFAULT 0, favorites TEXT DEFAULT '[]',
+        auto_renew INTEGER DEFAULT 0, auto_renew_plan TEXT DEFAULT '',
+        last_reminder TEXT DEFAULT '', banned INTEGER DEFAULT 0,
+        balance REAL DEFAULT 0.0, pending_ref INTEGER DEFAULT 0,
+        captcha_passed INTEGER DEFAULT 0, last_roulette TEXT DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, username TEXT,
+        found_at TEXT, mode TEXT, length INTEGER DEFAULT 5
+    );
     CREATE TABLE IF NOT EXISTS market_listings (
         id INTEGER PRIMARY KEY AUTOINCREMENT, seller_uid INTEGER,
         username TEXT, price REAL, description TEXT DEFAULT '',
         category TEXT DEFAULT 'other', status TEXT DEFAULT 'active',
         created TEXT, sold_to INTEGER DEFAULT 0, sold_at TEXT DEFAULT '',
-        views INTEGER DEFAULT 0, buyer_confirmed INTEGER DEFAULT 0);
+        views INTEGER DEFAULT 0, buyer_confirmed INTEGER DEFAULT 0
+    );
     CREATE TABLE IF NOT EXISTS seller_verifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER UNIQUE,
         status TEXT DEFAULT 'none', verify_code TEXT DEFAULT '',
         code_expires TEXT DEFAULT '', verified_at TEXT DEFAULT '',
-        tg_username TEXT DEFAULT '');
+        tg_username TEXT DEFAULT ''
+    );
     CREATE TABLE IF NOT EXISTS game_attempts (
         uid INTEGER, game TEXT, attempts_left INTEGER DEFAULT 0,
         last_reset TEXT DEFAULT '', total_played INTEGER DEFAULT 0,
-        total_won REAL DEFAULT 0, PRIMARY KEY (uid, game));
+        total_won REAL DEFAULT 0, PRIMARY KEY (uid, game)
+    );
     CREATE TABLE IF NOT EXISTS market_transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT, listing_id INTEGER,
         buyer_uid INTEGER, seller_uid INTEGER, username TEXT,
         price REAL, method TEXT DEFAULT 'balance',
-        status TEXT DEFAULT 'pending', created TEXT);
+        status TEXT DEFAULT 'pending', created TEXT
+    );
     CREATE TABLE IF NOT EXISTS seller_ratings (
         id INTEGER PRIMARY KEY AUTOINCREMENT, seller_uid INTEGER,
         buyer_uid INTEGER, rating INTEGER DEFAULT 5,
-        comment TEXT DEFAULT '', created TEXT);
+        comment TEXT DEFAULT '', created TEXT
+    );
     CREATE TABLE IF NOT EXISTS verification_codes (
         code TEXT PRIMARY KEY, uid INTEGER,
-        created TEXT, used INTEGER DEFAULT 0);
+        created TEXT, used INTEGER DEFAULT 0
+    );
     """)
     db.commit(); db.close()
 
