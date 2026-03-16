@@ -18,7 +18,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET", secrets.token_hex(32))
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=30)
 
-BOT_TOKEN = "8703697949:AAFxG1HqkeVWULUi9xuyPGmpuIkGFhcG35A"
+BOT_TOKEN = "8325751391:AAHZo7xC6TO4ldKEEqM--Ik9EXaszULnwWc"
 BOT_USER = "SworuserN_bot"
 DB_PATH = "hunter.db"
 ADMIN_IDS = [5969266721, 7894051808]
