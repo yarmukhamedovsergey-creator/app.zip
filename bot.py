@@ -997,7 +997,7 @@ async def do_search(count, gen_func, msg, mode_name, uid):
                     f"🔎 <b>{mode_name}</b>\n\n"
                     f"📊 Проверено: <code>{attempts}</code>\n"
                     f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
-                    f"🔄 Сессій: <code>{ps['active']}/{ps['total']}</code>\n"
+                    f"🔄 Сексий: <code>{ps['active']}/{ps['total']}</code>\n"
                     f"⏱ {el}с")
 
         return found, {"attempts": attempts, "elapsed": int(time.time() - start)}
@@ -1058,7 +1058,7 @@ def build_menu(uid):
     for pr in promos:
         kb.button(text=pr.get("button_text") or pr["name"], callback_data=f"pv_{pr['id']}")
     kb.button(text="🤖 Поддержать", callback_data="cmd_support")
-    kb.button(text="🌐 Маркет", url="http://localhost:5000")
+    kb.button(text="🌐 Маркет", url="https://username-hunter.onrender.com")
     if is_admin: kb.button(text="👑 Админ", callback_data="cmd_admin")
     kb.adjust(2)
     return text, kb.as_markup()
