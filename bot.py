@@ -1,5 +1,5 @@
-﻿"""
-USERNAME HUNTER v21.0 — ПОЛНАЯ ПЕРЕРАБОТКА
+"""
+USERNAME HUNTER v22.0 — ANTI-BAN ENGINE
 """
 
 import asyncio
@@ -48,7 +48,11 @@ ACCOUNTS = [
     {"api_id": 36347986, "api_hash": "2ef08b03748cdf3b688efc18a1e540b7", "phone": "+13347793071"},
     {"api_id": 36037729, "api_hash": "c48c8326dfb577fd4b8d503cb7dce2a4", "phone": "+19316345068"},
     {"api_id": 36360664, "api_hash": "facb9902e2eafe009a2fb43c901c2328", "phone": "+959694410210"},
+    {"api_id": 38047070, "api_hash": "8132d885c41d0db88c345a868de305e5", "phone": "+15029264416"},
+    {"api_id": 37487174, "api_hash": "65168477b7764d3163d8a3b2bc3e9006", "phone": "+18633585097"},
+    {"api_id": 36689382, "api_hash": "68e81cc3a654222750230c8bafff6c2c", "phone": "+18598807376"},
 ]
+
 FREE_SEARCHES = 3
 FREE_COUNT = 1
 PREMIUM_COUNT = 3
@@ -125,193 +129,461 @@ async def answer_cb(cb, text=None, show_alert=False):
         pass
 
 
-# ═══════════════════════ ПУЛ АККАУНТОВ ═══════════════════════
+# ═══════════════════════ НОВЫЙ ПУЛ АККАУНТОВ v3.0 ═══════════════════════
 
 class AccountPool:
+    """
+    v3.0 — Адаптивный пул с мониторингом здоровья сессий
+    - Автореконнект мёртвых сессий
+    - Адаптивные задержки (чем больше ошибок, тем дольше ждём)
+    - Бюджет запросов (макс N запросов/мин на сессию)
+    - Умная ротация (least-loaded + least-errors)
+    - Jitter (случайные задержки, чтобы не палиться)
+    - Graceful degradation (когда мало сессий — замедляемся, а не падаем)
+    """
+
     def __init__(self):
         self.clients = []
-        self.index = 0
+        self.accounts_data = []
         self.lock = asyncio.Lock()
-        self.cooldowns = {}
+
+        self.status = {}
+        self.cooldown_until = {}
         self.last_used = {}
-        self.check_counts = {}
-        self.min_delay = ACCOUNT_MIN_DELAY
+        self.error_streak = {}
+        self.total_errors = {}
+        self.req_count = {}
+        self.window_start = {}
+        self.flood_times = {}
+        self.adaptive_delay = {}
+
+        self.BASE_DELAY = 3.5
+        self.MAX_DELAY = 15.0
+        self.BUDGET_PER_MIN = 15
+        self.MAX_ERROR_STREAK = 5
+        self.FLOOD_REST_TIME = 300
+        self.WARMUP_EXTRA_DELAY = 8.0
+        self.RECONNECT_INTERVAL = 120
+
         self.total_checks = 0
         self.caught_by_botapi = 0
-        self.caught_by_layer3 = 0
+        self.caught_by_recheck = 0
+        self.reconnect_count = 0
+
         self.active_users = {}
         self.max_users_per_account = 3
 
+        self._health_task = None
+        self._monitor_task = None
+
     async def init(self, accounts):
         if not HAS_TELETHON or not accounts:
-            logger.info("Telethon not installed — Bot API mode")
+            logger.info("Telethon отсутствует — режим Bot API")
             return
+
+        self.accounts_data = accounts
+
         for i, acc in enumerate(accounts):
             phone = acc["phone"].replace("+", "").replace(" ", "")
             try:
                 client = TelegramClient(
-                    f"sessions/s_{phone}", acc["api_id"], acc["api_hash"],
-                    connection_retries=3, retry_delay=2)
+                    f"sessions/s_{phone}",
+                    acc["api_id"],
+                    acc["api_hash"],
+                    connection_retries=5,
+                    retry_delay=3,
+                    timeout=15,
+                    request_retries=2
+                )
                 await client.connect()
                 if not await client.is_user_authorized():
                     await client.start(phone=acc["phone"])
+
                 self.clients.append(client)
-                self.cooldowns[i] = 0
-                self.last_used[i] = 0
-                self.check_counts[i] = 0
-                self.active_users[i] = set()
-                logger.info(f"Session #{i+1}: {acc['phone']} OK")
+                idx = len(self.clients) - 1
+                self._init_session_state(idx)
+                logger.info(f"✅ Session #{idx+1}: {acc['phone']}")
+
             except Exception as e:
-                logger.error(f"Session {acc['phone']}: {e}")
-        logger.info(f"Sessions: {len(self.clients)}")
+                logger.error(f"❌ Session {acc['phone']}: {e}")
 
-    def _get_available_account(self, uid):
+        logger.info(f"Пул: {len(self.clients)} сессий")
+        self._health_task = asyncio.create_task(self._health_loop())
+        self._monitor_task = asyncio.create_task(self._monitor_loop())
+
+    def _init_session_state(self, idx):
+        self.status[idx] = 'warming'
+        self.cooldown_until[idx] = 0
+        self.last_used[idx] = 0
+        self.error_streak[idx] = 0
+        self.total_errors[idx] = 0
+        self.req_count[idx] = 0
+        self.window_start[idx] = time.time()
+        self.flood_times[idx] = []
+        self.adaptive_delay[idx] = self.BASE_DELAY
+
+    # ─── ФОНОВЫЙ МОНИТОРИНГ ───
+
+    async def _health_loop(self):
+        while True:
+            try:
+                await asyncio.sleep(60)
+                now = time.time()
+                alive = 0
+
+                for i in range(len(self.clients)):
+                    st = self.status.get(i, 'dead')
+
+                    if st == 'dead':
+                        await self._try_reconnect(i)
+                    elif st == 'cooldown':
+                        if now >= self.cooldown_until.get(i, 0):
+                            self.status[i] = 'warming'
+                            self.error_streak[i] = 0
+                            self.adaptive_delay[i] = self.BASE_DELAY + 2.0
+                            logger.info(f"Session #{i+1}: cooldown → warming")
+                    elif st == 'warming':
+                        last = self.last_used.get(i, 0)
+                        if now - last > 30 and self.error_streak.get(i, 0) == 0:
+                            self.status[i] = 'healthy'
+                            self.adaptive_delay[i] = self.BASE_DELAY
+                            logger.info(f"Session #{i+1}: warming → healthy")
+
+                    if st != 'dead':
+                        alive += 1
+
+                    ws = self.window_start.get(i, 0)
+                    if now - ws > 60:
+                        self.req_count[i] = 0
+                        self.window_start[i] = now
+
+                    if i in self.flood_times:
+                        self.flood_times[i] = [t for t in self.flood_times[i] if now - t < 3600]
+
+                if alive > 0 and alive <= 2:
+                    for i in range(len(self.clients)):
+                        if self.status.get(i) in ('healthy', 'warming'):
+                            self.adaptive_delay[i] = max(self.adaptive_delay[i], self.BASE_DELAY * 2)
+                    logger.warning(f"⚠️ Мало сессий ({alive}), задержки увеличены")
+
+            except Exception as e:
+                logger.error(f"Health loop: {e}")
+
+    async def _monitor_loop(self):
+        while True:
+            await asyncio.sleep(300)
+            try:
+                s = self.stats()
+                logger.info(f"📊 Пул: {s['active']}/{s['total']} | checks={s['checks']} | errors={s.get('errors', 0)} | reconnects={self.reconnect_count}")
+            except:
+                pass
+
+    async def _try_reconnect(self, idx):
+        try:
+            client = self.clients[idx]
+            if client.is_connected():
+                await client.disconnect()
+            await asyncio.sleep(2)
+            await client.connect()
+            if await client.is_user_authorized():
+                self.status[idx] = 'warming'
+                self.error_streak[idx] = 0
+                self.adaptive_delay[idx] = self.BASE_DELAY + 3.0
+                self.reconnect_count += 1
+                logger.info(f"🔄 Session #{idx+1}: reconnected!")
+            else:
+                logger.warning(f"Session #{idx+1}: not authorized after reconnect")
+        except Exception as e:
+            logger.error(f"Reconnect #{idx+1}: {e}")
+
+    # ─── ВЫБОР СЕССИИ ───
+
+    def _get_best_session(self, uid=None):
         now = time.time()
-        for i in range(len(self.clients)):
-            idx = (self.index + i) % len(self.clients)
-            if self.cooldowns.get(idx, 0) > now:
-                continue
-            if uid in self.active_users.get(idx, set()):
-                return idx
-            if len(self.active_users.get(idx, set())) < self.max_users_per_account:
-                return idx
-        return None
+        candidates = []
 
-    def all_busy(self, uid=None):
+        for i in range(len(self.clients)):
+            st = self.status.get(i, 'dead')
+            if st == 'dead':
+                continue
+            if st == 'cooldown' and now < self.cooldown_until.get(i, 0):
+                continue
+
+            ws = self.window_start.get(i, 0)
+            if now - ws > 60:
+                self.req_count[i] = 0
+                self.window_start[i] = now
+
+            budget = self.BUDGET_PER_MIN
+            active_count = sum(1 for j in range(len(self.clients)) if self.status.get(j) in ('healthy', 'warming'))
+            if active_count <= 2:
+                budget = max(8, budget // 2)
+
+            if self.req_count.get(i, 0) >= budget:
+                continue
+
+            delay = self.adaptive_delay.get(i, self.BASE_DELAY)
+            if st == 'warming':
+                delay += self.WARMUP_EXTRA_DELAY
+
+            since_last = now - self.last_used.get(i, 0)
+            if since_last < delay:
+                continue
+
+            score = 0.0
+            score += self.error_streak.get(i, 0) * 20.0
+            score += self.req_count.get(i, 0) * 2.0
+            score += len(self.flood_times.get(i, [])) * 30.0
+            if st == 'warming':
+                score += 50.0
+            elif st == 'healthy':
+                score -= 10.0
+            if uid and uid in self.active_users.get(i, set()):
+                score -= 25.0
+
+            candidates.append((i, score))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: x[1])
+        top = candidates[:min(3, len(candidates))]
+        return random.choice(top)[0]
+
+    async def _acquire(self, uid=None, timeout=45):
+        deadline = time.time() + timeout
+        attempt = 0
+
+        while time.time() < deadline:
+            async with self.lock:
+                idx = self._get_best_session(uid)
+                if idx is not None:
+                    now = time.time()
+                    self.last_used[idx] = now
+                    self.req_count[idx] = self.req_count.get(idx, 0) + 1
+                    self.total_checks += 1
+                    return idx, self.clients[idx]
+
+            wait = min(0.3 * (1.2 ** attempt), 3.0) + random.uniform(0, 0.5)
+            await asyncio.sleep(wait)
+            attempt += 1
+
+        return None, None
+
+    # ─── ОБРАБОТКА ОШИБОК ───
+
+    def _on_success(self, idx):
+        self.error_streak[idx] = 0
+        if self.status.get(idx) == 'warming':
+            if self.req_count.get(idx, 0) >= 3:
+                self.status[idx] = 'healthy'
+        self.adaptive_delay[idx] = max(self.BASE_DELAY, self.adaptive_delay.get(idx, self.BASE_DELAY) * 0.95)
+
+    def _on_error(self, idx, is_flood=False, flood_seconds=0):
+        self.error_streak[idx] = self.error_streak.get(idx, 0) + 1
+        self.total_errors[idx] = self.total_errors.get(idx, 0) + 1
+
+        if is_flood:
+            rest = flood_seconds + random.randint(20, 45)
+            self.cooldown_until[idx] = time.time() + rest
+            self.status[idx] = 'cooldown'
+            self.flood_times.setdefault(idx, []).append(time.time())
+            recent = [t for t in self.flood_times[idx] if time.time() - t < 3600]
+            if len(recent) >= 3:
+                self.cooldown_until[idx] = time.time() + self.FLOOD_REST_TIME
+                logger.warning(f"🛑 Session #{idx+1}: 3+ floods/hour, resting {self.FLOOD_REST_TIME}s")
+        elif self.error_streak[idx] >= self.MAX_ERROR_STREAK:
+            self.status[idx] = 'dead'
+            logger.error(f"💀 Session #{idx+1}: DEAD ({self.error_streak[idx]} errors)")
+        else:
+            self.adaptive_delay[idx] = min(self.adaptive_delay.get(idx, self.BASE_DELAY) * 1.5, self.MAX_DELAY)
+            self.cooldown_until[idx] = time.time() + 3
+            self.status[idx] = 'cooldown'
+
+    # ─── ПРОВЕРКИ (3 слоя) ───
+
+    async def _resolve_username(self, username, uid=None):
+        idx, client = await self._acquire(uid, timeout=30)
+        if client is None:
+            return "no_session", -1
+        try:
+            await client(ResolveUsernameRequest(username))
+            self._on_success(idx)
+            return "taken", idx
+        except UsernameNotOccupiedError:
+            self._on_success(idx)
+            return "free", idx
+        except UsernameInvalidError:
+            self._on_success(idx)
+            return "invalid", idx
+        except FloodWaitError as e:
+            self._on_error(idx, is_flood=True, flood_seconds=e.seconds)
+            logger.warning(f"Flood #{idx+1}: {e.seconds}s")
+            return "flood", idx
+        except Exception as e:
+            self._on_error(idx)
+            logger.error(f"Resolve error #{idx+1}: {e}")
+            return "error", idx
+
+    async def _check_username_available(self, username, uid=None):
+        idx, client = await self._acquire(uid, timeout=20)
+        if client is None:
+            return "no_session", -1
+        try:
+            ok = await client(AccountCheckUsername(username))
+            self._on_success(idx)
+            return ("free" if ok else "taken"), idx
+        except FloodWaitError as e:
+            self._on_error(idx, is_flood=True, flood_seconds=e.seconds)
+            return "flood", idx
+        except Exception as e:
+            self._on_error(idx)
+            return "error", idx
+
+    async def _botapi_check(self, username):
+        try:
+            chat = await bot.get_chat(f"@{username}")
+            return "taken" if chat else "not_found"
+        except TelegramBadRequest as e:
+            if "not found" in str(e).lower():
+                return "not_found"
+            return "error"
+        except Exception:
+            return "not_found"
+
+    # ─── ГЛАВНЫЕ МЕТОДЫ ───
+
+    async def check(self, username, uid=None):
         if not self.clients:
-            return False
-        return self._get_available_account(uid) is None
+            r = await self._botapi_check(username)
+            return "taken" if r == "taken" else "free"
+
+        r1, _ = await self._resolve_username(username, uid)
+
+        if r1 == "taken":
+            return "taken"
+        if r1 == "invalid":
+            return "taken"
+        if r1 in ("flood", "no_session", "error"):
+            b = await self._botapi_check(username)
+            if b == "taken":
+                self.caught_by_botapi += 1
+                return "taken"
+            return "unknown"
+
+        b = await self._botapi_check(username)
+        if b == "taken":
+            self.caught_by_botapi += 1
+            return "taken"
+
+        return "probably_free"
+
+    async def strong_check(self, username, uid=None):
+        if not self.clients:
+            r = await self._botapi_check(username)
+            return "taken" if r == "taken" else "free"
+
+        r1, idx1 = await self._resolve_username(username, uid)
+        if r1 in ("taken", "invalid"):
+            return "taken"
+        if r1 in ("flood", "no_session", "error"):
+            b = await self._botapi_check(username)
+            return "taken" if b == "taken" else "error"
+
+        await asyncio.sleep(random.uniform(0.3, 0.8))
+        b = await self._botapi_check(username)
+        if b == "taken":
+            self.caught_by_botapi += 1
+            return "taken"
+
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        active_count = sum(1 for i in range(len(self.clients)) if self.status.get(i) in ('healthy', 'warming'))
+
+        if active_count >= 2:
+            r3, _ = await self._resolve_username(username, uid)
+            if r3 == "taken":
+                self.caught_by_recheck += 1
+                return "taken"
+            if r3 == "free":
+                return "free"
+            r4, _ = await self._check_username_available(username, uid)
+            if r4 == "taken":
+                self.caught_by_recheck += 1
+                return "taken"
+            if r4 == "free":
+                return "free"
+            return "error"
+        else:
+            r3, _ = await self._check_username_available(username, uid)
+            if r3 == "taken":
+                self.caught_by_recheck += 1
+                return "taken"
+            if r3 == "free":
+                return "free"
+            return "free"
+
+    # ─── УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ ───
 
     def add_user(self, uid):
-        idx = self._get_available_account(uid)
-        if idx is not None:
-            if idx not in self.active_users:
-                self.active_users[idx] = set()
-            self.active_users[idx].add(uid)
-            return idx
+        for i in range(len(self.clients)):
+            if self.status.get(i) in ('dead',):
+                continue
+            if uid in self.active_users.get(i, set()):
+                return i
+        for i in range(len(self.clients)):
+            if self.status.get(i) in ('dead',):
+                continue
+            users = self.active_users.setdefault(i, set())
+            if len(users) < self.max_users_per_account:
+                users.add(uid)
+                return i
         return None
 
     def remove_user(self, uid):
         for idx in self.active_users:
             self.active_users[idx].discard(uid)
 
-    async def _get_client(self, uid=None):
-        for _ in range(600):
-            async with self.lock:
-                now = time.time()
-                for i in range(len(self.clients)):
-                    idx = (self.index + i) % len(self.clients)
-                    if self.cooldowns.get(idx, 0) > now:
-                        continue
-                    since = now - self.last_used.get(idx, 0)
-                    if since >= self.min_delay:
-                        self.index = (idx + 1) % len(self.clients)
-                        self.last_used[idx] = now
-                        self.check_counts[idx] = self.check_counts.get(idx, 0) + 1
-                        self.total_checks += 1
-                        return idx, self.clients[idx]
-            await asyncio.sleep(0.2)
-        return None, None
-
-    def _set_cooldown(self, idx, seconds):
-        self.cooldowns[idx] = time.time() + seconds
-
-    async def _layer1(self, username, uid=None):
+    def all_busy(self, uid=None):
         if not self.clients:
-            return "error"
-        for _ in range(3):
-            idx, client = await self._get_client(uid)
-            if client is not None:
-                break
-            await asyncio.sleep(1)
-        if client is None:
-            return "error"
-        try:
-            result = await client(ResolveUsernameRequest(username))
-            return "taken"
-        except UsernameNotOccupiedError:
-            return "free"
-        except UsernameInvalidError:
-            return "taken"
-        except FloodWaitError as e:
-            self._set_cooldown(idx, e.seconds + 10)
-            return "error"
-        except:
-            return "error"
+            return False
+        return self._get_best_session(uid) is None
 
-    async def _layer2(self, username):
-        try:
-            chat = await bot.get_chat(f"@{username}")
-            return "taken" if chat else "not_found"
-        except:
-            return "not_found"
-
-    async def _layer3(self, username, uid=None):
-        if not self.clients:
-            return "error"
-        for _ in range(3):
-            idx, client = await self._get_client(uid)
-            if client is not None:
-                break
-            await asyncio.sleep(1)
-        if client is None:
-            return "error"
-        try:
-            ok = await client(AccountCheckUsername(username))
-            return "free" if ok else "taken"
-        except FloodWaitError as e:
-            self._set_cooldown(idx, e.seconds + 10)
-            return "error"
-        except:
-            return "error"
-
-    async def check(self, username, uid=None):
-        if not self.clients:
-            r = await self._layer2(username)
-            return "taken" if r == "taken" else "free"
-        t1 = await self._layer1(username, uid)
-        if t1 == "taken":
-            return "taken"
-        if t1 == "error":
-            b = await self._layer2(username)
-            return "taken" if b == "taken" else "error"
-        b = await self._layer2(username)
-        if b == "taken":
-            self.caught_by_botapi += 1
-            return "taken"
-        return "free"
-
-    async def strong_check(self, username, uid=None):
-        if not self.clients:
-            r = await self._layer2(username)
-            return "taken" if r == "taken" else "free"
-        t1 = await self._layer1(username, uid)
-        if t1 == "taken":
-            return "taken"
-        b = await self._layer2(username)
-        if b == "taken":
-            self.caught_by_botapi += 1
-            return "taken"
-        if len(self.clients) >= 2:
-            t2 = await self._layer1(username, uid)
-            if t2 == "taken":
-                self.caught_by_layer3 += 1
-                return "taken"
-            t3 = await self._layer3(username, uid)
-            if t3 == "taken":
-                self.caught_by_layer3 += 1
-                return "taken"
-        return "free" if t1 == "free" else "error"
+    # ─── СТАТИСТИКА ───
 
     def stats(self):
         now = time.time()
-        active = sum(1 for i in range(len(self.clients)) if self.cooldowns.get(i, 0) <= now)
-        total_users = sum(len(users) for users in self.active_users.values())
-        return {"total": len(self.clients), "active": active, "checks": self.total_checks,
-                "botapi_saves": self.caught_by_botapi, "layer3_saves": self.caught_by_layer3,
-                "active_users": total_users}
+        active = sum(1 for i in range(len(self.clients)) if self.status.get(i) in ('healthy', 'warming'))
+        warming = sum(1 for i in range(len(self.clients)) if self.status.get(i) == 'warming')
+        cooldown = sum(1 for i in range(len(self.clients)) if self.status.get(i) == 'cooldown')
+        dead = sum(1 for i in range(len(self.clients)) if self.status.get(i) == 'dead')
+        total_users = sum(len(u) for u in self.active_users.values())
+        total_errs = sum(self.total_errors.get(i, 0) for i in range(len(self.clients)))
+
+        return {
+            "total": len(self.clients), "active": active, "warming": warming,
+            "cooldown": cooldown, "dead": dead, "checks": self.total_checks,
+            "errors": total_errs, "botapi_saves": self.caught_by_botapi,
+            "recheck_saves": self.caught_by_recheck, "reconnects": self.reconnect_count,
+            "active_users": total_users,
+        }
+
+    def detailed_status(self):
+        lines = []
+        for i in range(len(self.clients)):
+            st = self.status.get(i, 'dead')
+            emoji = {'healthy': '🟢', 'warming': '🟡', 'cooldown': '🟠', 'dead': '🔴'}.get(st, '⚪')
+            delay = self.adaptive_delay.get(i, self.BASE_DELAY)
+            errs = self.error_streak.get(i, 0)
+            reqs = self.req_count.get(i, 0)
+            floods = len(self.flood_times.get(i, []))
+            lines.append(f"{emoji} #{i+1}: {st} | delay={delay:.1f}s | errs={errs} | reqs={reqs} | floods={floods}")
+        return "\n".join(lines)
 
     async def disconnect(self):
+        if self._health_task:
+            self._health_task.cancel()
+        if self._monitor_task:
+            self._monitor_task.cancel()
         for c in self.clients:
             try:
                 await c.disconnect()
@@ -362,10 +634,8 @@ def init_db():
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS referrals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        referrer_uid INTEGER,
-        referred_uid INTEGER,
-        referred_uname TEXT DEFAULT '',
-        created TEXT DEFAULT ''
+        referrer_uid INTEGER, referred_uid INTEGER,
+        referred_uname TEXT DEFAULT '', created TEXT DEFAULT ''
     )""")
     for col, default in [
         ("banned", "0"), ("balance", "0.0"), ("pending_ref", "0"),
@@ -442,8 +712,7 @@ def use_search(uid):
     conn.commit(); conn.close()
 
 def get_search_count(uid):
-    if uid in ADMIN_IDS:
-        return 6
+    if uid in ADMIN_IDS: return 6
     return PREMIUM_COUNT if has_subscription(uid) else FREE_COUNT
 
 def get_max_searches(uid):
@@ -473,39 +742,30 @@ def add_balance(uid, amount):
 def get_balance(uid): return get_user(uid).get("balance", 0.0)
 
 def process_referral(new_uid, ref_uid):
-    if new_uid == ref_uid:
-        return False
+    if new_uid == ref_uid: return False
     u = get_user(new_uid)
-    if u.get("referred_by", 0) != 0:
-        return False
-    
+    if u.get("referred_by", 0) != 0: return False
     new_user = get_user(new_uid)
     new_uname = new_user.get("uname", "")
-    
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("UPDATE users SET referred_by=? WHERE uid=?", (ref_uid, new_uid))
     c.execute("UPDATE users SET ref_count=ref_count+1, free=free+? WHERE uid=?", (REF_BONUS, ref_uid))
     c.execute("INSERT INTO referrals (referrer_uid, referred_uid, referred_uname, created) VALUES (?, ?, ?, ?)",
               (ref_uid, new_uid, new_uname, datetime.now().strftime("%Y-%m-%d %H:%M")))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
     return True
+
 def get_user_referrals(uid, limit=50):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT referred_uid, referred_uname, created FROM referrals WHERE referrer_uid=? ORDER BY id DESC LIMIT ?", (uid, limit))
-    rows = c.fetchall()
-    conn.close()
+    rows = c.fetchall(); conn.close()
     return [{"uid": r[0], "uname": r[1], "created": r[2]} for r in rows]
 
 def get_ref_top_by_period(start_date, limit=10):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("""SELECT referrer_uid, COUNT(*) as cnt FROM referrals 
                  WHERE created >= ? GROUP BY referrer_uid ORDER BY cnt DESC LIMIT ?""", (start_date, limit))
-    rows = c.fetchall()
-    conn.close()
+    rows = c.fetchall(); conn.close()
     result = []
     for r in rows:
         u = get_user(r[0])
@@ -513,36 +773,25 @@ def get_ref_top_by_period(start_date, limit=10):
     return result
 
 def check_referral_fraud(uid):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT referred_uid, created FROM referrals WHERE referrer_uid=? ORDER BY created", (uid,))
-    rows = c.fetchall()
-    conn.close()
-    
-    if len(rows) < 3:
-        return {"fraud": False, "reason": ""}
-    
+    rows = c.fetchall(); conn.close()
+    if len(rows) < 3: return {"fraud": False, "reason": ""}
     suspicious = 0
     for i in range(1, len(rows)):
         prev_time = datetime.strptime(rows[i-1][1], "%Y-%m-%d %H:%M")
         curr_time = datetime.strptime(rows[i][1], "%Y-%m-%d %H:%M")
         diff = (curr_time - prev_time).total_seconds()
-        if diff < 60:
-            suspicious += 1
-    
-    if suspicious >= 3:
-        return {"fraud": True, "reason": "Много рефералов за короткое время"}
-    
+        if diff < 60: suspicious += 1
+    if suspicious >= 3: return {"fraud": True, "reason": "Много рефералов за короткое время"}
     return {"fraud": False, "reason": ""}
 
 def remove_referral(referrer_uid, referred_uid):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("DELETE FROM referrals WHERE referrer_uid=? AND referred_uid=?", (referrer_uid, referred_uid))
     c.execute("UPDATE users SET ref_count=MAX(ref_count-1,0), free=MAX(free-?,0) WHERE uid=?", (REF_BONUS, referrer_uid))
     c.execute("UPDATE users SET referred_by=0 WHERE uid=?", (referred_uid,))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 async def check_referral_subscription(referrer_uid):
     refs = get_user_referrals(referrer_uid, 100)
@@ -779,7 +1028,7 @@ def get_stats():
     conn.close(); return r
 
 
-# ═══════════════════════ ГЕНЕРАТОРЫ ═══════════════════════
+# ═══════════════════════ ГЕНЕРАТОРЫ v2 ═══════════════════════
 
 _V = "aeiou"
 _C = "bcdfghjklmnprstvwxyz"
@@ -791,65 +1040,71 @@ def _pronounceable(length):
     return "".join(w)
 
 def gen_default():
-    return _pronounceable(5)
+    style = random.randint(1, 4)
+    if style == 1:
+        return _pronounceable(5)
+    elif style == 2:
+        s1 = random.choice(_C) + random.choice(_V)
+        s2 = random.choice(_C) + random.choice(_V)
+        return s1 + s2 + random.choice(_C)
+    elif style == 3:
+        return (random.choice(_C) + random.choice(_V) +
+                random.choice(_C) + random.choice(_V) +
+                random.choice(_C))
+    else:
+        first = random.choice(_C)
+        rest = ''.join(random.choice(_C + _V) for _ in range(4))
+        return first + rest
 
 def gen_beautiful():
-    """Красивые 5 букв — похожи на слова, произносимые, без повторов мусора"""
     v = "aeiou"
     c = "bcdfghjklmnprstvwxyz"
-    
     patterns = [
-        "cvcvc",  # wekse, botan, lifen
-        "cvccv",  # bonta, kilma, werso  
-        "ccvcv",  # skale, breno, travi
-        "cvcvc",  # raxel, movin, dukes
-        "vcvcv",  # amoke, eliva, uvano
-        "cvccv",  # dorka, milza, nexpo
+        "cvcvc", "cvccv", "ccvcv", "vcvcv", "cvccv",
+        "cvcvc", "vccvc", "ccvcc", "cvvcv", "vcvcc",
     ]
-    
     pat = random.choice(patterns)
     word = []
-    used = set()
+    used_c = set()
     for ch in pat:
         if ch == "c":
-            letter = random.choice(c)
-            attempts = 0
-            while letter in used and attempts < 10:
-                letter = random.choice(c)
-                attempts += 1
+            pool_c = [x for x in c if x not in used_c]
+            if not pool_c: pool_c = list(c)
+            letter = random.choice(pool_c)
             word.append(letter)
-            used.add(letter)
+            used_c.add(letter)
         else:
-            letter = random.choice(v)
-            word.append(letter)
-    
+            word.append(random.choice(v))
     return "".join(word)
 
 def gen_meaningful():
     pre = ["my","go","hi","ok","no","up","on","in","mr","dj","pro","top","hot","big",
            "old","new","red","max","neo","zen","ice","sun","sky","air","sea","own",
-           "try","run","fly","win","get","set","fix","mix","pop","raw","now","day","one"]
+           "try","run","fly","win","get","set","fix","mix","pop","raw","now","day","one",
+           "la","el","to","so","we","do","be","ex","re","co","mc","de","al","an","dr","le","li"]
     suf = ["bot","dev","pro","man","boy","cat","dog","fox","owl","god","war","run",
            "fly","win","fan","art","lab","hub","app","web","net","box","job","pay",
-           "buy","car","map","log","key","pin","tag","tip","spy","doc","gem","ink"]
+           "buy","car","map","log","key","pin","tag","tip","spy","doc","gem","ink",
+           "zen","ace","mod","pal","ion","orb","neo","era","vox","hex","pix","bit",
+           "ram","cpu","api","sql","git","vue"]
     mid = ["cool","fast","best","good","real","true","dark","wild","bold","epic",
-           "mega","gold","blue","easy","mini","deep","kind","wise","calm","warm"]
+           "mega","gold","blue","easy","mini","deep","kind","wise","calm","warm",
+           "solo","auto","meta","hyper","flex","peak","core","base","nova","zero","alfa","beta"]
 
-    style = random.choice(["ps", "pm", "us", "um"])
-    if style == "ps":
-        r = random.choice(pre) + random.choice(suf)
-    elif style == "pm":
-        r = random.choice(pre) + random.choice(mid)
-    elif style == "us":
-        r = random.choice(pre) + "_" + random.choice(suf)
-    else:
-        r = random.choice(mid) + "_" + random.choice(suf)
-    if len(r) < 5:
-        r = r + random.choice(suf)
-    if len(r) > 15:
-        r = r[:15]
-    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', r):
-        return _pronounceable(5)
+    style = random.choice(["ps","pm","us","um","sm","pn","mn","two","three"])
+    if style == "ps": r = random.choice(pre) + random.choice(suf)
+    elif style == "pm": r = random.choice(pre) + random.choice(mid)
+    elif style == "us": r = random.choice(pre) + "_" + random.choice(suf)
+    elif style == "um": r = random.choice(mid) + "_" + random.choice(suf)
+    elif style == "sm": r = random.choice(suf) + random.choice(mid)
+    elif style == "pn": r = random.choice(pre) + str(random.randint(1, 99))
+    elif style == "mn": r = random.choice(mid) + str(random.randint(0, 9))
+    elif style == "two": r = random.choice(pre) + random.choice(pre) + random.choice(suf)
+    elif style == "three": r = random.choice(suf) + random.choice(suf)
+    else: r = random.choice(pre) + random.choice(suf)
+    if len(r) < 5: r = r + random.choice(suf)
+    if len(r) > 15: r = r[:15]
+    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', r): return _pronounceable(5)
     return r
 
 def gen_anyword():
@@ -862,19 +1117,16 @@ SEARCH_MODES = {
     "anyword":    {"name": "Любое слово", "emoji": "🔤", "desc": "Произносимые (5-7 букв)",     "premium": True,  "func": gen_anyword},
 }
 
-INVALID_WORDS = ["admin", "support", "help", "test", "telegram", "bot", "official", 
+INVALID_WORDS = ["admin", "support", "help", "test", "telegram", "bot", "official",
                  "service", "security", "account", "login", "password", "verify",
                  "moderator", "system", "null", "undefined", "root", "user"]
 
 def is_valid_username(username):
     u = username.lower().replace("_", "")
     for word in INVALID_WORDS:
-        if word in u:
-            return False
-    if "__" in username:
-        return False
-    if username.startswith("_") or username.endswith("_"):
-        return False
+        if word in u: return False
+    if "__" in username: return False
+    if username.startswith("_") or username.endswith("_"): return False
     return True
 
 
@@ -883,17 +1135,30 @@ def is_valid_username(username):
 async def check_username(username):
     return await pool.strong_check(username)
 
+_fragment_cache = {}
+_fragment_cache_ttl = 600
+
 async def check_fragment(username):
+    now = time.time()
+    cached = _fragment_cache.get(username)
+    if cached and now - cached[1] < _fragment_cache_ttl:
+        return cached[0]
     url = f"https://fragment.com/username/{username.lower()}"
     try:
-        async with http_session.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+        async with http_session.get(url, timeout=aiohttp.ClientTimeout(total=8),
+            headers={"User-Agent": random.choice([
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+            ])}) as resp:
             if resp.status != 200: return "unavailable"
             text = await resp.text()
-            if "Sold" in text or "sold" in text: return "sold"
-            if any(x in text for x in ["Available", "Make an offer", "Bid", "auction"]): return "fragment"
-            return "unavailable"
-    except:
-        return "unavailable"
+            if "Sold" in text or "sold" in text: result = "sold"
+            elif any(x in text for x in ["Available", "Make an offer", "Bid", "auction"]): result = "fragment"
+            else: result = "unavailable"
+            _fragment_cache[username] = (result, now)
+            return result
+    except: return "unavailable"
 
 async def check_subscribed(uid):
     if uid in ADMIN_IDS or not REQUIRED_CHANNELS: return []
@@ -934,22 +1199,22 @@ def evaluate_username(username):
             "factors": factors, "price": pr, "rarity": ra}
 
 
-# ═══════════════════════ ПОИСК ═══════════════════════
+# ═══════════════════════ ПОИСК v3 ═══════════════════════
 
 async def do_search(count, gen_func, msg, mode_name, uid):
     found = []
     attempts = 0
     start = time.time()
     last_update = 0
-    checked = set()
+    checked_cache = set()
+    errors_in_row = 0
+    MAX_ERRORS_IN_ROW = 10
 
     acc_idx = pool.add_user(uid)
     if acc_idx is None and pool.clients:
         await edit_msg(msg,
-            f"🔄 <b>{mode_name}</b>\n\n"
-            f"⏳ Все аккаунты заняты...\n"
-            f"Подождите немного")
-        for _ in range(30):
+            f"🔄 <b>{mode_name}</b>\n\n⏳ Все аккаунты заняты, ждём...")
+        for _ in range(60):
             await asyncio.sleep(1)
             acc_idx = pool.add_user(uid)
             if acc_idx is not None:
@@ -958,45 +1223,80 @@ async def do_search(count, gen_func, msg, mode_name, uid):
             return [], {"attempts": 0, "elapsed": 0}
 
     try:
-        while len(found) < count and attempts < 5000:
-            batch_size = max(len(pool.clients) * 2, 5)
-            batch = []
-            for _ in range(batch_size):
-                u = gen_func()
-                if len(u) >= 5 and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', u) and u.lower() not in checked:
-                    if is_valid_username(u):
-                        batch.append(u.lower())
-                        checked.add(u.lower())
-            if not batch:
+        while len(found) < count and attempts < 3000:
+            u = None
+            for _ in range(50):
+                candidate = gen_func()
+                if (len(candidate) >= 5 and
+                    re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', candidate) and
+                    candidate.lower() not in checked_cache and
+                    is_valid_username(candidate)):
+                    u = candidate.lower()
+                    break
+            if u is None:
                 continue
 
-            results = await asyncio.gather(*[pool.check(u, uid) for u in batch])
-            attempts += len(batch)
+            checked_cache.add(u)
+            attempts += 1
 
-            for username, status in zip(batch, results):
-                if status == "free":
-                    dc = await pool.strong_check(username, uid)
-                    if dc != "free":
-                        continue
-                    fr = await check_fragment(username)
-                    found.append({"username": username, "fragment": fr})
-                    save_history(uid, username, mode_name, len(username))
-                    if len(found) >= count:
-                        break
+            ps = pool.stats()
+            alive = ps['active']
+
+            if alive <= 1: inter_check_delay = 2.0
+            elif alive <= 3: inter_check_delay = 0.8
+            elif alive <= 5: inter_check_delay = 0.3
+            else: inter_check_delay = 0.1
+
+            result = await pool.check(u, uid)
+
+            if result == "taken":
+                errors_in_row = 0
+                await asyncio.sleep(inter_check_delay * 0.5)
+                continue
+
+            if result == "unknown":
+                errors_in_row += 1
+                if errors_in_row >= MAX_ERRORS_IN_ROW:
+                    await edit_msg(msg,
+                        f"🔎 <b>{mode_name}</b>\n\n"
+                        f"⚠️ Сессии перегружены, пауза 15с...\n"
+                        f"📊 Проверено: <code>{attempts}</code>\n"
+                        f"✅ Найдено: <code>{len(found)}/{count}</code>")
+                    await asyncio.sleep(15)
+                    errors_in_row = 0
+                continue
+
+            errors_in_row = 0
+
+            if result == "probably_free":
+                await asyncio.sleep(random.uniform(0.5, 1.0))
+                dc = await pool.strong_check(u, uid)
+                if dc != "free":
+                    await asyncio.sleep(inter_check_delay)
+                    continue
+                fr = await check_fragment(u)
+                found.append({"username": u, "fragment": fr})
+                save_history(uid, u, mode_name, len(u))
+                if len(found) >= count:
+                    break
+
+            await asyncio.sleep(inter_check_delay + random.uniform(0, 0.3))
 
             now = time.time()
-            if now - last_update > 2.5:
+            if now - last_update > 3.0:
                 last_update = now
                 el = int(now - start)
                 ps = pool.stats()
+                status_line = f"🟢{ps['active'] - ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
                 await edit_msg(msg,
                     f"🔎 <b>{mode_name}</b>\n\n"
                     f"📊 Проверено: <code>{attempts}</code>\n"
                     f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
-                    f"🔄 Сексий: <code>{ps['active']}/{ps['total']}</code>\n"
+                    f"🔄 Сессии: {status_line}\n"
                     f"⏱ {el}с")
 
-        return found, {"attempts": attempts, "elapsed": int(time.time() - start)}
+        elapsed = int(time.time() - start)
+        return found, {"attempts": attempts, "elapsed": elapsed}
     finally:
         pool.remove_user(uid)
 
@@ -1032,10 +1332,13 @@ def build_menu(uid):
     cnt = get_search_count(uid); mx = get_max_searches(uid); bal = u.get("balance", 0.0)
     promos = get_active_promotions()
 
+    # Цветной статус сессий
+    session_line = f"🟢{ps['active'] - ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
+
     text = (f"🔍 <b>USERNAME HUNTER</b> {si}\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"📌 <b>{st}</b> | 🎯 <code>{cnt}</code> юзов/поиск | 🔄 <code>{mx}</code> поисков\n"
             f"📊 {sub_info}\n🔢 Поисков: <code>{u.get('searches', 0)}</code>\n"
-            f"🔄 Аккаунтов: <code>{ps['active']}/{ps['total']}</code>\n"
+            f"🔄 Сессии: {session_line}\n"
             f"💰 Баланс: <code>{bal:.1f}</code> ⭐\n")
     if promos:
         text += "\n🎉 <b>Акции:</b>\n"
@@ -1098,239 +1401,151 @@ async def cmd_id(msg: Message):
 @dp.message(F.text & ~F.text.startswith("/"))
 async def handle_text(msg: Message):
     uid = msg.from_user.id
-    if is_banned(uid):
-        return
+    if is_banned(uid): return
     ensure_user(uid, msg.from_user.username)
     state = user_states.get(uid, {})
     action = state.get("action")
 
     if action == "admin_broadcast_text":
-        if uid not in ADMIN_IDS:
-            user_states.pop(uid, None)
-            return
+        if uid not in ADMIN_IDS: user_states.pop(uid, None); return
         user_states.pop(uid, None)
         bt = msg.text.strip()
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
+        conn = sqlite3.connect(DB); c = conn.cursor()
         c.execute("SELECT uid FROM users WHERE banned=0")
-        aus = [r[0] for r in c.fetchall()]
-        conn.close()
+        aus = [r[0] for r in c.fetchall()]; conn.close()
         s, f = 0, 0
         sm = await msg.answer("📤 0/" + str(len(aus)))
         for i, tu in enumerate(aus):
-            try:
-                await bot.send_message(tu, bt, parse_mode="HTML")
-                s += 1
-            except:
-                f += 1
+            try: await bot.send_message(tu, bt, parse_mode="HTML"); s += 1
+            except: f += 1
             if (i + 1) % 50 == 0:
-                try:
-                    await sm.edit_text("📤 " + str(i + 1) + "/" + str(len(aus)) + " ✅" + str(s) + " ❌" + str(f))
-                except:
-                    pass
+                try: await sm.edit_text("📤 " + str(i + 1) + "/" + str(len(aus)) + " ✅" + str(s) + " ❌" + str(f))
+                except: pass
             await asyncio.sleep(0.05)
-        try:
-            await sm.edit_text("✅ Готово! ✅" + str(s) + " ❌" + str(f))
-        except:
-            pass
+        try: await sm.edit_text("✅ Готово! ✅" + str(s) + " ❌" + str(f))
+        except: pass
         return
 
     if action == "activate":
         user_states.pop(uid, None)
         r = activate_key(uid, msg.text.strip())
-        if r:
-            await msg.answer("🎉 <b>Активировано!</b> " + str(r["days"]) + " дн до " + r["end"], parse_mode="HTML")
-        else:
-            await msg.answer("❌ Неверный ключ")
-        t, k = build_menu(uid)
-        await msg.answer(t, reply_markup=k, parse_mode="HTML")
-        return
+        if r: await msg.answer("🎉 <b>Активировано!</b> " + str(r["days"]) + " дн до " + r["end"], parse_mode="HTML")
+        else: await msg.answer("❌ Неверный ключ")
+        t, k = build_menu(uid); await msg.answer(t, reply_markup=k, parse_mode="HTML"); return
 
     if action == "evaluate":
         user_states.pop(uid, None)
         un = msg.text.strip().replace("@", "").lower()
-        if not validate_username(un):
-            await msg.answer("❌ Некорректный (мин 5 символов)")
-            return
+        if not validate_username(un): await msg.answer("❌ Некорректный (мин 5 символов)"); return
         wm = await msg.answer("⏳ Проверка...")
-        tg = await check_username(un)
-        fr = await check_fragment(un)
+        tg = await check_username(un); fr = await check_fragment(un)
         tgs = {"free": "✅ Свободен", "taken": "❌ Занят", "error": "⚠️ Ошибка"}.get(tg, "❓")
         frs = {"fragment": "💎 Fragment", "sold": "✅ Продан", "unavailable": "—"}.get(fr, "❓")
         ev = evaluate_username(un)
         fac = "\n".join("  " + f for f in ev["factors"]) or "  —"
         kb = InlineKeyboardBuilder()
-        if tg == "free":
-            kb.button(text="⭐ В избранное", callback_data="fav_a_" + un)
+        if tg == "free": kb.button(text="⭐ В избранное", callback_data="fav_a_" + un)
         kb.button(text="📊 Ещё", callback_data="cmd_evaluate")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu")
-        kb.adjust(2, 1)
-        try:
-            await wm.delete()
-        except:
-            pass
+        kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(2, 1)
+        try: await wm.delete()
+        except: pass
         await msg.answer(
             "📊 <b>Оценка @" + un + "</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             "📱 Telegram: " + tgs + "\n💎 Fragment: " + frs + "\n\n"
             "🏷 <b>" + ev["rarity"] + "</b> | 💰 <b>" + ev["price"] + "</b>\n"
             "[" + ev["bar"] + "] <code>" + str(ev["score"]) + "/200</code>\n\n" + fac,
-            reply_markup=kb.as_markup(), parse_mode="HTML")
-        return
+            reply_markup=kb.as_markup(), parse_mode="HTML"); return
 
     if action == "quick_check":
         user_states.pop(uid, None)
         un = msg.text.strip().replace("@", "").lower()
-        if not validate_username(un):
-            await msg.answer("❌ Некорректный")
-            return
+        if not validate_username(un): await msg.answer("❌ Некорректный"); return
         wm = await msg.answer("⏳ Проверка...")
         tg = await check_username(un)
         st = {"free": "✅ Свободен!", "taken": "❌ Занят", "error": "⚠️ Ошибка"}.get(tg, "❓")
         kb = InlineKeyboardBuilder()
-        if tg == "free":
-            kb.button(text="⭐ В избранное", callback_data="fav_a_" + un)
+        if tg == "free": kb.button(text="⭐ В избранное", callback_data="fav_a_" + un)
         kb.button(text="🔍 Ещё", callback_data="util_check")
-        kb.button(text="🔙", callback_data="cmd_menu")
-        kb.adjust(2, 1)
-        try:
-            await wm.delete()
-        except:
-            pass
-        await msg.answer("🔍 <b>@" + un + "</b> — " + st, reply_markup=kb.as_markup(), parse_mode="HTML")
-        return
+        kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(2, 1)
+        try: await wm.delete()
+        except: pass
+        await msg.answer("🔍 <b>@" + un + "</b> — " + st, reply_markup=kb.as_markup(), parse_mode="HTML"); return
 
     if action == "mass_check":
         user_states.pop(uid, None)
         names = [n.strip().replace("@", "").lower() for n in msg.text.split("\n") if validate_username(n.strip().replace("@", "").lower())][:20]
-        if not names:
-            await msg.answer("❌ Нет валидных")
-            return
+        if not names: await msg.answer("❌ Нет валидных"); return
         wm = await msg.answer("⏳ Проверяю " + str(len(names)) + "...")
         results = await asyncio.gather(*[check_username(n) for n in names])
-        fc = sum(1 for r in results if r == "free")
-        tc = sum(1 for r in results if r == "taken")
+        fc = sum(1 for r in results if r == "free"); tc = sum(1 for r in results if r == "taken")
         text = "📋 <b>Массовая (" + str(len(names)) + ")</b> ✅" + str(fc) + " ❌" + str(tc) + "\n\n"
         for i, r in enumerate(results):
             icon = {"free": "✅", "taken": "❌", "error": "⚠️"}.get(r, "❓")
             text += icon + " @" + names[i] + "\n"
         kb = InlineKeyboardBuilder()
         kb.button(text="📋 Ещё", callback_data="util_mass")
-        kb.button(text="🔙", callback_data="cmd_menu")
-        kb.adjust(1)
-        try:
-            await wm.delete()
-        except:
-            pass
-        await msg.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
-        return
+        kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
+        try: await wm.delete()
+        except: pass
+        await msg.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML"); return
 
     if action == "admin_give_user":
-        inp = msg.text.strip()
-        target = None
-        if inp.isdigit():
-            target = int(inp)
+        inp = msg.text.strip(); target = None
+        if inp.isdigit(): target = int(inp)
         else:
-            conn = sqlite3.connect(DB)
-            c = conn.cursor()
+            conn = sqlite3.connect(DB); c = conn.cursor()
             c.execute("SELECT uid FROM users WHERE uname=?", (inp.replace("@", ""),))
-            r = c.fetchone()
-            conn.close()
-            target = r[0] if r else None
-        if not target:
-            await msg.answer("❌ Не найден")
-            return
+            r = c.fetchone(); conn.close(); target = r[0] if r else None
+        if not target: await msg.answer("❌ Не найден"); return
         user_states[uid] = {"action": "admin_give_days", "target": target}
-        await msg.answer("📅 Дней для <code>" + str(target) + "</code>?", parse_mode="HTML")
-        return
+        await msg.answer("📅 Дней для <code>" + str(target) + "</code>?", parse_mode="HTML"); return
 
     if action == "admin_give_days":
-        try:
-            days = int(msg.text.strip())
-            assert days > 0
-        except:
-            await msg.answer("❌ Число!")
-            return
-        target = state["target"]
-        user_states.pop(uid, None)
+        try: days = int(msg.text.strip()); assert days > 0
+        except: await msg.answer("❌ Число!"); return
+        target = state["target"]; user_states.pop(uid, None)
         end = give_subscription(target, days)
         await msg.answer("✅ " + str(days) + "дн для <code>" + str(target) + "</code> до " + end, parse_mode="HTML")
-        try:
-            await bot.send_message(target, "🎉 Подписка <b>" + str(days) + "дн</b> до <b>" + end + "</b>!", parse_mode="HTML")
-        except:
-            pass
-        return
+        try: await bot.send_message(target, "🎉 Подписка <b>" + str(days) + "дн</b> до <b>" + end + "</b>!", parse_mode="HTML")
+        except: pass; return
 
     if action == "admin_key_days":
-        try:
-            days = int(msg.text.strip())
-            assert days > 0
-        except:
-            await msg.answer("❌ Число!")
-            return
+        try: days = int(msg.text.strip()); assert days > 0
+        except: await msg.answer("❌ Число!"); return
         user_states.pop(uid, None)
         key = generate_key(days, "D" + str(days))
-        await msg.answer("🔑 <code>" + key + "</code> — " + str(days) + " дн", parse_mode="HTML")
-        return
+        await msg.answer("🔑 <code>" + key + "</code> — " + str(days) + " дн", parse_mode="HTML"); return
 
     if action == "admin_ban_input":
-        user_states.pop(uid, None)
-        inp = msg.text.strip()
-        target = None
-        if inp.isdigit():
-            target = int(inp)
+        user_states.pop(uid, None); inp = msg.text.strip(); target = None
+        if inp.isdigit(): target = int(inp)
         else:
-            conn = sqlite3.connect(DB)
-            c = conn.cursor()
+            conn = sqlite3.connect(DB); c = conn.cursor()
             c.execute("SELECT uid FROM users WHERE uname=?", (inp.replace("@", ""),))
-            r = c.fetchone()
-            conn.close()
-            target = r[0] if r else None
-        if not target:
-            await msg.answer("❌ Не найден")
-            return
-        ban_user(target)
-        await msg.answer("🚫 Заблокирован")
-        return
+            r = c.fetchone(); conn.close(); target = r[0] if r else None
+        if not target: await msg.answer("❌ Не найден"); return
+        ban_user(target); await msg.answer("🚫 Заблокирован"); return
 
     if action == "admin_unban_input":
-        user_states.pop(uid, None)
-        inp = msg.text.strip()
-        target = None
-        if inp.isdigit():
-            target = int(inp)
+        user_states.pop(uid, None); inp = msg.text.strip(); target = None
+        if inp.isdigit(): target = int(inp)
         else:
-            conn = sqlite3.connect(DB)
-            c = conn.cursor()
+            conn = sqlite3.connect(DB); c = conn.cursor()
             c.execute("SELECT uid FROM users WHERE uname=?", (inp.replace("@", ""),))
-            r = c.fetchone()
-            conn.close()
-            target = r[0] if r else None
-        if not target:
-            await msg.answer("❌ Не найден")
-            return
-        unban_user(target)
-        await msg.answer("✅ Разблокирован")
-        return
+            r = c.fetchone(); conn.close(); target = r[0] if r else None
+        if not target: await msg.answer("❌ Не найден"); return
+        unban_user(target); await msg.answer("✅ Разблокирован"); return
 
     if action == "gift_username":
         user_states.pop(uid, None)
         tu = msg.text.strip().replace("@", "")
-        if not tu:
-            await msg.answer("❌ Введите @username")
-            return
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
+        if not tu: await msg.answer("❌ Введите @username"); return
+        conn = sqlite3.connect(DB); c = conn.cursor()
         c.execute("SELECT uid FROM users WHERE uname=?", (tu,))
-        r = c.fetchone()
-        conn.close()
-        if not r:
-            await msg.answer("❌ Не найден в боте")
-            return
-        plan = state.get("plan")
-        method = state.get("method")
-        p = PRICES.get(plan)
-        if not p:
-            return
+        r = c.fetchone(); conn.close()
+        if not r: await msg.answer("❌ Не найден в боте"); return
+        plan = state.get("plan"); method = state.get("method"); p = PRICES.get(plan)
+        if not p: return
         tuid = r[0]
         if method == "stars":
             await bot.send_invoice(uid, title="🎁 Подарок " + p["label"] + " для @" + tu,
@@ -1340,203 +1555,116 @@ async def handle_text(msg: Message):
 
     if action == "withdraw_amount":
         user_states.pop(uid, None)
-        try:
-            amount = float(msg.text.strip())
-            assert amount >= MIN_WITHDRAW
-        except:
-            await msg.answer("❌ Минимум " + str(MIN_WITHDRAW) + "⭐")
-            return
+        try: amount = float(msg.text.strip()); assert amount >= MIN_WITHDRAW
+        except: await msg.answer("❌ Минимум " + str(MIN_WITHDRAW) + "⭐"); return
         bal = get_balance(uid)
-        if amount > bal:
-            await msg.answer("❌ Недостаточно (" + str(bal) + "⭐)")
-            return
+        if amount > bal: await msg.answer("❌ Недостаточно (" + str(bal) + "⭐)"); return
         wid = create_withdrawal(uid, amount)
         await msg.answer("✅ Заявка #" + str(wid) + " на " + str(amount) + "⭐")
         for aid in ADMIN_IDS:
             try:
                 akb = InlineKeyboardBuilder()
                 akb.button(text="✅", callback_data="wd_ok_" + str(wid))
-                akb.button(text="❌", callback_data="wd_no_" + str(wid))
-                akb.adjust(2)
+                akb.button(text="❌", callback_data="wd_no_" + str(wid)); akb.adjust(2)
                 await bot.send_message(aid, "💰 Вывод #" + str(wid) + "\n" + str(amount) + "⭐", reply_markup=akb.as_markup())
-            except:
-                pass
+            except: pass
         return
 
     if action == "admin_promo_name":
         user_states[uid] = {"action": "admin_promo_btn", "name": msg.text.strip()}
-        await msg.answer("🔘 Введите текст для кнопки в меню:")
-        return
+        await msg.answer("🔘 Введите текст для кнопки в меню:"); return
 
     if action == "admin_promo_btn":
         user_states[uid] = {"action": "admin_promo_type", "name": state.get("name", "Акция"), "btn": msg.text.strip()}
-        await msg.answer("📋 Тип: discount / holiday / ref_contest / custom")
-        return
+        await msg.answer("📋 Тип: discount / holiday / ref_contest / custom"); return
 
     if action == "admin_promo_type":
-        ptype = msg.text.strip().lower()
-        name = state.get("name")
-        btn = state.get("btn", name)
+        ptype = msg.text.strip().lower(); name = state.get("name"); btn = state.get("btn", name)
         user_states.pop(uid, None)
         pid = create_promotion(name, ptype, button_text=btn)
-        await msg.answer("✅ Акция <b>" + name + "</b> #" + str(pid) + " создана!\nКнопка: <code>" + btn + "</code>", parse_mode="HTML")
-        return
+        await msg.answer("✅ Акция <b>" + name + "</b> #" + str(pid) + " создана!\nКнопка: <code>" + btn + "</code>", parse_mode="HTML"); return
 
     if action == "admin_refs_check":
-        user_states.pop(uid, None)
-        inp = msg.text.strip()
-        target = None
-        if inp.isdigit():
-            target = int(inp)
+        user_states.pop(uid, None); inp = msg.text.strip(); target = None
+        if inp.isdigit(): target = int(inp)
         else:
-            conn = sqlite3.connect(DB)
-            c = conn.cursor()
+            conn = sqlite3.connect(DB); c = conn.cursor()
             c.execute("SELECT uid FROM users WHERE uname=?", (inp.replace("@", ""),))
-            r = c.fetchone()
-            conn.close()
-            target = r[0] if r else None
-        if not target:
-            await msg.answer("❌ Не найден")
-            return
-        
-        fraud = check_referral_fraud(target)
-        refs = get_user_referrals(target, 10)
-        u = get_user(target)
+            r = c.fetchone(); conn.close(); target = r[0] if r else None
+        if not target: await msg.answer("❌ Не найден"); return
+        fraud = check_referral_fraud(target); refs = get_user_referrals(target, 10); u = get_user(target)
         name = "@" + u.get("uname", "") if u.get("uname") else "ID:" + str(target)
-        
-        text = "🔍 <b>Проверка: " + name + "</b>\n\n"
-        text += "👥 Всего рефералов: <code>" + str(u.get("ref_count", 0)) + "</code>\n\n"
-        
-        if fraud["fraud"]:
-            text += "⚠️ <b>ПОДОЗРЕНИЕ НА НАКРУТ!</b>\n"
-            text += "Причина: " + fraud["reason"] + "\n\n"
-        else:
-            text += "✅ Накрут не обнаружен\n\n"
-        
+        text = "🔍 <b>Проверка: " + name + "</b>\n\n👥 Всего рефералов: <code>" + str(u.get("ref_count", 0)) + "</code>\n\n"
+        if fraud["fraud"]: text += "⚠️ <b>ПОДОЗРЕНИЕ НА НАКРУТ!</b>\nПричина: " + fraud["reason"] + "\n\n"
+        else: text += "✅ Накрут не обнаружен\n\n"
         if refs:
             text += "<b>Последние рефералы:</b>\n"
             for r in refs[:10]:
                 rname = "@" + r["uname"] if r["uname"] else "ID:" + str(r["uid"])
                 text += "• " + rname + " — " + r["created"] + "\n"
-        
-        await msg.answer(text, parse_mode="HTML")
-        return
+        await msg.answer(text, parse_mode="HTML"); return
 
     if action == "admin_refs_list":
-        user_states.pop(uid, None)
-        inp = msg.text.strip()
-        target = None
-        if inp.isdigit():
-            target = int(inp)
+        user_states.pop(uid, None); inp = msg.text.strip(); target = None
+        if inp.isdigit(): target = int(inp)
         else:
-            conn = sqlite3.connect(DB)
-            c = conn.cursor()
+            conn = sqlite3.connect(DB); c = conn.cursor()
             c.execute("SELECT uid FROM users WHERE uname=?", (inp.replace("@", ""),))
-            r = c.fetchone()
-            conn.close()
-            target = r[0] if r else None
-        if not target:
-            await msg.answer("❌ Не найден")
-            return
-        
-        refs = get_user_referrals(target, 50)
-        u = get_user(target)
+            r = c.fetchone(); conn.close(); target = r[0] if r else None
+        if not target: await msg.answer("❌ Не найден"); return
+        refs = get_user_referrals(target, 50); u = get_user(target)
         name = "@" + u.get("uname", "") if u.get("uname") else "ID:" + str(target)
-        
-        text = "👀 <b>Рефералы " + name + ":</b>\n"
-        text += "Всего: <code>" + str(u.get("ref_count", 0)) + "</code>\n\n"
-        
+        text = "👀 <b>Рефералы " + name + ":</b>\nВсего: <code>" + str(u.get("ref_count", 0)) + "</code>\n\n"
         if refs:
             for r in refs:
                 rname = "@" + r["uname"] if r["uname"] else "ID:" + str(r["uid"])
                 text += "• " + rname + " — " + r["created"] + "\n"
-        else:
-            text += "<i>Нет рефералов</i>"
-        
-        await msg.answer(text, parse_mode="HTML")
-        return
+        else: text += "<i>Нет рефералов</i>"
+        await msg.answer(text, parse_mode="HTML"); return
 
     if action == "admin_refs_remove_user":
-        user_states.pop(uid, None)
-        inp = msg.text.strip()
-        target = None
-        if inp.isdigit():
-            target = int(inp)
+        user_states.pop(uid, None); inp = msg.text.strip(); target = None
+        if inp.isdigit(): target = int(inp)
         else:
-            conn = sqlite3.connect(DB)
-            c = conn.cursor()
+            conn = sqlite3.connect(DB); c = conn.cursor()
             c.execute("SELECT uid FROM users WHERE uname=?", (inp.replace("@", ""),))
-            r = c.fetchone()
-            conn.close()
-            target = r[0] if r else None
-        if not target:
-            await msg.answer("❌ Не найден")
-            return
-        
+            r = c.fetchone(); conn.close(); target = r[0] if r else None
+        if not target: await msg.answer("❌ Не найден"); return
         user_states[uid] = {"action": "admin_refs_remove_ref", "referrer": target}
-        refs = get_user_referrals(target, 20)
-        u = get_user(target)
+        refs = get_user_referrals(target, 20); u = get_user(target)
         name = "@" + u.get("uname", "") if u.get("uname") else "ID:" + str(target)
-        
-        text = "🗑 <b>Рефералы " + name + ":</b>\n\n"
-        kb = InlineKeyboardBuilder()
-        
+        text = "🗑 <b>Рефералы " + name + ":</b>\n\n"; kb = InlineKeyboardBuilder()
         if refs:
             for r in refs:
                 rname = "@" + r["uname"] if r["uname"] else "ID:" + str(r["uid"])
                 text += "• " + rname + "\n"
                 kb.button(text="❌ " + rname, callback_data="a_ref_del_" + str(target) + "_" + str(r["uid"]))
-        else:
-            text += "<i>Нет рефералов</i>"
-        
-        kb.button(text="🔙 Назад", callback_data="a_refs")
-        kb.adjust(1)
-        await msg.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
-        return
+        else: text += "<i>Нет рефералов</i>"
+        kb.button(text="🔙 Назад", callback_data="a_refs"); kb.adjust(1)
+        await msg.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML"); return
 
     if action == "admin_refs_check_subs":
-        user_states.pop(uid, None)
-        inp = msg.text.strip()
-        target = None
-        if inp.isdigit():
-            target = int(inp)
+        user_states.pop(uid, None); inp = msg.text.strip(); target = None
+        if inp.isdigit(): target = int(inp)
         else:
-            conn = sqlite3.connect(DB)
-            c = conn.cursor()
+            conn = sqlite3.connect(DB); c = conn.cursor()
             c.execute("SELECT uid FROM users WHERE uname=?", (inp.replace("@", ""),))
-            r = c.fetchone()
-            conn.close()
-            target = r[0] if r else None
-        if not target:
-            await msg.answer("❌ Не найден")
-            return
-        
+            r = c.fetchone(); conn.close(); target = r[0] if r else None
+        if not target: await msg.answer("❌ Не найден"); return
         wm = await msg.answer("🔄 Проверяю подписки рефералов...")
         removed = await check_referral_subscription(target)
-        
-        u = get_user(target)
-        name = "@" + u.get("uname", "") if u.get("uname") else "ID:" + str(target)
-        
+        u = get_user(target); name = "@" + u.get("uname", "") if u.get("uname") else "ID:" + str(target)
         if removed > 0:
-            text = "✅ Проверка " + name + " завершена\n\n"
-            text += "🗑 Удалено рефералов: <code>" + str(removed) + "</code>\n"
-            text += "(отписались от канала)"
+            text = "✅ Проверка " + name + " завершена\n\n🗑 Удалено рефералов: <code>" + str(removed) + "</code>\n(отписались от канала)"
         else:
-            text = "✅ Проверка " + name + " завершена\n\n"
-            text += "👍 Все рефералы подписаны на канал"
-        
-        try:
-            await wm.delete()
-        except:
-            pass
-        await msg.answer(text, parse_mode="HTML")
-        return
+            text = "✅ Проверка " + name + " завершена\n\n👍 Все рефералы подписаны на канал"
+        try: await wm.delete()
+        except: pass
+        await msg.answer(text, parse_mode="HTML"); return
 
     ns = await check_subscribed(uid)
-    if ns:
-        t, k = build_sub_kb(ns)
-    else:
-        t, k = build_menu(uid)
+    if ns: t, k = build_sub_kb(ns)
+    else: t, k = build_menu(uid)
     await msg.answer(t, reply_markup=k, parse_mode="HTML")
 
 
@@ -1547,57 +1675,40 @@ async def handle_photo(msg: Message):
     if state.get("action") != "tiktok_proof":
         return
 
-
-@dp.message(F.photo)
-async def handle_photo(msg: Message):
-    uid = msg.from_user.id
-    state = user_states.get(uid, {})
-    if state.get("action") != "tiktok_proof":
-        return
-    
     tid = state.get("task_id")
     photos = state.get("photos", 0) + 1
     user_states[uid]["photos"] = photos
-    
+
     if "file_ids" not in user_states[uid]:
         user_states[uid]["file_ids"] = []
     user_states[uid]["file_ids"].append(msg.photo[-1].file_id)
-    
+
     if photos < TIKTOK_SCREENSHOTS_NEEDED:
         await msg.answer(f"📸 {photos}/{TIKTOK_SCREENSHOTS_NEEDED}")
         return
-    
-    # Все скрины — забираем данные ДО pop
+
     file_ids = user_states[uid].get("file_ids", [])
     user_states.pop(uid, None)
-    
+
     await msg.answer(f"✅ Все {TIKTOK_SCREENSHOTS_NEEDED} скринов! Ожидайте.")
-    
+
     uname = msg.from_user.username or ""
     display = f"@{uname}" if uname else f"ID:{uid}"
-    
+
     from aiogram.types import InputMediaPhoto
-    
+
     for aid in ADMIN_IDS:
         try:
             akb = InlineKeyboardBuilder()
             akb.button(text="✅ Одобрить", callback_data=f"ta_{tid}")
-            akb.button(text="❌ Отклонить", callback_data=f"tr_{tid}")
-            akb.adjust(2)
-            await bot.send_message(
-                aid,
-                f"📱 <b>TikTok #{tid}</b>\n"
-                f"👤 От: {display} (<code>{uid}</code>)\n"
-                f"📸 Скринов: {photos}",
-                reply_markup=akb.as_markup(),
-                parse_mode="HTML"
-            )
-            
+            akb.button(text="❌ Отклонить", callback_data=f"tr_{tid}"); akb.adjust(2)
+            await bot.send_message(aid,
+                f"📱 <b>TikTok #{tid}</b>\n👤 От: {display} (<code>{uid}</code>)\n📸 Скринов: {photos}",
+                reply_markup=akb.as_markup(), parse_mode="HTML")
             for i in range(0, len(file_ids), 10):
                 batch = file_ids[i:i+10]
                 media = [InputMediaPhoto(media=fid) for fid in batch]
-                if i == 0:
-                    media[0].caption = f"TikTok #{tid} | {display}"
+                if i == 0: media[0].caption = f"TikTok #{tid} | {display}"
                 await bot.send_media_group(aid, media)
         except Exception as e:
             logger.error(f"TikTok admin {aid}: {e}")
@@ -1640,52 +1751,45 @@ async def cb_menu(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "cmd_search")
 async def cb_search(cb: CallbackQuery):
-    uid = cb.from_user.id
-    logger.info(f"SEARCH clicked by {uid}")
-    await answer_cb(cb)
+    uid = cb.from_user.id; await answer_cb(cb)
     if is_banned(uid): return
     if not can_search(uid):
         kb = InlineKeyboardBuilder()
         kb.button(text="💰 Premium", callback_data="cmd_prices")
         kb.button(text="👥 Рефералы", callback_data="cmd_referral")
         kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(cb.message, "⛔️ <b>Поиски закончились!</b>\n\n💰 Купите Premium", kb.as_markup())
-        return
+        await edit_msg(cb.message, "⛔️ <b>Поиски закончились!</b>\n\n💰 Купите Premium", kb.as_markup()); return
 
     is_prem = uid in ADMIN_IDS or has_subscription(uid)
     cnt = get_search_count(uid); mx = get_max_searches(uid)
     fl = "♾" if uid in ADMIN_IDS else str(mx)
-
     kb = InlineKeyboardBuilder()
     for key, m in SEARCH_MODES.items():
         if m["premium"] and not is_prem:
             kb.button(text=f"🔒 {m['emoji']} {m['name']}", callback_data="need_prem")
         else:
             kb.button(text=f"{m['emoji']} {m['name']}", callback_data=f"go_{key}")
-    kb.button(text="🔙 Меню", callback_data="cmd_menu")
-    kb.adjust(2, 2, 1)
-
+    kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(2, 2, 1)
     mt = ""
     for key, m in SEARCH_MODES.items():
         lk = "🔒" if m["premium"] and not is_prem else "✅"
         mt += f"{lk} <b>{m['emoji']} {m['name']}</b> — {m['desc']}\n"
-
     await edit_msg(cb.message,
         f"🔍 <b>Выберите режим:</b>\n\n{mt}\n🎯 <code>{cnt}</code> юзов/поиск | Поисков: <b>{fl}</b>",
         kb.as_markup())
 
-
 @dp.callback_query(F.data == "need_prem")
 async def cb_np(cb: CallbackQuery):
     await answer_cb(cb, "🔒 Нужен Premium!", show_alert=True)
-
 
 @dp.callback_query(F.data.startswith("go_"))
 async def cb_go(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     if is_banned(uid): return
     if not can_search(uid):
-        kb = InlineKeyboardBuilder(); kb.button(text="💰 Premium", callback_data="cmd_prices"); kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💰 Premium", callback_data="cmd_prices")
+        kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
         await edit_msg(cb.message, "⛔️ <b>Поиски закончились!</b>", kb.as_markup()); return
 
     mode = cb.data[3:]; mi = SEARCH_MODES.get(mode)
@@ -1705,9 +1809,10 @@ async def cb_go(cb: CallbackQuery):
     searching_users.add(uid)
     try:
         ps = pool.stats()
+        session_line = f"🟢{ps['active'] - ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
         await edit_msg(cb.message,
             f"🚀 <b>{mi['emoji']} {mi['name']}</b>\n\n"
-            f"🔄 Сессий: <code>{ps['active']}/{ps['total']}</code>\n⏳ Ищу...")
+            f"🔄 Сессии: {session_line}\n⏳ Ищу...")
 
         use_search(uid); count = get_search_count(uid)
         found, stats = await do_search(count, mi["func"], cb.message, mi["name"], uid)
@@ -2027,122 +2132,68 @@ async def cb_don(cb: CallbackQuery):
         prices=[LabeledPrice(label=f"Донат {amt}⭐", amount=amt)])
 
 
-# ─── АКЦИИ / 8 МАРТА ───
+# ─── АКЦИИ ───
 
 @dp.callback_query(F.data.startswith("pv_"))
 async def cb_promo_view(cb: CallbackQuery):
     await answer_cb(cb)
-    pid = int(cb.data[3:])
-    uid = cb.from_user.id
-    promos = get_active_promotions()
+    pid = int(cb.data[3:]); promos = get_active_promotions()
     promo = None
     for p in promos:
-        if p["id"] == pid:
-            promo = p
-            break
-
+        if p["id"] == pid: promo = p; break
     if not promo:
-        kb = InlineKeyboardBuilder()
-        kb.button(text="🔙 Меню", callback_data="cmd_menu")
-        await edit_msg(cb.message, "❌ Акция завершена.", kb.as_markup())
-        return
-
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙 Меню", callback_data="cmd_menu")
+        await edit_msg(cb.message, "❌ Акция завершена.", kb.as_markup()); return
     ptype = promo["ptype"]
-
     if ptype == "ref_contest":
-        text = "🌸✨ <b>ПРАЗДНИЧНЫЙ КОНКУРС ОТ КОМАНДЫ SwordUser!</b> ✨🌸\n\n"
-        text += "Друзья! 💖 В честь прекрасного праздника 8 Марта мы запускаем большой праздничный конкурс! 🎉\n\n"
-        text += "🔥 <b>Условия очень простые:</b>\n"
-        text += "Приглашайте как можно больше друзей по своей реферальной ссылке в бота 🤖\n\n"
-        text += "🎁 <b>Призы для ТОП-5:</b>\n"
-        text += "🥇 1 место — 1 неделя подписки\n"
-        text += "🥈 2 место — 5 дней подписки\n"
-        text += "🥉 3 место — 1 день + 25 звёзд\n"
-        text += "🏅 4 место — 1 день + 15 звёзд\n"
-        text += "🎖 5 место — 1 день или 15 звёзд\n\n"
-        text += "🌷 С праздником 8 Марта!"
-        
+        text = ("🌸✨ <b>ПРАЗДНИЧНЫЙ КОНКУРС ОТ КОМАНДЫ SwordUser!</b> ✨🌸\n\n"
+                "Друзья! 💖 В честь прекрасного праздника 8 Марта мы запускаем большой праздничный конкурс! 🎉\n\n"
+                "🔥 <b>Условия очень простые:</b>\n"
+                "Приглашайте как можно больше друзей по своей реферальной ссылке в бота 🤖\n\n"
+                "🎁 <b>Призы для ТОП-5:</b>\n"
+                "🥇 1 место — 1 неделя подписки\n🥈 2 место — 5 дней подписки\n"
+                "🥉 3 место — 1 день + 25 звёзд\n🏅 4 место — 1 день + 15 звёзд\n"
+                "🎖 5 место — 1 день или 15 звёзд\n\n🌷 С праздником 8 Марта!")
         kb = InlineKeyboardBuilder()
         kb.button(text="🏆 Посмотреть топ", callback_data="pt_" + str(pid))
         kb.button(text="👥 Моя ссылка", callback_data="cmd_referral")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    elif ptype == "discount":
-        text = "🔥 <b>" + promo["name"] + "</b>\n\n💰 Скидочная акция!"
-        kb = InlineKeyboardBuilder()
-        kb.button(text="💰 Premium", callback_data="cmd_prices")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    elif ptype == "holiday":
-        text = "🎉 <b>" + promo["name"] + "</b>\n\n🌺 Праздничная акция!"
-        kb = InlineKeyboardBuilder()
-        kb.button(text="💰 Premium", callback_data="cmd_prices")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
+        kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
     else:
         text = "⭐ <b>" + promo["name"] + "</b>\n\n🎁 Специальное предложение!"
         kb = InlineKeyboardBuilder()
         kb.button(text="💰 Premium", callback_data="cmd_prices")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
+        kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
 
 @dp.callback_query(F.data.startswith("pt_"))
 async def cb_promo_top(cb: CallbackQuery):
-    await answer_cb(cb)
-    pid = int(cb.data[3:])
-    uid = cb.from_user.id
-    
-    promos = get_active_promotions()
-    start_date = "2024-01-01 00:00"
+    await answer_cb(cb); pid = int(cb.data[3:]); uid = cb.from_user.id
+    promos = get_active_promotions(); start_date = "2024-01-01 00:00"
     for p in promos:
-        if p["id"] == pid and p["ptype"] == "ref_contest":
-            start_date = p["created"]
-            break
-    
+        if p["id"] == pid and p["ptype"] == "ref_contest": start_date = p["created"]; break
     top = get_ref_top_by_period(start_date, 20)
-
-    text = "🏆 <b>Топ рефералов</b>\n"
-    text += "━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-
+    text = "🏆 <b>Топ рефералов</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     if top:
         for i, t in enumerate(top, 1):
             if i == 1: medal = "🥇"
             elif i == 2: medal = "🥈"
             elif i == 3: medal = "🥉"
             elif i <= 5: medal = "🏅"
-            elif i <= 10: medal = "🎖"
             else: medal = str(i) + "."
             name = "@" + t["uname"] if t["uname"] else "ID:" + str(t["uid"])
             you = " ← <b>ты</b>" if t["uid"] == uid else ""
             text += medal + " " + name + " — <code>" + str(t["ref_count"]) + "</code> чел." + you + "\n"
-    else:
-        text += "<i>Пока никто не пригласил друзей</i>\n"
-
+    else: text += "<i>Пока никто не пригласил друзей</i>\n"
     text += "\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-
     my_place, my_refs = get_my_ref_place(uid)
-
     if my_refs > 0:
-        text += "\n📍 <b>Твоё место:</b> #" + str(my_place) + "\n"
-        text += "👥 <b>Твои рефералы:</b> <code>" + str(my_refs) + "</code> чел.\n"
+        text += "\n📍 <b>Твоё место:</b> #" + str(my_place) + "\n👥 <b>Твои рефералы:</b> <code>" + str(my_refs) + "</code> чел.\n"
     else:
-        text += "\n📍 <b>Ты ещё не пригласил друзей</b>\n"
-        text += "👥 Пригласи первого и попади в топ!\n"
-
+        text += "\n📍 <b>Ты ещё не пригласил друзей</b>\n👥 Пригласи первого и попади в топ!\n"
     kb = InlineKeyboardBuilder()
     kb.button(text="👥 Моя ссылка", callback_data="cmd_referral")
     kb.button(text="🔙 К акции", callback_data="pv_" + str(pid))
-    kb.button(text="🔙 Меню", callback_data="cmd_menu")
-    kb.adjust(1)
-
+    kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
 
 
@@ -2159,8 +2210,7 @@ async def cb_tt(cb: CallbackQuery):
     kb = InlineKeyboardBuilder()
     kb.button(text="📸 Начать задание", callback_data="tt_go")
     kb.button(text="📹 Снимай видео!", callback_data="tt_video")
-    kb.button(text="🔙 Меню", callback_data="cmd_menu")
-    kb.adjust(1)
+    kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
 
 @dp.callback_query(F.data == "tt_video")
@@ -2169,82 +2219,51 @@ async def cb_ttv(cb: CallbackQuery):
     text = ("📹 <b>Снимай видео и зарабатывай!</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             "🔥 Хотите легко зарабатывать в интернете, но не знаете как?\n\n"
             "🛡️ SwordUser — не проблема! Снимай видео про @SworuserN_bot и получай деньги!\n\n"
-            "💸 1000 просмотров = 1$\n\n"
-            "📲 Ознакомиться с условиями — @SwordUserTiktok\n\n"
+            "💸 1000 просмотров = 1$\n\n📲 Ознакомиться с условиями — @SwordUserTiktok\n\n"
             "⚡ <b>Быстрый поиск</b> — найди красивые юзы для видео!")
     kb = InlineKeyboardBuilder()
     kb.button(text="⚡ Быстрый поиск", callback_data="tt_fast")
     kb.button(text="📲 @SwordUserTiktok", url="https://t.me/SwordUserTiktok")
-    kb.button(text="🔙 TikTok", callback_data="cmd_tiktok")
-    kb.adjust(1)
+    kb.button(text="🔙 TikTok", callback_data="cmd_tiktok"); kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
 
 @dp.callback_query(F.data == "tt_fast")
 async def cb_tt_fast(cb: CallbackQuery):
-    uid = cb.from_user.id
-    await answer_cb(cb)
-
+    uid = cb.from_user.id; await answer_cb(cb)
     if uid in searching_users:
-        try:
-            await bot.send_message(uid, "⏳ Уже идёт поиск!")
-        except:
-            pass
-        return
-
+        try: await bot.send_message(uid, "⏳ Уже идёт поиск!")
+        except: pass; return
     searching_users.add(uid)
     try:
-        count = 5
-        total_attempts = 0
-        start = time.time()
-        target_time = random.uniform(3, 7)
-        steps = random.randint(4, 7)
+        count = 5; total_attempts = 0; start = time.time()
+        target_time = random.uniform(3, 7); steps = random.randint(4, 7)
         step_delay = target_time / steps
-
         results = []
         while len(results) < count:
             u = gen_beautiful()
             if len(u) == 5 and u.lower() not in [r["username"] for r in results]:
                 results.append({"username": u.lower(), "fragment": "unavailable"})
-
         ps = pool.stats()
-
         for step in range(steps):
             total_attempts += random.randint(30, 80)
             found_so_far = min(int((step + 1) / steps * count), count)
-
+            session_line = f"🟢{ps['active'] - ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
             await edit_msg(cb.message,
-                f"🔎 <b>💎 Красивые</b>\n\n"
-                f"📊 Проверено: <code>{total_attempts}</code>\n"
-                f"✅ Найдено: <code>{found_so_far}/{count}</code>\n"
-                f"🔄 Сессій: <code>{ps['active']}/{ps['total']}</code>\n"
-                f"⏱ {int(time.time() - start)}с")
-
+                f"🔎 <b>💎 Красивые</b>\n\n📊 Проверено: <code>{total_attempts}</code>\n"
+                f"✅ Найдено: <code>{found_so_far}/{count}</code>\n🔄 Сессии: {session_line}\n⏱ {int(time.time() - start)}с")
             await asyncio.sleep(step_delay)
-
-        found = results
-        elapsed = int(time.time() - start)
-
-        for item in found:
-            save_history(uid, item["username"], "TT Видео", len(item["username"]))
-
+        found = results; elapsed = int(time.time() - start)
+        for item in found: save_history(uid, item["username"], "TT Видео", len(item["username"]))
         kb = InlineKeyboardBuilder()
-        text = (f"✅ <b>Найдено {len(found)} юзернеймов:</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+        text = f"✅ <b>Найдено {len(found)} юзернеймов:</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for i, item in enumerate(found, 1):
             ev = evaluate_username(item["username"])
-            text += (f"{i}. <code>@{item['username']}</code>\n"
-                     f"   {ev['rarity']} | 💰 {ev['price']}\n"
-                     f"   [{ev['bar']}] {ev['score']}/200\n\n")
+            text += f"{i}. <code>@{item['username']}</code>\n   {ev['rarity']} | 💰 {ev['price']}\n   [{ev['bar']}] {ev['score']}/200\n\n"
             kb.button(text=f"⭐ {item['username']}", callback_data=f"fav_a_{item['username']}")
-
-        text += (f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                 f"📊 Проверено: <code>{total_attempts}</code>\n"
-                 f"⏱ Время: <code>{elapsed}с</code>")
-
+        text += f"━━━━━━━━━━━━━━━━━━━━━━━\n📊 Проверено: <code>{total_attempts}</code>\n⏱ Время: <code>{elapsed}с</code>"
         kb.button(text="⚡ Ещё", callback_data="tt_fast")
         kb.button(text="🔙 Снимай видео", callback_data="tt_video")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu")
-        kb.adjust(1)
+        kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
     finally:
         searching_users.discard(uid)
@@ -2265,49 +2284,28 @@ async def cb_tc(cb: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("ta_"))
 async def cb_ta(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
-    await answer_cb(cb)
-    tid = int(cb.data.replace("ta_", ""))
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb); tid = int(cb.data.replace("ta_", ""))
     uid = task_approve(tid, cb.from_user.id)
     if uid:
-        try:
-            await cb.message.edit_text(
-                f"✅ TikTok #{tid} одобрено",
-                parse_mode="HTML"
-            )
-        except:
-            pass
-        try:
-            await bot.send_message(uid, f"🎉 TikTok задание одобрено! 🎁 {TIKTOK_REWARD_GIFT}")
-        except:
-            pass
+        try: await cb.message.edit_text(f"✅ TikTok #{tid} одобрено", parse_mode="HTML")
+        except: pass
+        try: await bot.send_message(uid, f"🎉 TikTok задание одобрено! 🎁 {TIKTOK_REWARD_GIFT}")
+        except: pass
     else:
-        try:
-            await cb.message.edit_text(f"⚠️ TikTok #{tid} уже обработано")
-        except:
-            pass
-
+        try: await cb.message.edit_text(f"⚠️ TikTok #{tid} уже обработано")
+        except: pass
 
 @dp.callback_query(F.data.startswith("tr_"))
 async def cb_trj(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
-    await answer_cb(cb)
-    tid = int(cb.data.replace("tr_", ""))
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb); tid = int(cb.data.replace("tr_", ""))
     uid = task_reject(tid, cb.from_user.id)
-    try:
-        await cb.message.edit_text(
-            f"❌ TikTok #{tid} отклонено",
-            parse_mode="HTML"
-        )
-    except:
-        pass
+    try: await cb.message.edit_text(f"❌ TikTok #{tid} отклонено", parse_mode="HTML")
+    except: pass
     if uid:
-        try:
-            await bot.send_message(uid, "❌ TikTok задание отклонено.")
-        except:
-            pass
+        try: await bot.send_message(uid, "❌ TikTok задание отклонено.")
+        except: pass
 
 
 # ─── ОПЛАТА ───
@@ -2358,16 +2356,13 @@ async def succ_pay(msg: Message):
             except: pass
 
     elif parts[0] == "topup" and len(parts) >= 3:
-        amount = int(parts[1])
-        uid = int(parts[2])
+        amount = int(parts[1]); uid = int(parts[2])
         add_balance(uid, amount)
         await msg.answer(f"✅ <b>+{amount}⭐</b> зачислено!", parse_mode="HTML")
 
     elif parts[0] == "market" and len(parts) >= 3:
-        lid = int(parts[1])
-        buyer_uid = int(parts[2])
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
+        lid = int(parts[1]); buyer_uid = int(parts[2])
+        conn = sqlite3.connect(DB); c = conn.cursor()
         c.execute("SELECT seller_uid, username, price FROM market_listings WHERE id=? AND status='active'", (lid,))
         item = c.fetchone()
         if item:
@@ -2380,26 +2375,22 @@ async def succ_pay(msg: Message):
             c.execute("UPDATE users SET balance=balance+? WHERE uid=?", (sa, seller_uid))
             conn.commit()
             await msg.answer(f"✅ @{username} оплачен!", parse_mode="HTML")
-            try:
-                await bot.send_message(seller_uid, f"💰 @{username} куплен! {sa}⭐", parse_mode="HTML")
+            try: await bot.send_message(seller_uid, f"💰 @{username} куплен! {sa}⭐", parse_mode="HTML")
             except: pass
         conn.close()
 
     elif parts[0] == "attempts" and len(parts) >= 4:
-        game = parts[1]
-        count = int(parts[2])
-        uid = int(parts[3])
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
+        game = parts[1]; count = int(parts[2]); uid = int(parts[3])
+        conn = sqlite3.connect(DB); c = conn.cursor()
         today = datetime.now().strftime("%Y-%m-%d")
         c.execute("SELECT uid FROM game_attempts WHERE uid=? AND game=?", (uid, game))
         if not c.fetchone():
             c.execute("INSERT INTO game_attempts (uid,game,attempts_left,last_reset) VALUES (?,?,?,?)", (uid, game, 0, today))
         c.execute("UPDATE game_attempts SET attempts_left=attempts_left+? WHERE uid=? AND game=?", (count, uid, game))
-        conn.commit()
-        conn.close()
+        conn.commit(); conn.close()
         names = {"slots":"🎰 Слоты","coinflip":"🪙 Монетка","dice":"🎲 Кости","crash":"📈 Краш","mines":"💣 Мины"}
         await msg.answer(f"✅ +{count} для {names.get(game, game)}!", parse_mode="HTML")
+
 
 # ─── ВЫВОДЫ ───
 
@@ -2428,12 +2419,15 @@ async def cb_wdn(cb: CallbackQuery):
 async def cb_admin(cb: CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb); s = get_stats(); ps = pool.stats()
-    text = (f"👑 <b>Админ-панель</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    session_line = f"🟢{ps['active'] - ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
+    text = (f"👑 <b>Админ-панель v22.0</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"👥 <code>{s['users']}</code> | 💎 <code>{s['subs']}</code> | 🚫 <code>{s['banned']}</code>\n"
             f"🔍 <code>{s['searches']}</code> | Сегодня: 👤<code>{s['today_users']}</code> 🔍<code>{s['today_searches']}</code>\n\n"
-            f"🔄 Пул: <code>{ps['active']}/{ps['total']}</code> ({ps['checks']})\n"
+            f"🔄 Сессии: {session_line}\n"
+            f"📊 Проверок: <code>{ps['checks']}</code> | 🛡 Спасено: <code>{ps['botapi_saves'] + ps.get('recheck_saves', 0)}</code>\n"
             f"📱 TT: <code>{s['tasks']}</code> | 💸 <code>{s['withdrawals']}</code> | 📢 <code>{s['promos']}</code>")
     kb = InlineKeyboardBuilder()
+    kb.button(text=f"🔄 Сессии ({ps['active']}/{ps['total']})", callback_data="a_sessions")
     kb.button(text="🔑 Ключ", callback_data="a_keys"); kb.button(text="📩 Выдать", callback_data="a_give")
     kb.button(text="💎 Premium", callback_data="a_plist"); kb.button(text="🚫 Бан", callback_data="a_ban")
     kb.button(text="✅ Разбан", callback_data="a_unban"); kb.button(text=f"📱 TT ({s['tasks']})", callback_data="a_tt")
@@ -2441,8 +2435,55 @@ async def cb_admin(cb: CallbackQuery):
     kb.button(text="📊 Экспорт", callback_data="a_export"); kb.button(text="📢 Акции", callback_data="a_promos")
     kb.button(text="👥 Рефералы", callback_data="a_refs")
     kb.button(text="🎁 Разыграть", callback_data="a_raffle"); kb.button(text="🔙 Меню", callback_data="cmd_menu")
-    kb.adjust(2)
+    kb.adjust(1, 2, 2, 2, 2, 2, 2, 1)
     await edit_msg(cb.message, text, kb.as_markup())
+# ─── СЕССИИ (НОВОЕ) ───
+
+@dp.callback_query(F.data == "a_sessions")
+async def cb_asessions(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    ps = pool.stats()
+    detail = pool.detailed_status()
+    text = (
+        f"🔄 <b>Сессии</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🟢 Healthy: <code>{ps['active'] - ps.get('warming',0)}</code>\n"
+        f"🟡 Warming: <code>{ps.get('warming',0)}</code>\n"
+        f"🟠 Cooldown: <code>{ps.get('cooldown',0)}</code>\n"
+        f"🔴 Dead: <code>{ps.get('dead',0)}</code>\n\n"
+        f"📊 Проверок: <code>{ps['checks']}</code>\n"
+        f"❌ Ошибок: <code>{ps.get('errors',0)}</code>\n"
+        f"🛡 Bot API спасло: <code>{ps['botapi_saves']}</code>\n"
+        f"🔁 Recheck спасло: <code>{ps.get('recheck_saves',0)}</code>\n"
+        f"🔄 Реконнектов: <code>{ps.get('reconnects',0)}</code>\n\n"
+        f"<pre>{detail}</pre>")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔄 Обновить", callback_data="a_sessions")
+    kb.button(text="⚡ Reconnect all", callback_data="a_reconnect_all")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin"); kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "a_reconnect_all")
+async def cb_areconnect(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    await edit_msg(cb.message, "🔄 Реконнект всех мёртвых...")
+    reconnected = 0
+    for i in range(len(pool.clients)):
+        if pool.status.get(i) == 'dead':
+            await pool._try_reconnect(i)
+            if pool.status.get(i) != 'dead': reconnected += 1
+    ps = pool.stats()
+    detail = pool.detailed_status()
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔄 Статус", callback_data="a_sessions")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin"); kb.adjust(1)
+    await edit_msg(cb.message,
+        f"✅ Реконнект завершён: <b>{reconnected}</b> восстановлено\n\n<pre>{detail}</pre>",
+        kb.as_markup())
+
+
+# ─── ОСТАЛЬНАЯ АДМИНКА ───
 
 @dp.callback_query(F.data == "a_plist")
 async def cb_aplist(cb: CallbackQuery):
@@ -2564,10 +2605,8 @@ async def cb_araffle(cb: CallbackQuery):
 
 @dp.callback_query(F.data == "a_refs")
 async def cb_arefs(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
-    
     kb = InlineKeyboardBuilder()
     kb.button(text="🏆 Топ за всё время", callback_data="a_refs_top_all")
     kb.button(text="🏆 Топ за акцию", callback_data="a_refs_top_promo")
@@ -2575,21 +2614,15 @@ async def cb_arefs(cb: CallbackQuery):
     kb.button(text="👀 Рефералы юзера", callback_data="a_refs_list")
     kb.button(text="🗑 Удалить реферала", callback_data="a_refs_remove")
     kb.button(text="🔄 Проверить подписки", callback_data="a_refs_check_subs")
-    kb.button(text="🔙 Админ", callback_data="cmd_admin")
-    kb.adjust(1)
-    
+    kb.button(text="🔙 Админ", callback_data="cmd_admin"); kb.adjust(1)
     await edit_msg(cb.message, "👥 <b>Управление рефералами</b>", kb.as_markup())
-
 
 @dp.callback_query(F.data == "a_refs_top_all")
 async def cb_arefs_top_all(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
-    
     top = get_ref_top(20)
     text = "🏆 <b>Топ рефералов за всё время:</b>\n\n"
-    
     if top:
         for i, t in enumerate(top, 1):
             if i == 1: medal = "🥇"
@@ -2600,32 +2633,19 @@ async def cb_arefs_top_all(cb: CallbackQuery):
             fraud = check_referral_fraud(t["uid"])
             warn = " ⚠️" if fraud["fraud"] else ""
             text += medal + " " + name + " — <code>" + str(t["ref_count"]) + "</code>" + warn + "\n"
-    else:
-        text += "<i>Пока нет рефералов</i>"
-    
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔙 Рефералы", callback_data="a_refs")
-    kb.adjust(1)
+    else: text += "<i>Пока нет рефералов</i>"
+    kb = InlineKeyboardBuilder(); kb.button(text="🔙 Рефералы", callback_data="a_refs"); kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
-
 
 @dp.callback_query(F.data == "a_refs_top_promo")
 async def cb_arefs_top_promo(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
-    
-    promos = get_active_promotions()
-    start_date = "2024-01-01 00:00"
+    promos = get_active_promotions(); start_date = "2024-01-01 00:00"
     for p in promos:
-        if p["ptype"] == "ref_contest":
-            start_date = p["created"]
-            break
-    
+        if p["ptype"] == "ref_contest": start_date = p["created"]; break
     top = get_ref_top_by_period(start_date, 20)
-    text = "🏆 <b>Топ рефералов за акцию:</b>\n"
-    text += "<i>С " + start_date + "</i>\n\n"
-    
+    text = "🏆 <b>Топ рефералов за акцию:</b>\n<i>С " + start_date + "</i>\n\n"
     if top:
         for i, t in enumerate(top, 1):
             if i == 1: medal = "🥇"
@@ -2636,68 +2656,49 @@ async def cb_arefs_top_promo(cb: CallbackQuery):
             fraud = check_referral_fraud(t["uid"])
             warn = " ⚠️" if fraud["fraud"] else ""
             text += medal + " " + name + " — <code>" + str(t["ref_count"]) + "</code>" + warn + "\n"
-    else:
-        text += "<i>Пока нет рефералов за период акции</i>"
-    
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔙 Рефералы", callback_data="a_refs")
-    kb.adjust(1)
+    else: text += "<i>Пока нет рефералов за период акции</i>"
+    kb = InlineKeyboardBuilder(); kb.button(text="🔙 Рефералы", callback_data="a_refs"); kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
-
 
 @dp.callback_query(F.data == "a_refs_check")
 async def cb_arefs_check(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
     user_states[cb.from_user.id] = {"action": "admin_refs_check"}
-    kb = InlineKeyboardBuilder()
-    kb.button(text="❌ Отмена", callback_data="a_refs")
+    kb = InlineKeyboardBuilder(); kb.button(text="❌ Отмена", callback_data="a_refs")
     await edit_msg(cb.message, "🔍 <b>Введите ID или @username для проверки на накрут:</b>", kb.as_markup())
-
 
 @dp.callback_query(F.data == "a_refs_list")
 async def cb_arefs_list(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
     user_states[cb.from_user.id] = {"action": "admin_refs_list"}
-    kb = InlineKeyboardBuilder()
-    kb.button(text="❌ Отмена", callback_data="a_refs")
+    kb = InlineKeyboardBuilder(); kb.button(text="❌ Отмена", callback_data="a_refs")
     await edit_msg(cb.message, "👀 <b>Введите ID или @username чтобы увидеть его рефералов:</b>", kb.as_markup())
 
 @dp.callback_query(F.data == "a_refs_remove")
 async def cb_arefs_remove(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
     user_states[cb.from_user.id] = {"action": "admin_refs_remove_user"}
-    kb = InlineKeyboardBuilder()
-    kb.button(text="❌ Отмена", callback_data="a_refs")
+    kb = InlineKeyboardBuilder(); kb.button(text="❌ Отмена", callback_data="a_refs")
     await edit_msg(cb.message, "🗑 <b>Введите ID или @username у кого удалить реферала:</b>", kb.as_markup())
-
 
 @dp.callback_query(F.data == "a_refs_check_subs")
 async def cb_arefs_check_subs(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
     user_states[cb.from_user.id] = {"action": "admin_refs_check_subs"}
-    kb = InlineKeyboardBuilder()
-    kb.button(text="❌ Отмена", callback_data="a_refs")
+    kb = InlineKeyboardBuilder(); kb.button(text="❌ Отмена", callback_data="a_refs")
     await edit_msg(cb.message, "🔄 <b>Введите ID или @username чтобы проверить подписки его рефералов:</b>", kb.as_markup())
-
 
 @dp.callback_query(F.data.startswith("a_ref_del_"))
 async def cb_aref_del(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
     parts = cb.data.replace("a_ref_del_", "").split("_")
-    if len(parts) != 2:
-        return
-    referrer_uid = int(parts[0])
-    referred_uid = int(parts[1])
+    if len(parts) != 2: return
+    referrer_uid = int(parts[0]); referred_uid = int(parts[1])
     remove_referral(referrer_uid, referred_uid)
     await edit_msg(cb.message, "✅ Реферал удалён")
 
@@ -2756,7 +2757,48 @@ async def reminder_loop():
             logger.error(f"Reminder: {e}")
 
 
-# ═══════════════════════ ЗАПУСК ═══════════════════════
+# ═══════════════════════ SESSION WATCHDOG ═══════════════════════
+
+async def session_watchdog():
+    await asyncio.sleep(30)
+    TEST_USERNAME = "telegram"
+    while True:
+        try:
+            ps = pool.stats()
+            total = ps['total']; active = ps['active']; dead = ps.get('dead', 0)
+
+            if dead > 0 and active < total:
+                logger.info(f"Watchdog: {dead} dead sessions, trying reconnect...")
+                for i in range(len(pool.clients)):
+                    if pool.status.get(i) == 'dead':
+                        await pool._try_reconnect(i)
+                        await asyncio.sleep(5)
+
+            ps2 = pool.stats()
+            if ps2['active'] <= max(total // 2, 1) and total > 0:
+                alert = (
+                    f"⚠️ <b>WATCHDOG ALERT</b>\n\n"
+                    f"Живых сессий: {ps2['active']}/{total}\n"
+                    f"Dead: {ps2.get('dead', 0)}\n"
+                    f"Cooldown: {ps2.get('cooldown', 0)}\n\n"
+                    f"Бот замедлён для защиты от банов.")
+                await notify_admins(alert)
+
+            if pool.clients and active > 0:
+                try:
+                    result = await pool.check(TEST_USERNAME)
+                    if result != "taken":
+                        logger.warning(f"Watchdog: 'telegram' returned '{result}' — sessions might be broken!")
+                except Exception as e:
+                    logger.error(f"Watchdog health check: {e}")
+
+        except Exception as e:
+            logger.error(f"Watchdog error: {e}")
+
+        await asyncio.sleep(300)
+
+
+# ═══════════════════════ WEBAPP / MARKET ═══════════════════════
 
 from aiogram.types import WebAppInfo
 
@@ -2773,23 +2815,17 @@ async def cmd_webapp(msg: Message):
     kb.button(text="👤 Профиль", web_app=WebAppInfo(url=f"{WEBAPP_URL}/webapp/profile"))
     kb.adjust(2, 2)
     await msg.answer(
-        "🌐 <b>Username Hunter — Маркет</b>\n\n"
-        "Откройте прямо в Telegram 👇",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
-    )
+        "🌐 <b>Username Hunter — Маркет</b>\n\nОткройте прямо в Telegram 👇",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.message(Command("market"))
 async def cmd_market_link(msg: Message):
     kb = InlineKeyboardBuilder()
     kb.button(text="🏪 Открыть маркет", url=f"{WEBAPP_URL}/market")
-    kb.button(text="🎮 Игры", url=f"{WEBAPP_URL}/games")
-    kb.adjust(1)
+    kb.button(text="🎮 Игры", url=f"{WEBAPP_URL}/games"); kb.adjust(1)
     await msg.answer(
         "🏪 <b>Маркет юзернеймов</b>\n\n👇 Нажмите чтобы открыть:",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
-    )
+        reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.message(Command("webverify"))
 async def cmd_webverify(msg: Message, command: CommandObject):
@@ -2801,96 +2837,80 @@ async def cmd_webverify(msg: Message, command: CommandObject):
             "🛡️ <b>Верификация продавца</b>\n\n"
             "Используйте: <code>/webverify КОД</code>\n"
             "Код получите на сайте маркета.",
-            parse_mode="HTML"
-        )
+            parse_mode="HTML")
         return
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT uid FROM verification_codes WHERE code=? AND used=0", (code,))
     row = c.fetchone()
     if not row:
-        await msg.answer("❌ Неверный или использованный код.")
-        conn.close()
-        return
+        await msg.answer("❌ Неверный или использованный код."); conn.close(); return
     code_uid = row[0]
     if code_uid != uid:
-        await msg.answer("❌ Код привязан к другому аккаунту.")
-        conn.close()
-        return
+        await msg.answer("❌ Код привязан к другому аккаунту."); conn.close(); return
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     c.execute("UPDATE verification_codes SET used=1 WHERE code=?", (code,))
-    c.execute(
-        "UPDATE seller_verifications SET status='verified', verified_at=?, tg_username=? WHERE uid=?",
-        (now, uname, uid)
-    )
-    conn.commit()
-    conn.close()
+    c.execute("UPDATE seller_verifications SET status='verified', verified_at=?, tg_username=? WHERE uid=?",
+              (now, uname, uid))
+    conn.commit(); conn.close()
     await msg.answer(
-        "✅ <b>Верификация пройдена!</b>\n\n"
-        "🛡️ Теперь можно продавать на маркете.",
-        parse_mode="HTML"
-    )
+        "✅ <b>Верификация пройдена!</b>\n\n🛡️ Теперь можно продавать на маркете.",
+        parse_mode="HTML")
 
 @dp.message(Command("balance"))
 async def cmd_balance(msg: Message):
     uid = msg.from_user.id
     ensure_user(uid, msg.from_user.username)
-    u = get_user(uid)
-    bal = u.get("balance", 0.0)
+    u = get_user(uid); bal = u.get("balance", 0.0)
     kb = InlineKeyboardBuilder()
     kb.button(text="💰 +50⭐", callback_data="topup_50")
     kb.button(text="💰 +100⭐", callback_data="topup_100")
     kb.button(text="💰 +200⭐", callback_data="topup_200")
     if bal >= MIN_WITHDRAW:
         kb.button(text=f"💸 Вывести ({bal:.1f}⭐)", callback_data="cmd_withdraw")
-    kb.button(text="🔙 Меню", callback_data="cmd_menu")
-    kb.adjust(3, 1, 1)
+    kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(3, 1, 1)
     await msg.answer(
         f"💰 <b>Баланс:</b> <code>{bal:.1f}</code> ⭐\n\n"
-        f"Звёзды можно тратить на:\n"
-        f"• 🏪 Юзернеймы на маркете\n"
-        f"• 🎮 Попытки в играх\n"
-        f"• 💎 Premium подписку",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML"
-    )
+        f"Звёзды можно тратить на:\n• 🏪 Юзернеймы на маркете\n• 🎮 Попытки в играх\n• 💎 Premium подписку",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("topup_"))
 async def cb_topup(cb: CallbackQuery):
     await answer_cb(cb)
-    amount = int(cb.data.replace("topup_", ""))
-    uid = cb.from_user.id
-    await bot.send_invoice(
-        uid,
-        title=f"💰 Пополнение {amount}⭐",
-        description=f"+{amount} звёзд на баланс",
-        payload=f"topup_{amount}_{uid}",
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label=f"{amount}⭐", amount=amount)]
-    )
+    amount = int(cb.data.replace("topup_", "")); uid = cb.from_user.id
+    await bot.send_invoice(uid, title=f"💰 Пополнение {amount}⭐",
+        description=f"+{amount} звёзд на баланс", payload=f"topup_{amount}_{uid}",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label=f"{amount}⭐", amount=amount)])
+
+
+# ═══════════════════════ ЗАПУСК ═══════════════════════
 
 async def main():
     global http_session, bot_info
     init_db()
     bot_info = await bot.get_me()
     http_session = aiohttp.ClientSession()
+
     await pool.init(ACCOUNTS)
     ps = pool.stats()
+
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    logger.info(f"🚀 @{bot_info.username} v21.0")
-    logger.info(f"🔄 Аккаунтов: {ps['total']}")
+    logger.info(f"🚀 @{bot_info.username} v22.0 — ANTI-BAN ENGINE")
+    logger.info(f"🔄 Сессий: {ps['total']} (🟢{ps['active']} 🟡{ps.get('warming',0)} 🔴{ps.get('dead',0)})")
     logger.info(f"🎯 Premium: {PREMIUM_COUNT} юзов, {PREMIUM_SEARCHES_LIMIT} поисков")
     logger.info(f"🆓 Free: {FREE_COUNT} юз, {FREE_SEARCHES} поисков")
     logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     asyncio.create_task(reminder_loop())
+    asyncio.create_task(session_watchdog())
+
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
     finally:
         await http_session.close()
         await pool.disconnect()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
