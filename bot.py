@@ -1386,8 +1386,15 @@ def evaluate_username(username):
 # ═══════════════════════ ПОИСК v4 ═══════════════════════
 
 async def do_search(count, gen_func, msg, mode_name, uid):
-    found = []; attempts = 0; start = time.time()
-    last_update = 0; checked_cache = set(); skips_in_row = 0
+    logger.info(f"do_search started: count={count}, mode={mode_name}, uid={uid}")
+    logger.info(f"pool.has_sessions() = {pool.has_sessions()}")
+    logger.info(f"pool.clients = {len(pool.clients)}")
+    found = []
+    attempts = 0
+    start = time.time()
+    last_update = 0
+    checked_cache = set()
+    skips_in_row = 0
     fallback = not pool.has_sessions()
 
     acc_idx = pool.add_user(uid) if not fallback else None
@@ -1396,146 +1403,133 @@ async def do_search(count, gen_func, msg, mode_name, uid):
         for _ in range(60):
             await asyncio.sleep(1)
             acc_idx = pool.add_user(uid)
-            if acc_idx is not None: break
-        if acc_idx is None: fallback = True
+            if acc_idx is not None:
+                break
+        if acc_idx is None:
+            fallback = True
 
     if fallback:
         await edit_msg(msg, f"⚠️ <b>{mode_name}</b> — упрощённый режим\n\n⏳ Ищу через Bot API...")
 
     try:
         while len(found) < count and attempts < 2000:
+            # === ГЕНЕРАЦИЯ ===
             u = None
             for _ in range(50):
                 candidate = gen_func()
-                if (len(candidate) >= 5 and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', candidate)
-                    and candidate.lower() not in checked_cache and is_valid_username(candidate)):
-                    u = candidate.lower(); break
-            if u is None: continue
-            checked_cache.add(u); attempts += 1
+                if (len(candidate) >= 5 and 
+                    re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', candidate) and
+                    candidate.lower() not in checked_cache and 
+                    is_valid_username(candidate)):
+                    u = candidate.lower()
+                    break
+            
+            if u is None:
+                attempts += 1
+                continue
+            
+            checked_cache.add(u)
+            attempts += 1
 
+            # === FALLBACK MODE (Bot API only) ===
             if fallback:
-                # Bot API only — без Fragment
                 b = await pool._botapi_check(u)
-                if b == "taken":
-                    await asyncio.sleep(0.3)
-                    continue
-                found.append({"username": u, "fragment": "unavailable"})
-                save_history(uid, u, mode_name, len(u))
+                if b != "taken":
+                    found.append({"username": u, "fragment": "unavailable"})
+                    save_history(uid, u, mode_name, len(u))
                 await asyncio.sleep(0.5)
+            
+            # === NORMAL MODE ===
             else:
-                ps = pool.stats(); alive = ps['active']
-                pause = 4.0 if alive <= 1 else (2.0 if alive <= 3 else (1.0 if alive <= 5 else 0.5))
+                ps = pool.stats()
+                alive = ps['active']
+                
+                if alive <= 1:
+                    pause = 4.0
+                elif alive <= 3:
+                    pause = 2.0
+                elif alive <= 5:
+                    pause = 1.0
+                else:
+                    pause = 0.5
 
+                # Быстрая проверка
                 quick = await pool.check(u, uid)
+
                 if quick == "taken":
-                    skips_in_row = 0; await asyncio.sleep(pause * 0.3); continue
+                    skips_in_row = 0
+                    await asyncio.sleep(pause * 0.3)
+                    continue
+                
                 if quick == "skip":
                     skips_in_row += 1
                     if skips_in_row >= 5:
-                        await edit_msg(msg, f"🔎 <b>{mode_name}</b>\n\n⚠️ Пауза 30с...\n📊 {attempts} проверено\n✅ {len(found)}/{count}")
-                        await asyncio.sleep(30); skips_in_row = 0
+                        await edit_msg(msg,
+                            f"🔎 <b>{mode_name}</b>\n\n"
+                            f"⚠️ Сессии перегружены, пауза 30с...\n"
+                            f"📊 Проверено: <code>{attempts}</code>\n"
+                            f"✅ Найдено: <code>{len(found)}/{count}</code>")
+                        await asyncio.sleep(30)
+                        skips_in_row = 0
                     continue
+                
                 skips_in_row = 0
+
+                # maybe_free — глубокая проверка
                 if quick == "maybe_free":
                     deep = await pool.strong_check(u, uid)
-                    if deep in ("taken", "skip"):
-                        await asyncio.sleep(pause); continue
+                    
+                    if deep == "taken":
+                        await asyncio.sleep(pause)
+                        continue
+                    
+                    if deep == "skip":
+                        await asyncio.sleep(pause)
+                        continue
+                    
                     if deep == "free":
+                        # Проверка Fragment
                         fr = await check_fragment(u)
-                        if fr == "fragment": await asyncio.sleep(pause); continue
+                        
+                        # Пропускаем если на аукционе Fragment
+                        if fr == "fragment":
+                            await asyncio.sleep(pause)
+                            continue
+                        
+                        # НАШЛИ!
                         found.append({"username": u, "fragment": fr})
                         save_history(uid, u, mode_name, len(u))
+                        
+                        if len(found) >= count:
+                            break
+                
                 await asyncio.sleep(pause + random.uniform(0, 0.5))
 
+            # === ОБНОВЛЕНИЕ ПРОГРЕССА ===
             now = time.time()
-            if now - last_update > 4.0:
-                last_update = now; el = int(now - start)
+            if now - last_update > 3.0:
+                last_update = now
+                el = int(now - start)
+                
                 if fallback:
                     sl = "⚠️ Bot API only"
                 else:
                     ps = pool.stats()
                     sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
-                await edit_msg(msg, f"🔎 <b>{mode_name}</b>\n\n📊 Проверено: <code>{attempts}</code>\n✅ Найдено: <code>{len(found)}/{count}</code>\n🔄 {sl}\n⏱ {el}с")
+                
+                await edit_msg(msg,
+                    f"🔎 <b>{mode_name}</b>\n\n"
+                    f"📊 Проверено: <code>{attempts}</code>\n"
+                    f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                    f"🔄 Сессии: {sl}\n"
+                    f"⏱ {el}с")
 
-            if len(found) >= count: break
-        return found, {"attempts": attempts, "elapsed": int(time.time() - start)}
+        elapsed = int(time.time() - start)
+        return found, {"attempts": attempts, "elapsed": elapsed}
+    
     finally:
-        if not fallback: pool.remove_user(uid)
-
-async def do_template_search(template, count, msg, uid):
-    """Поиск по шаблону"""
-    found = []; attempts = 0; start = time.time()
-    last_update = 0; checked = set(); fallback = not pool.has_sessions()
-
-    try:
-        while len(found) < count and attempts < 500:
-            u = gen_from_template(template)
-            if u is None or u.lower() in checked or not is_valid_username(u):
-                attempts += 1; continue
-            checked.add(u.lower()); attempts += 1
-
-            if fallback:
-                b = await pool._botapi_check(u.lower())
-                if b != "taken":
-                    found.append({"username": u.lower(), "fragment": "unavailable"})
-                    save_history(uid, u.lower(), "Шаблон", len(u))
-                await asyncio.sleep(0.5)
-            else:
-                quick = await pool.check(u.lower(), uid)
-                if quick == "maybe_free":
-                    deep = await pool.strong_check(u.lower(), uid)
-                    if deep == "free":
-                        fr = await check_fragment(u.lower())
-                        if fr != "fragment":
-                            found.append({"username": u.lower(), "fragment": fr})
-                            save_history(uid, u.lower(), "Шаблон", len(u))
-                await asyncio.sleep(1.5)
-
-            now = time.time()
-            if now - last_update > 3.0:
-                last_update = now
-                await edit_msg(msg, f"🎯 <b>Шаблон: {template}</b>\n\n📊 <code>{attempts}</code> проверено\n✅ <code>{len(found)}/{count}</code>\n⏱ {int(now-start)}с")
-
-        return found, {"attempts": attempts, "elapsed": int(time.time() - start)}
-    finally:
-        pass
-
-async def do_similar_search(base, count, msg, uid):
-    """Поиск похожих юзернеймов"""
-    mutations = gen_similar(base)
-    found = []; attempts = 0; start = time.time()
-    last_update = 0; fallback = not pool.has_sessions()
-
-    try:
-        for u in mutations:
-            if len(found) >= count or attempts >= 200: break
-            attempts += 1
-
-            if fallback:
-                b = await pool._botapi_check(u)
-                if b != "taken":
-                    found.append({"username": u, "fragment": "unavailable"})
-                    save_history(uid, u, "Похожие", len(u))
-                await asyncio.sleep(0.5)
-            else:
-                quick = await pool.check(u, uid)
-                if quick == "maybe_free":
-                    deep = await pool.strong_check(u, uid)
-                    if deep == "free":
-                        fr = await check_fragment(u)
-                        if fr != "fragment":
-                            found.append({"username": u, "fragment": fr})
-                            save_history(uid, u, "Похожие", len(u))
-                await asyncio.sleep(1.5)
-
-            now = time.time()
-            if now - last_update > 3.0:
-                last_update = now
-                await edit_msg(msg, f"🔄 <b>Похожие на @{base}</b>\n\n📊 <code>{attempts}</code> проверено\n✅ <code>{len(found)}/{count}</code>\n⏱ {int(now-start)}с")
-
-        return found, {"attempts": attempts, "elapsed": int(time.time() - start)}
-    finally:
-        pass
+        if not fallback and acc_idx is not None:
+            pool.remove_user(uid)
 
 # ═══════════════════════ HELPERS ═══════════════════════
 
