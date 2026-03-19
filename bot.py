@@ -122,7 +122,7 @@ BUNDLES = {
 }
 
 SHOP_ITEMS = {
-    "s5":  {"name": "+5 поисков",  "searches": 5,  "stars": 10},
+    "s5":  {"name": "+5 писек",  "searches": 5,  "stars": 10},
     "s15": {"name": "+15 поисков", "searches": 15, "stars": 25},
     "s50": {"name": "+50 поисков", "searches": 50, "stars": 70},
     "mon1": {"name": "👁 Мониторинг 1 юза (7д)", "monitor": 1, "stars": 20},
