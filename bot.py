@@ -678,105 +678,149 @@ def gen_telegram():
 
 # ═══ НОВОЕ: ТЕМАТИЧЕСКИЙ ГЕНЕРАТОР (VIP) ═══
 def gen_thematic_variations(word):
-    """Генерирует МНОГО вариаций на основе введённого слова"""
+    """Чисто алгоритмические вариации — никаких словарей"""
     word = word.lower().replace("@","").replace(" ","")
     if len(word) < 2: return []
-    
     results = set()
     
-    # Суффиксы и префиксы
-    suffixes = ["_x","_go","_pro","_gg","_1","_vip","_top","_god","_king","_boss",
-                "_man","_boy","_fan","_dev","_hd","_tv","_yt","_mc","_pvp","_og",
-                "x","1","o","i","_tg","er","ist","ik","ka","off","on","ov","in",
-                "_best","_real","_true","_ya","_im","_my","_the","_mr","_da",
-                "2","3","69","228","777","_01","_99","_007","_13","_666"]
-    prefixes = ["x_","mr_","my_","im_","ya_","the_","not_","its_","el_","da_",
-                "go_","hi_","ok_","no_","re_","ex_","un_","pro_","top_","big_",
-                "new_","old_","real_","best_","just_","only_","true_","dark_",""]
-    
-    # 1. Слово + суффиксы
-    for sf in suffixes:
-        r = word + sf
-        if 5 <= len(r) <= 15: results.add(r)
-    
-    # 2. Префиксы + слово
-    for pf in prefixes:
-        r = pf + word
-        if 5 <= len(r) <= 15: results.add(r)
-    
-    # 3. Сокращение (убрать гласные)
-    no_vowels = word[0] + "".join(c for c in word[1:] if c not in "aeiou")
-    if len(no_vowels) >= 3:
-        for sf in suffixes[:15]:
-            r = no_vowels + sf
-            if 5 <= len(r) <= 15: results.add(r)
-    
-    # 4. Первые N букв + суффиксы
-    for n in range(3, min(len(word), 6)):
-        part = word[:n]
-        for sf in suffixes[:20]:
-            r = part + sf
-            if 5 <= len(r) <= 15: results.add(r)
-    
-    # 5. Leetspeak
+    # 1. Leetspeak (все комбинации по одной замене)
     leet = {"a":"4","e":"3","i":"1","o":"0","s":"5","t":"7","b":"8","g":"9"}
     for orig, rep in leet.items():
         if orig in word:
-            r = word.replace(orig, rep, 1)
-            if re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', r) and 5<=len(r)<=15:
-                results.add(r)
+            # заменить первое вхождение
+            results.add(word.replace(orig, rep, 1))
+            # заменить все
+            full = word.replace(orig, rep)
+            if full != word: results.add(full)
     
-    # 6. Удвоение букв
+    # 2. Удвоение каждой буквы
     for i in range(len(word)):
         r = word[:i] + word[i]*2 + word[i+1:]
-        if 5 <= len(r) <= 15: results.add(r)
+        results.add(r)
     
-    # 7. Подчёркивания внутри
+    # 3. Удаление каждой буквы
+    for i in range(len(word)):
+        r = word[:i] + word[i+1:]
+        if len(r) >= 4: results.add(r)
+    
+    # 4. Замена каждой буквы на соседнюю по клавиатуре
+    keyboard_neighbors = {
+        'q':'wa','w':'qeas','e':'wrds','r':'etf','t':'ryg','y':'tuh','u':'yij',
+        'i':'uok','o':'ipl','p':'o','a':'qwsz','s':'awedxz','d':'serfcx',
+        'f':'drtgvc','g':'ftyhbv','h':'gyujnb','j':'huiknm','k':'jiol',
+        'l':'kop','z':'asx','x':'zsdc','c':'xdfv','v':'cfgb','b':'vghn',
+        'n':'bhjm','m':'njk'
+    }
+    for i in range(len(word)):
+        if word[i] in keyboard_neighbors:
+            for c in keyboard_neighbors[word[i]]:
+                r = word[:i] + c + word[i+1:]
+                results.add(r)
+    
+    # 5. Свап соседних букв
+    for i in range(len(word)-1):
+        r = word[:i] + word[i+1] + word[i] + word[i+2:]
+        results.add(r)
+    
+    # 6. Вставка подчёркивания
     for i in range(2, len(word)-1):
         r = word[:i] + "_" + word[i:]
-        if 5 <= len(r) <= 15: results.add(r)
+        results.add(r)
     
-    # 8. Перевёрнутое слово
+    # 7. Вставка буквы/цифры в каждую позицию
+    for i in range(1, len(word)+1):
+        for c in "xzkvwy01234":
+            r = word[:i] + c + word[i:]
+            results.add(r)
+    
+    # 8. Реверс
     rev = word[::-1]
     if rev != word and len(rev) >= 5:
         results.add(rev)
-        for sf in suffixes[:5]:
-            r = rev + sf
-            if 5 <= len(r) <= 15: results.add(r)
     
-    # 9. Замена букв на похожие
-    similar_chars = {"c":"k","k":"c","f":"ph","s":"z","z":"s","v":"w","w":"v","i":"y","y":"i","x":"ks"}
-    for orig, rep in similar_chars.items():
+    # 9. Похожие символы
+    similar = {"c":"k","k":"c","f":"ph","ph":"f","s":"z","z":"s",
+               "v":"w","w":"v","i":"y","y":"i","x":"ks","ks":"x",
+               "ck":"k","ee":"i","oo":"u","ss":"s"}
+    for orig, rep in similar.items():
         if orig in word:
-            r = word.replace(orig, rep, 1)
-            if re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', r) and 5<=len(r)<=15:
-                results.add(r)
+            results.add(word.replace(orig, rep, 1))
     
-    # 10. Слово + слово (короткое)
-    if len(word) <= 7:
-        for sf in ["go","up","on","in","ok","ya","da","no","hd","gg","xd","wp"]:
-            r = word + sf
-            if 5 <= len(r) <= 15: results.add(r)
-            r = sf + word
-            if 5 <= len(r) <= 15: results.add(r)
+    # 10. Цифры в конце
+    for n in range(10):
+        results.add(word + str(n))
+    for n in [11,13,23,42,69,77,99,100,228,666,777]:
+        results.add(word + str(n))
     
-    # 11. Удаление букв по одной
-    for i in range(len(word)):
-        r = word[:i] + word[i+1:]
-        if len(r) >= 5: results.add(r)
+    # 11. Буква/цифра в начале (только если валидно)
+    for c in "xzkvwymr":
+        results.add(c + word)
     
-    # 12. Вставка буквы
-    for i in range(len(word)+1):
-        for c in "xzkvwy":
-            r = word[:i] + c + word[i:]
-            if 5 <= len(r) <= 15: results.add(r)
+    # 12. Обрезка + символ
+    for n in range(3, len(word)):
+        part = word[:n]
+        for c in "xzo0123456789":
+            results.add(part + c)
+        results.add(part)
+    
+    # 13. Задняя обрезка + символ
+    for n in range(3, len(word)):
+        part = word[-n:]
+        if part[0].isalpha():
+            for c in "x1o0":
+                results.add(part + c)
+            results.add(part)
+    
+    # 14. Слово + слово (первые 3 + последние 3)
+    if len(word) >= 6:
+        results.add(word[:3] + word[-3:])
+        results.add(word[-3:] + word[:3])
+    
+    # 15. Удаление гласных
+    no_v = word[0] + "".join(c for c in word[1:] if c not in "aeiou")
+    if len(no_v) >= 4 and no_v != word:
+        results.add(no_v)
+        for c in "xo0123":
+            results.add(no_v + c)
+    
+    # 16. Удаление согласных (оставляем скелет)
+    only_v = "".join(c for c in word if c in "aeiou")
+    if len(only_v) >= 3:
+        # обрамить согласными
+        results.add(word[0] + only_v)
+    
+    # 17. Удвоение всего слова (если короткое)
+    if len(word) <= 5:
+        results.add(word + word)
+        results.add(word + word[::-1])
+    
+    # 18. Капитализация через _ (разбивка)
+    if len(word) >= 6:
+        for i in range(3, len(word)-2):
+            results.add(word[:i] + "_" + word[i:])
+    
+    # 19. Первые буквы + цифры для длинных
+    if len(word) >= 4:
+        for rep in ["er","or","ar","ix","ox","ax","us","is"]:
+            r = word[:-2] + rep
+            if r != word: results.add(r)
+    
+    # 20. Замена окончания
+    if len(word) >= 4:
+        for rep in ["o","i","a","y","x"]:
+            r = word[:-1] + rep
+            if r != word: results.add(r)
     
     # Фильтр валидных
     valid = []
+    seen = set()
     for r in results:
         r = r.replace("__","_").strip("_")
-        if re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', r) and 5 <= len(r) <= 15 and r != word:
+        if (r not in seen and r != word and 
+            re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', r) and 
+            5 <= len(r) <= 15):
             valid.append(r)
+            seen.add(r)
     
     random.shuffle(valid)
     return valid
@@ -819,12 +863,12 @@ def gen_similar(base):
     return valid
 
 SEARCH_MODES = {
-    "default":    {"name":"Дефолт",     "emoji":"🎲","desc":"Красивые (5 букв)",            "_default_premium":False,"premium":False,"func":gen_default,"disabled":False},
-    "beautiful":  {"name":"Красивые",   "emoji":"💎","desc":"Стильные паттерны",             "_default_premium":True, "premium":True, "func":gen_beautiful,"disabled":False},
-    "meaningful": {"name":"Со смыслом", "emoji":"📖","desc":"Комбинации слов",              "_default_premium":True, "premium":True, "func":gen_meaningful,"disabled":False},
-    "anyword":    {"name":"Любое слово","emoji":"🔤","desc":"Произносимые (5-7 букв)",      "_default_premium":True, "premium":True, "func":gen_anyword,"disabled":False},
-    "mat":        {"name":"Матерные",   "emoji":"🔞","desc":"18+ юзернеймы",                "_default_premium":True, "premium":True, "func":gen_mat,"disabled":False},
-    "telegram":   {"name":"Telegram",   "emoji":"📱","desc":"TG-тематика (200+ слов)",      "_default_premium":True, "premium":True, "func":gen_telegram,"disabled":False},
+    "default":    {"name":"Дефолт",     "emoji":"🎲","desc":"Красивые (5 букв)",       "_default_premium":False,"premium":False,"func":gen_default,   "disabled":False,"word_input":False},
+    "beautiful":  {"name":"Красивые",   "emoji":"💎","desc":"Стильные паттерны",        "_default_premium":True, "premium":True, "func":gen_beautiful, "disabled":False,"word_input":False},
+    "meaningful": {"name":"Со смыслом", "emoji":"📖","desc":"Вариации по вашему слову", "_default_premium":True, "premium":True, "func":None,          "disabled":False,"word_input":True},
+    "anyword":    {"name":"Любое слово","emoji":"🔤","desc":"Произносимые (5-7 букв)",  "_default_premium":True, "premium":True, "func":gen_anyword,   "disabled":False,"word_input":False},
+    "mat":        {"name":"Матерные",   "emoji":"🔞","desc":"18+ вариации по слову",    "_default_premium":True, "premium":True, "func":None,          "disabled":False,"word_input":True},
+    "telegram":   {"name":"Telegram",   "emoji":"📱","desc":"TG вариации по слову",     "_default_premium":True, "premium":True, "func":None,          "disabled":False,"word_input":True},
 }
 
 INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
@@ -900,9 +944,11 @@ def evaluate_username(u):
 async def do_search(count, gen_func, msg, mode_name, uid):
     found=[]; attempts=0; start=time.time(); last_update=0
     checked=set(); errors=0; fallback=not pool.has_sessions()
+    warned_slow=False
+    config=load_bot_config()
     
     if fallback:
-        await edit_msg(msg, f"⚠️ <b>{mode_name}</b>\n\nBot API режим...")
+        await edit_msg(msg, f"⚠️ <b>{mode_name}</b>\n\n⏳ Все сессии заняты — поиск будет дольше обычного...")
     
     try:
         while len(found)<count and attempts<1500:
@@ -920,34 +966,43 @@ async def do_search(count, gen_func, msg, mode_name, uid):
                     fr=await check_fragment(u)
                     found.append({"username":u,"fragment":fr})
                     save_history(uid,u,mode_name,len(u))
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(2)  # ═ МЕДЛЕННЕЕ чтобы не ломать ═
             else:
                 r=await pool.check(u,uid)
                 if r=="taken": errors=0; await asyncio.sleep(0.2); continue
                 if r=="skip":
                     errors+=1
-                    if errors>=3: fallback=True; await edit_msg(msg,f"⚠️ <b>{mode_name}</b>\n\nBot API режим..."); errors=0
-                    await asyncio.sleep(1); continue
+                    if errors>=3 and not warned_slow:
+                        warned_slow=True
+                        fallback=True
+                        await edit_msg(msg,
+                            f"⚠️ <b>{mode_name}</b>\n\n"
+                            f"⏳ Все сессии заняты — поиск будет дольше обычного...\n\n"
+                            f"📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>")
+                        errors=0
+                    await asyncio.sleep(2); continue  # ═ МЕДЛЕННЕЕ ═
                 errors=0
                 if r=="maybe_free":
                     final=await pool.strong_check(u,uid)
-                    if final=="taken": await asyncio.sleep(0.3); continue
-                    if final=="skip": await asyncio.sleep(0.5); continue
+                    if final=="taken": await asyncio.sleep(0.5); continue  # ═ чуть медленнее ═
+                    if final=="skip": await asyncio.sleep(2); continue  # ═ МЕДЛЕННЕЕ ═
                     if final=="free":
                         fr=await check_fragment(u)
                         if fr!="fragment":
                             found.append({"username":u,"fragment":fr})
                             save_history(uid,u,mode_name,len(u))
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.8)  # ═ чуть медленнее ═
 
             now=time.time()
             if now-last_update>2.0:
                 last_update=now; el=int(now-start)
-                if fallback: sl="⚠️ Bot API"
+                if fallback:
+                    sl="⚠️ Сессии заняты"
                 else:
                     ps=pool.stats()
                     sl=f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
-                await edit_msg(msg,f"🔎 <b>{mode_name}</b>\n\n📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>\n🔄 {sl}\n⏱ {el}с")
+                slow_txt = "\n⏳ Поиск дольше обычного..." if (warned_slow or fallback) else ""
+                await edit_msg(msg,f"🔎 <b>{mode_name}</b>\n\n📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>\n🔄 {sl}\n⏱ {el}с{slow_txt}")
         return found, {"attempts":attempts,"elapsed":int(time.time()-start)}
     finally:
         pool.remove_user(uid)
@@ -1932,6 +1987,18 @@ async def cb_go(cb: CallbackQuery):
     if not mi or mi.get("disabled"): return
     is_prem = uid in ADMIN_IDS or has_subscription(uid)
     if mi["premium"] and not is_prem: return
+    
+    # ═══ НОВОЕ: если режим требует ввода слова ═══
+    if mi.get("word_input"):
+        user_states[uid] = {"action":"word_search","mode":mode}
+        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_search")
+        await edit_msg(cb.message,
+            f"{mi['emoji']} <b>{mi['name']}</b>\n\n"
+            f"Введите слово для поиска вариаций:\n\n"
+            f"💡 Бот создаст 100+ мутаций и проверит свободные!", kb.as_markup())
+        return
+    
+    # ═══ Обычный режим (без ввода слова) ═══
     if uid not in ADMIN_IDS:
         if uid in searching_users:
             try: await bot.send_message(uid, "⏳ Уже идёт поиск!")
@@ -2763,6 +2830,42 @@ async def handle_text(msg: Message):
         except: pass
         await msg.answer(text,reply_markup=kb.as_markup(),parse_mode="HTML",disable_web_page_preview=True); return
 
+    # ═══ НОВОЕ: Поиск по слову (Premium режимы: telegram, mat, meaningful) ═══
+    if action=="word_search":
+        user_states.pop(uid,None)
+        word=msg.text.strip().lower().replace("@","")
+        mode=state.get("mode","meaningful")
+        mi=SEARCH_MODES.get(mode,{})
+        if len(word)<2 or len(word)>20:
+            await msg.answer("❌ Слово от 2 до 20 символов"); return
+        if not re.match(r'^[a-zA-Z0-9_]+$', word):
+            await msg.answer("❌ Только латиница, цифры, _"); return
+        if not can_search(uid):
+            await msg.answer("⛔️ Поиски закончились!"); return
+        if uid not in ADMIN_IDS:
+            if uid in searching_users:
+                await msg.answer("⏳ Уже идёт поиск!"); return
+            cd = user_search_cooldown.get(uid,0); rem = SEARCH_COOLDOWN-(time.time()-cd)
+            if rem>0: await msg.answer(f"⏳ {int(rem)} сек."); return
+        searching_users.add(uid)
+        try:
+            mode_name = mi.get("name", mode)
+            log_action(uid,"word_search",f"{mode}:{word}"); use_search(uid)
+            wm=await msg.answer(f"{mi.get('emoji','🎯')} <b>{mode_name}: {word}</b>\n\n⏳ Генерирую вариации...")
+            count = get_search_count(uid)
+            found, stats = await do_thematic_search(word, count, wm, uid)
+            config = load_bot_config()
+            kb = InlineKeyboardBuilder()
+            text = format_results(found, stats, f"{mode_name}: {word}", config)
+            if can_search(uid): kb.button(text="🔄 Ещё", callback_data=f"go_{mode}")
+            kb.button(text="🔍 Режимы", callback_data="cmd_search")
+            kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
+            await edit_msg(wm, text, kb.as_markup())
+        finally:
+            searching_users.discard(uid)
+            if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
+        return
+    
     # ═══ НОВОЕ: Тематический поиск ═══
     if action=="thematic_search":
         user_states.pop(uid,None); word=msg.text.strip().lower().replace("@","")
