@@ -197,7 +197,7 @@ def apply_config(config):
 def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
 
-# ═══════════════════════ RATE LIMITER ═══════════════════════
+# ═══════════════════════ RATE LIMITER (ОТКЛЮЧЁН) ═══════════════════════
 
 class RateLimiter:
     def __init__(self):
@@ -207,42 +207,19 @@ class RateLimiter:
         self.temp_bans = {}
 
     def is_temp_banned(self, uid):
-        if uid in ADMIN_IDS: return False
-        ban_until = self.temp_bans.get(uid, 0)
-        if time.time() < ban_until: return True
-        if ban_until > 0: del self.temp_bans[uid]
-        return False
+        return False  # 🟢 Никогда не забанен
 
     def temp_ban(self, uid):
-        self.temp_bans[uid] = time.time() + TEMP_BAN_MINUTES * 60
-        self.warnings[uid] = 0
+        pass  # 🟢 Ничего не делает
 
     def check_search(self, uid):
-        if uid in ADMIN_IDS: return True, ""
-        now = time.time()
-        times = self.search_times.setdefault(uid, [])
-        times[:] = [t for t in times if now - t < 60]
-        if len(times) >= RATE_SEARCH_PER_MIN:
-            self.warnings[uid] = self.warnings.get(uid, 0) + 1
-            if self.warnings.get(uid, 0) >= 3:
-                self.temp_ban(uid); return False, "ban"
-            return False, "warn"
-        times.append(now); return True, ""
+        return True, ""  # 🟢 Всегда разрешает поиск
 
     def check_action(self, uid):
-        if uid in ADMIN_IDS: return True, ""
-        now = time.time()
-        times = self.check_times.setdefault(uid, [])
-        times[:] = [t for t in times if now - t < 3600]
-        if len(times) >= RATE_CHECK_PER_HOUR:
-            self.warnings[uid] = self.warnings.get(uid, 0) + 1
-            if self.warnings.get(uid, 0) >= 3:
-                self.temp_ban(uid); return False, "ban"
-            return False, "warn"
-        times.append(now); return True, ""
+        return True, ""  # 🟢 Всегда разрешает действия
 
     def get_ban_remaining(self, uid):
-        return max(0, int((self.temp_bans.get(uid, 0) - time.time()) / 60))
+        return 0
 
 rate_limiter = RateLimiter()
 
