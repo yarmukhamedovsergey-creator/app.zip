@@ -863,12 +863,12 @@ def gen_similar(base):
     return valid
 
 SEARCH_MODES = {
-    "default":    {"name":"Дефолт",     "emoji":"🎲","desc":"Красивые (5 букв)",       "_default_premium":False,"premium":False,"func":gen_default,   "disabled":False,"word_input":False},
-    "beautiful":  {"name":"Красивые",   "emoji":"💎","desc":"Стильные паттерны",        "_default_premium":True, "premium":True, "func":gen_beautiful, "disabled":False,"word_input":False},
-    "meaningful": {"name":"Со смыслом", "emoji":"📖","desc":"Вариации по вашему слову", "_default_premium":True, "premium":True, "func":None,          "disabled":False,"word_input":True},
-    "anyword":    {"name":"Любое слово","emoji":"🔤","desc":"Произносимые (5-7 букв)",  "_default_premium":True, "premium":True, "func":gen_anyword,   "disabled":False,"word_input":False},
-    "mat":        {"name":"Матерные",   "emoji":"🔞","desc":"18+ вариации по слову",    "_default_premium":True, "premium":True, "func":None,          "disabled":False,"word_input":True},
-    "telegram":   {"name":"Telegram",   "emoji":"📱","desc":"TG вариации по слову",     "_default_premium":True, "premium":True, "func":None,          "disabled":False,"word_input":True},
+    "default":    {"name":"Дефолт",     "emoji":"🎲","desc":"Красивые (5 букв)",       "_default_premium":False,"premium":False,"func":gen_default,   "disabled":False},
+    "beautiful":  {"name":"Красивые",   "emoji":"💎","desc":"Стильные паттерны",        "_default_premium":True, "premium":True, "func":gen_beautiful, "disabled":False},
+    "meaningful": {"name":"Со смыслом", "emoji":"📖","desc":"Комбинации слов",          "_default_premium":True, "premium":True, "func":gen_meaningful,"disabled":False},
+    "anyword":    {"name":"Любое слово","emoji":"🔤","desc":"Произносимые (5-7 букв)",  "_default_premium":True, "premium":True, "func":gen_anyword,   "disabled":False},
+    "mat":        {"name":"Матерные",   "emoji":"🔞","desc":"18+ юзернеймы",            "_default_premium":True, "premium":True, "func":gen_mat,       "disabled":False},
+    "telegram":   {"name":"Telegram",   "emoji":"📱","desc":"TG-тематика",              "_default_premium":True, "premium":True, "func":gen_telegram,  "disabled":False},
 }
 
 INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
@@ -1987,18 +1987,6 @@ async def cb_go(cb: CallbackQuery):
     if not mi or mi.get("disabled"): return
     is_prem = uid in ADMIN_IDS or has_subscription(uid)
     if mi["premium"] and not is_prem: return
-    
-    # ═══ НОВОЕ: если режим требует ввода слова ═══
-    if mi.get("word_input"):
-        user_states[uid] = {"action":"word_search","mode":mode}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_search")
-        await edit_msg(cb.message,
-            f"{mi['emoji']} <b>{mi['name']}</b>\n\n"
-            f"Введите слово для поиска вариаций:\n\n"
-            f"💡 Бот создаст 100+ мутаций и проверит свободные!", kb.as_markup())
-        return
-    
-    # ═══ Обычный режим (без ввода слова) ═══
     if uid not in ADMIN_IDS:
         if uid in searching_users:
             try: await bot.send_message(uid, "⏳ Уже идёт поиск!")
