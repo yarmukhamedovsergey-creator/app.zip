@@ -1895,11 +1895,11 @@ async def cb_search(cb: CallbackQuery):
             kb.button(text=f"{m['emoji']} {m['name']}", callback_data=f"go_{key}"); lk="✅"
         mt += f"{lk} <b>{m['emoji']} {m['name']}</b> — {m['desc']}\n"
 
-    # Тематический поиск — только VIP
+        # Тематический поиск — VIP
     if is_vip_user:
         kb.button(text="🎯 По слову (VIP)", callback_data="cmd_thematic")
         mt += "✅ <b>🎯 По слову</b> — VIP тематический поиск\n"
-    elif is_prem:
+    else:
         kb.button(text="🔒🌟 По слову (VIP)", callback_data="need_vip")
         mt += "🔒 <b>🎯 По слову</b> — нужен VIP\n"
 
