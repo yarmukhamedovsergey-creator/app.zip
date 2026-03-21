@@ -15,6 +15,7 @@ import os
 import sys
 import subprocess
 from datetime import datetime, timedelta
+from aiogram.types import FSInputFile
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F
@@ -3508,18 +3509,17 @@ async def cb_ta(cb: CallbackQuery):
         try: await bot.send_message(uid, f"🎉 Одобрено! 🎁 {TIKTOK_REWARD_GIFT}")
         except: pass
 
-@dp.callback_query(F.data.startswith("tr_"))
-async def cb_trj(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb); tid = int(cb.data[3:])
-    uid = task_reject(tid, cb.from_user.id)
-    log_action(cb.from_user.id,"task_reject",str(tid))
-    try: await cb.message.edit_text(f"❌ #{tid} отклонено")
-    except: pass
-    if uid:
-        try: await bot.send_message(uid, "❌ Отклонено")
-        except: pass
-
+# Команда /getdb для получения файла базы данных
+@upd.message(commands=['getdb'])
+async def send_db_file(message: types.Message):
+    # Укажите здесь правильное название вашего файла базы данных
+    db_filename = "hunter.db" 
+    
+    try:
+        db_file = FSInputFile(db_filename)
+        await message.answer_document(db_file, caption="Вот ваша база данных.")
+    except Exception as e:
+        await message.answer(f"Ошибка при отправке файла: {e}")
 
 # ═══════════════════════ ФОТО ═══════════════════════
 
