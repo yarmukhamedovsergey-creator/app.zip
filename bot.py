@@ -2353,13 +2353,25 @@ from aiogram.filters import Command
 
 @dp.message(Command("getdb"))
 async def send_db(message: Message):
-    if message.from_user.id != 5969266721:  # ← вставь свой ID
+    # Проверка ID
+    if message.from_user.id != 5969266721:
+        return
+
+    file_path = "hunter.db" # Проверьте, что файл лежит в папке с ботом
+
+    # Проверяем, существует ли файл физически
+    if not os.path.exists(file_path):
+        await message.answer(f"❌ Файл {file_path} не найден!")
         return
 
     await message.answer("📦 Отправляю базу...")
 
-    with open("hunter.db", "rb") as file:  # ← проверь имя файла!
-        await message.answer_document(file, caption="Ваша база данных")
+    try:
+        # В aiogram 3.x используем FSInputFile
+        document = FSInputFile(path=file_path, filename="hunter.db")
+        await message.answer_document(document, caption="Ваша база данных")
+    except Exception as e:
+        await message.answer(f"❌ Ошибка при отправке: {e}")
         
 # ═══════════════════════ CALLBACKS: Базовые ═══════════════════════
 
