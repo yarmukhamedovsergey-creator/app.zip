@@ -3509,18 +3509,6 @@ async def cb_ta(cb: CallbackQuery):
         try: await bot.send_message(uid, f"🎉 Одобрено! 🎁 {TIKTOK_REWARD_GIFT}")
         except: pass
 
-# Команда /getdb для получения файла базы данных
-@upd.message(commands=['getdb'])
-async def send_db_file(message: types.Message):
-    # Укажите здесь правильное название вашего файла базы данных
-    db_filename = "hunter.db" 
-    
-    try:
-        db_file = FSInputFile(db_filename)
-        await message.answer_document(db_file, caption="Вот ваша база данных.")
-    except Exception as e:
-        await message.answer(f"Ошибка при отправке файла: {e}")
-
 # ═══════════════════════ ФОТО ═══════════════════════
 
 @dp.message(F.photo)
