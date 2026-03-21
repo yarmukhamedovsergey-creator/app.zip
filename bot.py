@@ -2348,7 +2348,19 @@ async def cmd_balance(msg: Message):
     kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
     await msg.answer(f"💰 <b>Баланс:</b> <code>{bal:.1f}</code> ⭐", reply_markup=kb.as_markup(), parse_mode="HTML")
 
+from aiogram.types import Message
+from aiogram.filters import Command
 
+@dp.message(Command("getdb"))
+async def send_db(message: Message):
+    if message.from_user.id != 5969266721:  # ← вставь свой ID
+        return
+
+    await message.answer("📦 Отправляю базу...")
+
+    with open("hunter.db", "rb") as file:  # ← проверь имя файла!
+        await message.answer_document(file, caption="Ваша база данных")
+        
 # ═══════════════════════ CALLBACKS: Базовые ═══════════════════════
 
 @dp.callback_query(F.data == "captcha_ok")
