@@ -3537,11 +3537,6 @@ async def handle_photo(msg: Message):
                 await bot.send_media_group(aid, media)
         except Exception as e: logger.error(f"TT {aid}: {e}")
 
-@dp.message_handler(commands=['getdb'])
-async def send_db(message: types.Message):
-    if message.from_user.id == ВАШ_ID: # Только для вас!
-        with open("database.db", "rb") as file:
-            await message.answer_document(file, caption="Ваша база данных")
         
 # ═══════════════════════ ОПЛАТА ═══════════════════════
 
