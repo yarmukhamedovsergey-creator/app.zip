@@ -4363,7 +4363,7 @@ async def cb_admin(cb: CallbackQuery):
     kb.button(text="🔄 Перезапуск", callback_data="a_restart")
     kb.button(text="📋 Логи", callback_data="a_logs")
     kb.button(text="💻 Сервер", callback_data="a_server")
-        pending_m = len(market_get_pending())
+    pending_m = len(market_get_pending())
     disputes_m = len(market_get_disputes())
     kb.button(text=f"📦 Маркет ({pending_m})", callback_data="a_mmod")
     kb.button(text=f"⚠️ Споры ({disputes_m})", callback_data="a_mdisputes")
