@@ -111,6 +111,26 @@ for _k, _p in PRICES.items():
 
 DONATE_OPTIONS = [20, 50, 100, 200, 300, 500, 1000]
 
+# ═══════════════════════ МАРКЕТПЛЕЙС ═══════════════════════
+
+MARKET_COMMISSION = 0.10
+MARKET_LISTING_FEE = 5
+MARKET_NFT_LISTING_FEE = 25
+MARKET_PROMOTE_PRICE = 15
+MARKET_MIN_PRICE = 10
+MARKET_MAX_PRICE = 100000
+MARKET_MAX_LOTS = 3
+MARKET_VIP_MAX_LOTS = 10
+MARKET_EXTRA_SLOT_PRICE = 10
+MARKET_ESCROW_HOURS = 24
+MARKET_FAST_MOD_PRICE = 20
+LOOTBOX_PRICE = 20
+LOOTBOX_COOLDOWN = 3600
+WHEEL_FREE_DAILY = 1
+WHEEL_EXTRA_PRICE = 10
+WITHDRAW_MIN = 50
+WITHDRAW_FEE_PERCENT = 5
+
 # ═══════════════════════ INIT ═══════════════════════
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -1117,6 +1137,83 @@ def init_db():
         except: pass
     try: c.execute("ALTER TABLE promotions ADD COLUMN button_text TEXT DEFAULT ''")
     except: pass
+
+    # ═══ МАРКЕТПЛЕЙС ТАБЛИЦЫ ═══
+    c.execute("""CREATE TABLE IF NOT EXISTS market (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seller_uid INTEGER, mtype TEXT DEFAULT 'username',
+        title TEXT DEFAULT '', description TEXT DEFAULT '',
+        price INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
+        buyer_uid INTEGER DEFAULT 0, created TEXT DEFAULT '',
+        sold_at TEXT DEFAULT '', moderated_by INTEGER DEFAULT 0,
+        escrow_deadline TEXT DEFAULT '',
+        seller_confirmed INTEGER DEFAULT 0, buyer_confirmed INTEGER DEFAULT 0,
+        dispute INTEGER DEFAULT 0, dispute_reason TEXT DEFAULT '',
+        charge_id TEXT DEFAULT '', promoted INTEGER DEFAULT 0,
+        promoted_until TEXT DEFAULT '', is_nft INTEGER DEFAULT 0,
+        fragment_url TEXT DEFAULT '', fast_mod INTEGER DEFAULT 0,
+        listing_paid INTEGER DEFAULT 0
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS promocodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE, discount_percent INTEGER DEFAULT 0,
+        discount_stars INTEGER DEFAULT 0, max_uses INTEGER DEFAULT 1,
+        used_count INTEGER DEFAULT 0, min_purchase INTEGER DEFAULT 0,
+        applies_to TEXT DEFAULT 'all', created_by INTEGER DEFAULT 0,
+        created TEXT DEFAULT '', expires TEXT DEFAULT '',
+        active INTEGER DEFAULT 1
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS promocode_uses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT, uid INTEGER,
+        used_at TEXT DEFAULT '', discount_amount INTEGER DEFAULT 0
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS exchanges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        initiator_uid INTEGER, partner_uid INTEGER DEFAULT 0,
+        initiator_offer TEXT DEFAULT '', partner_offer TEXT DEFAULT '',
+        status TEXT DEFAULT 'open', created TEXT DEFAULT '',
+        completed_at TEXT DEFAULT '',
+        initiator_confirmed INTEGER DEFAULT 0, partner_confirmed INTEGER DEFAULT 0,
+        escrow_deadline TEXT DEFAULT '', dispute INTEGER DEFAULT 0
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_uid INTEGER, to_uid INTEGER,
+        rating INTEGER DEFAULT 5, text TEXT DEFAULT '',
+        deal_id INTEGER DEFAULT 0, deal_type TEXT DEFAULT 'market',
+        created TEXT DEFAULT ''
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS lootbox_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid INTEGER, prize TEXT DEFAULT '',
+        prize_type TEXT DEFAULT '', created TEXT DEFAULT ''
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS wheel_spins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid INTEGER, prize TEXT DEFAULT '',
+        created TEXT DEFAULT ''
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS market_slots (
+        uid INTEGER PRIMARY KEY,
+        extra_slots INTEGER DEFAULT 0
+    )""")
+
+    # ALTER для market (старые БД)
+    for col, default in [
+        ("promoted","0"),("promoted_until","''"),("is_nft","0"),
+        ("fragment_url","''"),("fast_mod","0"),("listing_paid","0"),
+        ("charge_id","''")
+    ]:
+        try: c.execute(f"ALTER TABLE market ADD COLUMN {col} DEFAULT {default}")
+        except: pass
     conn.commit(); conn.close()
 
 def ensure_user(uid, uname=""):
@@ -1609,6 +1706,396 @@ def find_user(inp):
     r = c.fetchone(); conn.close()
     return r[0] if r else None
 
+# ═══════════════════════ МАРКЕТПЛЕЙС ФУНКЦИИ ═══════════════════════
+
+def market_create_lot(seller_uid, mtype, title, description, price, is_nft=0, fragment_url=""):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("""INSERT INTO market (seller_uid,mtype,title,description,price,status,created,is_nft,fragment_url)
+                 VALUES (?,?,?,?,?,'pending',?,?,?)""",
+              (seller_uid, mtype, title, description, price,
+               datetime.now().strftime("%Y-%m-%d %H:%M"), is_nft, fragment_url))
+    lot_id = c.lastrowid; conn.commit(); conn.close(); return lot_id
+
+def market_approve_lot(lot_id, admin_uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE market SET status='active',moderated_by=? WHERE id=? AND status='pending'", (admin_uid, lot_id))
+    changed = c.rowcount; conn.commit(); conn.close(); return changed > 0
+
+def market_reject_lot(lot_id, admin_uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE market SET status='rejected',moderated_by=? WHERE id=? AND status='pending'", (admin_uid, lot_id))
+    changed = c.rowcount; conn.commit(); conn.close(); return changed > 0
+
+def market_get_active_lots(limit=20, nft_only=False):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    if nft_only:
+        c.execute("SELECT id,seller_uid,mtype,title,description,price,created,promoted,is_nft,fragment_url FROM market WHERE status='active' AND is_nft=1 ORDER BY promoted DESC, id DESC LIMIT ?", (limit,))
+    else:
+        c.execute("SELECT id,seller_uid,mtype,title,description,price,created,promoted,is_nft,fragment_url FROM market WHERE status='active' AND is_nft=0 ORDER BY promoted DESC, id DESC LIMIT ?", (limit,))
+    rows = c.fetchall(); conn.close()
+    return [{"id":r[0],"seller":r[1],"type":r[2],"title":r[3],"desc":r[4],"price":r[5],
+             "created":r[6],"promoted":r[7],"is_nft":r[8],"fragment_url":r[9]} for r in rows]
+
+def market_get_lot(lot_id):
+    conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    c.execute("SELECT * FROM market WHERE id=?", (lot_id,))
+    row = c.fetchone(); conn.close()
+    return dict(row) if row else None
+
+def market_get_user_lots(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT id,mtype,title,price,status,promoted,is_nft FROM market WHERE seller_uid=? AND status IN ('pending','active','escrow') ORDER BY id DESC", (uid,))
+    rows = c.fetchall(); conn.close()
+    return [{"id":r[0],"type":r[1],"title":r[2],"price":r[3],"status":r[4],"promoted":r[5],"is_nft":r[6]} for r in rows]
+
+def market_get_pending():
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT id,seller_uid,mtype,title,price,created,is_nft,fast_mod FROM market WHERE status='pending' ORDER BY fast_mod DESC, id")
+    rows = c.fetchall(); conn.close()
+    return [{"id":r[0],"seller":r[1],"type":r[2],"title":r[3],"price":r[4],"created":r[5],"is_nft":r[6],"fast":r[7]} for r in rows]
+
+def market_buy_lot(lot_id, buyer_uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    deadline = (datetime.now() + timedelta(hours=MARKET_ESCROW_HOURS)).strftime("%Y-%m-%d %H:%M")
+    c.execute("""UPDATE market SET status='escrow',buyer_uid=?,sold_at=?,escrow_deadline=?
+                 WHERE id=? AND status='active' AND seller_uid!=?""",
+              (buyer_uid, datetime.now().strftime("%Y-%m-%d %H:%M"), deadline, lot_id, buyer_uid))
+    changed = c.rowcount; conn.commit(); conn.close(); return changed > 0
+
+def market_confirm_seller(lot_id):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE market SET seller_confirmed=1 WHERE id=?", (lot_id,))
+    conn.commit(); conn.close()
+    return _check_deal_complete(lot_id)
+
+def market_confirm_buyer(lot_id):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE market SET buyer_confirmed=1 WHERE id=?", (lot_id,))
+    conn.commit(); conn.close()
+    return _check_deal_complete(lot_id)
+
+def _check_deal_complete(lot_id):
+    lot = market_get_lot(lot_id)
+    if not lot: return False
+    if lot["seller_confirmed"] and lot["buyer_confirmed"]:
+        conn = sqlite3.connect(DB); c = conn.cursor()
+        c.execute("UPDATE market SET status='completed' WHERE id=?", (lot_id,))
+        payout = int(lot["price"] * (1 - MARKET_COMMISSION))
+        c.execute("UPDATE users SET balance=balance+? WHERE uid=?", (payout, lot["seller_uid"]))
+        conn.commit(); conn.close()
+        return True
+    return False
+
+def market_promote_lot(lot_id):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    until = (datetime.now() + timedelta(hours=24)).strftime("%Y-%m-%d %H:%M")
+    c.execute("UPDATE market SET promoted=1,promoted_until=? WHERE id=?", (until, lot_id))
+    conn.commit(); conn.close()
+
+def market_cancel_lot(lot_id, uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE market SET status='cancelled' WHERE id=? AND seller_uid=? AND status IN ('pending','active')", (lot_id, uid))
+    changed = c.rowcount; conn.commit(); conn.close(); return changed > 0
+
+def market_count_user_lots(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM market WHERE seller_uid=? AND status IN ('pending','active')", (uid,))
+    cnt = c.fetchone()[0]; conn.close(); return cnt
+
+def market_get_max_lots(uid):
+    base = MARKET_VIP_MAX_LOTS if has_vip(uid) else MARKET_MAX_LOTS
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT extra_slots FROM market_slots WHERE uid=?", (uid,))
+    row = c.fetchone(); conn.close()
+    extra = row[0] if row else 0
+    return base + extra
+
+def market_add_slot(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("INSERT OR REPLACE INTO market_slots (uid, extra_slots) VALUES (?, COALESCE((SELECT extra_slots FROM market_slots WHERE uid=?),0)+1)", (uid, uid))
+    conn.commit(); conn.close()
+
+def market_open_dispute(lot_id, reason, by_uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE market SET dispute=1,dispute_reason=?,status='dispute' WHERE id=?", (f"{by_uid}: {reason}", lot_id))
+    conn.commit(); conn.close()
+
+def market_resolve_dispute(lot_id, winner, admin_uid):
+    lot = market_get_lot(lot_id)
+    if not lot: return False, None
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    if winner == "buyer":
+        c.execute("UPDATE market SET status='refunded',moderated_by=? WHERE id=?", (admin_uid, lot_id))
+        c.execute("SELECT charge_id FROM market WHERE id=?", (lot_id,))
+        row = c.fetchone(); charge_id = row[0] if row and row[0] else None
+        conn.commit(); conn.close(); return True, charge_id
+    else:
+        payout = int(lot["price"] * (1 - MARKET_COMMISSION))
+        c.execute("UPDATE users SET balance=balance+? WHERE uid=?", (payout, lot["seller_uid"]))
+        c.execute("UPDATE market SET status='completed',moderated_by=? WHERE id=?", (admin_uid, lot_id))
+        conn.commit(); conn.close(); return True, None
+
+def market_get_disputes():
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT id,seller_uid,buyer_uid,title,price,dispute_reason FROM market WHERE status='dispute'")
+    rows = c.fetchall(); conn.close()
+    return [{"id":r[0],"seller":r[1],"buyer":r[2],"title":r[3],"price":r[4],"reason":r[5]} for r in rows]
+
+def market_set_fast_mod(lot_id):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE market SET fast_mod=1 WHERE id=?", (lot_id,))
+    conn.commit(); conn.close()
+
+# ═══ ЛУТБОКС ═══
+
+def lootbox_can_open(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT created FROM lootbox_history WHERE uid=? ORDER BY id DESC LIMIT 1", (uid,))
+    row = c.fetchone(); conn.close()
+    if not row: return True
+    try:
+        last = datetime.strptime(row[0], "%Y-%m-%d %H:%M")
+        return (datetime.now() - last).total_seconds() >= LOOTBOX_COOLDOWN
+    except: return True
+
+def lootbox_open(uid):
+    roll = random.randint(1, 100)
+    if roll <= 5:
+        prize_type = "premium"; days = random.choice([3, 7])
+        give_subscription(uid, days)
+        prize = f"💎 Premium {days} дней!"
+    elif roll <= 15:
+        prize_type = "vip"; days = random.choice([1, 3])
+        give_vip(uid, days)
+        prize = f"🌟 VIP {days} дней!"
+    elif roll <= 35:
+        prize_type = "stars"; amount = random.choice([5, 10, 15, 20, 25, 50])
+        add_balance(uid, amount)
+        prize = f"⭐ {amount} звёзд!"
+    elif roll <= 60:
+        prize_type = "searches"; count = random.choice([2, 3, 5, 7, 10])
+        add_extra_searches(uid, count)
+        prize = f"🔍 {count} поисков!"
+    elif roll <= 80:
+        prize_type = "slot"; market_add_slot(uid)
+        prize = f"📦 +1 слот маркета!"
+    else:
+        prize_type = "emoji"
+        prize = random.choice(["🧸 Плюшевый мишка!", "🃏 Джокер!", "🎭 Маска!", "🎉 Ура!"])
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("INSERT INTO lootbox_history (uid,prize,prize_type,created) VALUES (?,?,?,?)",
+              (uid, prize, prize_type, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit(); conn.close()
+    return prize, prize_type
+
+# ═══ КОЛЕСО ФОРТУНЫ ═══
+
+def wheel_free_spins_today(uid):
+    today = datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM wheel_spins WHERE uid=? AND created LIKE ?", (uid, today+"%"))
+    cnt = c.fetchone()[0]; conn.close()
+    return cnt
+
+def wheel_spin(uid):
+    prizes = [
+        (30, "stars", 5, "⭐ 5 звёзд"),
+        (20, "stars", 10, "⭐ 10 звёзд"),
+        (15, "searches", 2, "🔍 2 поиска"),
+        (10, "searches", 5, "🔍 5 поисков"),
+        (8, "stars", 25, "⭐ 25 звёзд"),
+        (5, "premium", 1, "💎 1 день Premium"),
+        (5, "stars", 50, "⭐ 50 звёзд"),
+        (3, "vip", 1, "🌟 1 день VIP"),
+        (2, "premium", 3, "💎 3 дня Premium"),
+        (1, "stars", 100, "⭐ 100 звёзд !!!"),
+        (1, "premium", 7, "💎 7 дней PREMIUM!!!")
+    ]
+    roll = random.randint(1, 100); cumulative = 0
+    for chance, ptype, value, text in prizes:
+        cumulative += chance
+        if roll <= cumulative:
+            if ptype == "stars": add_balance(uid, value)
+            elif ptype == "searches": add_extra_searches(uid, value)
+            elif ptype == "premium": give_subscription(uid, value)
+            elif ptype == "vip": give_vip(uid, value)
+            conn = sqlite3.connect(DB); c = conn.cursor()
+            c.execute("INSERT INTO wheel_spins (uid,prize,created) VALUES (?,?,?)",
+                      (uid, text, datetime.now().strftime("%Y-%m-%d %H:%M")))
+            conn.commit(); conn.close()
+            return text, ptype
+    return "🧸 Утешительный приз!", "nothing"
+
+# ═══ ПРОМОКОДЫ ═══
+
+def create_promocode(code, discount_percent=0, discount_stars=0, max_uses=1,
+                     min_purchase=0, applies_to="all", created_by=0, expires=""):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    try:
+        c.execute("""INSERT INTO promocodes (code,discount_percent,discount_stars,max_uses,
+                     min_purchase,applies_to,created_by,created,expires) VALUES (?,?,?,?,?,?,?,?,?)""",
+                  (code.upper(), discount_percent, discount_stars, max_uses, min_purchase,
+                   applies_to, created_by, datetime.now().strftime("%Y-%m-%d %H:%M"), expires))
+        conn.commit(); conn.close(); return True
+    except: conn.close(); return False
+
+def check_promocode(code, uid, purchase_amount=0, purchase_type="all"):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT * FROM promocodes WHERE code=? AND active=1", (code.upper(),))
+    row = c.fetchone()
+    if not row: conn.close(); return {"valid":False,"reason":"Не найден"}
+    cols = [d[0] for d in c.description]; promo = dict(zip(cols, row))
+    if promo.get("expires",""):
+        try:
+            if datetime.strptime(promo["expires"],"%Y-%m-%d %H:%M") < datetime.now():
+                conn.close(); return {"valid":False,"reason":"Истёк"}
+        except: pass
+    if promo["used_count"] >= promo["max_uses"]:
+        conn.close(); return {"valid":False,"reason":"Исчерпан"}
+    c.execute("SELECT COUNT(*) FROM promocode_uses WHERE code=? AND uid=?", (code.upper(), uid))
+    if c.fetchone()[0] > 0:
+        conn.close(); return {"valid":False,"reason":"Уже использован"}
+    if promo["min_purchase"] > 0 and purchase_amount < promo["min_purchase"]:
+        conn.close(); return {"valid":False,"reason":f"Мин. покупка {promo['min_purchase']}⭐"}
+    discount = 0
+    if promo["discount_percent"] > 0:
+        discount = int(purchase_amount * promo["discount_percent"] / 100)
+    elif promo["discount_stars"] > 0:
+        discount = min(promo["discount_stars"], purchase_amount - 1)
+    conn.close()
+    return {"valid":True,"discount":max(1, discount),"promo":promo}
+
+def use_promocode(code, uid, discount_amount):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE promocodes SET used_count=used_count+1 WHERE code=?", (code.upper(),))
+    c.execute("INSERT INTO promocode_uses (code,uid,used_at,discount_amount) VALUES (?,?,?,?)",
+              (code.upper(), uid, datetime.now().strftime("%Y-%m-%d %H:%M"), discount_amount))
+    conn.commit(); conn.close()
+
+def get_all_promocodes():
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT code,discount_percent,discount_stars,max_uses,used_count,expires,active FROM promocodes ORDER BY id DESC")
+    rows = c.fetchall(); conn.close()
+    return [{"code":r[0],"percent":r[1],"stars":r[2],"max":r[3],"used":r[4],"expires":r[5],"active":r[6]} for r in rows]
+
+def deactivate_promocode(code):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE promocodes SET active=0 WHERE code=?", (code.upper(),))
+    conn.commit(); conn.close()
+
+# ═══ ОТЗЫВЫ ═══
+
+def add_review(from_uid, to_uid, rating, text, deal_id=0, deal_type="market"):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("INSERT INTO reviews (from_uid,to_uid,rating,text,deal_id,deal_type,created) VALUES (?,?,?,?,?,?,?)",
+              (from_uid, to_uid, min(5,max(1,rating)), text[:200], deal_id, deal_type,
+               datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit(); conn.close()
+
+def get_user_rating(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT AVG(rating),COUNT(*) FROM reviews WHERE to_uid=?", (uid,))
+    row = c.fetchone(); conn.close()
+    return {"avg":round(row[0],1) if row[0] else 0, "count":row[1] or 0}
+
+def get_user_reviews(uid, limit=10):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT from_uid,rating,text,created FROM reviews WHERE to_uid=? ORDER BY id DESC LIMIT ?", (uid, limit))
+    rows = c.fetchall(); conn.close()
+    return [{"from":r[0],"rating":r[1],"text":r[2],"created":r[3]} for r in rows]
+
+# ═══ ОБМЕННИК ═══
+
+def exchange_create(uid, offer):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("INSERT INTO exchanges (initiator_uid,initiator_offer,status,created) VALUES (?,?,'open',?)",
+              (uid, offer, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    eid = c.lastrowid; conn.commit(); conn.close(); return eid
+
+def exchange_accept(eid, partner_uid, partner_offer):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    deadline = (datetime.now() + timedelta(hours=MARKET_ESCROW_HOURS)).strftime("%Y-%m-%d %H:%M")
+    c.execute("UPDATE exchanges SET partner_uid=?,partner_offer=?,status='escrow',escrow_deadline=? WHERE id=? AND status='open' AND initiator_uid!=?",
+              (partner_uid, partner_offer, deadline, eid, partner_uid))
+    changed = c.rowcount; conn.commit(); conn.close(); return changed > 0
+
+def exchange_confirm(eid, uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT initiator_uid,partner_uid FROM exchanges WHERE id=?", (eid,))
+    row = c.fetchone()
+    if not row: conn.close(); return False
+    if uid == row[0]: c.execute("UPDATE exchanges SET initiator_confirmed=1 WHERE id=?", (eid,))
+    elif uid == row[1]: c.execute("UPDATE exchanges SET partner_confirmed=1 WHERE id=?", (eid,))
+    else: conn.close(); return False
+    conn.commit(); conn.close()
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT initiator_confirmed,partner_confirmed FROM exchanges WHERE id=?", (eid,))
+    r = c.fetchone()
+    if r and r[0] and r[1]:
+        c.execute("UPDATE exchanges SET status='completed',completed_at=? WHERE id=?",
+                  (datetime.now().strftime("%Y-%m-%d %H:%M"), eid))
+        conn.commit(); conn.close(); return True
+    conn.close(); return False
+
+def exchange_get_open(limit=20):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT id,initiator_uid,initiator_offer,created FROM exchanges WHERE status='open' ORDER BY id DESC LIMIT ?", (limit,))
+    rows = c.fetchall(); conn.close()
+    return [{"id":r[0],"uid":r[1],"offer":r[2],"created":r[3]} for r in rows]
+
+def exchange_get(eid):
+    conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    c.execute("SELECT * FROM exchanges WHERE id=?", (eid,))
+    row = c.fetchone(); conn.close()
+    return dict(row) if row else None
+
+def exchange_cancel(eid, uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE exchanges SET status='cancelled' WHERE id=? AND initiator_uid=? AND status='open'", (eid, uid))
+    changed = c.rowcount; conn.commit(); conn.close(); return changed > 0
+
+# ═══ NFT ПРОВЕРКА ═══
+
+async def check_fragment_nft(username):
+    try:
+        async with http_session.get(
+            f"https://fragment.com/username/{username.lower()}",
+            timeout=aiohttp.ClientTimeout(total=10),
+            headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        ) as resp:
+            if resp.status != 200: return {"is_nft": False, "status": "unknown"}
+            text = await resp.text()
+            if any(x in text for x in ["Sold", "sold", "Assigned", "assigned", "Owner", "owner",
+                                        "Status:&nbsp;Taken", "tm-value-sold"]):
+                return {"is_nft": True, "status": "sold"}
+            elif any(x in text for x in ["Available", "Make an offer", "Bid", "auction",
+                                          "Minimum bid", "Buy now"]):
+                return {"is_nft": True, "status": "on_sale"}
+            else:
+                return {"is_nft": False, "status": "not_found"}
+    except:
+        return {"is_nft": False, "status": "error"}
+
+async def verify_nft_owner(uid, username):
+    try:
+        chat = await bot.get_chat(uid)
+        if chat.username and chat.username.lower() == username.lower():
+            return True
+    except: pass
+    if pool.has_sessions():
+        try:
+            i, client = await pool._acquire(uid, 10)
+            if client:
+                try:
+                    user = await client.get_entity(uid)
+                    pool._ok(i)
+                    if user.username and user.username.lower() == username.lower():
+                        return True
+                except:
+                    pool._err(i)
+        except: pass
+    return False
+
 # ═══════════════════════ HELPERS ═══════════════════════
 
 def _d(uid_val, uname_val):
@@ -1682,6 +2169,7 @@ def build_menu(uid):
     kb.button(text="👤 Профиль", callback_data="cmd_profile")
     if is_button_enabled("shop"): kb.button(text="🏪 Магазин", callback_data="cmd_shop")
     if is_button_enabled("referral"): kb.button(text="👥 Рефералы", callback_data="cmd_referral")
+    kb.button(text="🏪 Маркет", callback_data="cmd_market")
     if is_button_enabled("tiktok"): kb.button(text="🎁 TikTok", callback_data="cmd_tiktok")
     for pr in promos:
         kb.button(text=pr.get("button_text") or pr["name"], callback_data=f"pv_{pr['id']}")
@@ -2115,6 +2603,452 @@ async def cb_del_pat(cb: CallbackQuery):
         "• <code>craft</code> — удалит все с 'craft'\n"
         "• <code>_pro</code> — удалит все с '_pro'\n"
         "• <code>tg</code> — удалит все с 'tg'", kb.as_markup())
+
+# ═══════════════════════ МАРКЕТПЛЕЙС ХЕНДЛЕРЫ ═══════════════════════
+
+@dp.callback_query(F.data == "cmd_market")
+async def cb_market(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    if is_banned(uid): return
+    lots = market_get_active_lots(5)
+    nft_lots = market_get_active_lots(3, nft_only=True)
+    rating = get_user_rating(uid)
+    bal = get_balance(uid)
+
+    text = (f"🏪 <b>Маркет</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Баланс: <code>{bal:.0f}⭐</code>\n"
+            f"⭐ Рейтинг: {'⭐'*int(rating['avg'])+'☆'*(5-int(rating['avg']))} ({rating['count']})\n"
+            f"📊 Комиссия: {int(MARKET_COMMISSION*100)}%\n")
+
+    if lots:
+        text += "\n<b>📦 Последние лоты:</b>\n"
+        for lot in lots:
+            promo = "🔥 " if lot["promoted"] else ""
+            text += f"{promo}<b>{lot['title']}</b> — <code>{lot['price']}⭐</code>\n"
+
+    if nft_lots:
+        text += "\n<b>💎 NFT юзернеймы:</b>\n"
+        for lot in nft_lots:
+            text += f"💎 <b>{lot['title']}</b> — <code>{lot['price']}⭐</code>\n"
+
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📋 Все лоты", callback_data="market_browse")
+    kb.button(text="💎 NFT юзы", callback_data="market_nft")
+    kb.button(text="➕ Продать", callback_data="market_sell")
+    kb.button(text="📦 Мои лоты", callback_data="market_my")
+    kb.button(text="🛒 Мои покупки", callback_data="market_my_purchases")
+    kb.button(text="🔄 Обменник", callback_data="market_exchange")
+    kb.button(text="🎡 Колесо", callback_data="market_wheel")
+    kb.button(text="📦 Лутбокс", callback_data="market_lootbox")
+    kb.button(text="🔙 Меню", callback_data="cmd_menu")
+    kb.adjust(2)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "market_browse")
+async def cb_market_browse(cb: CallbackQuery):
+    await answer_cb(cb)
+    lots = market_get_active_lots(20)
+    text = f"📋 <b>Лоты ({len(lots)})</b>\n\n"
+    kb = InlineKeyboardBuilder()
+    for lot in lots:
+        sr = get_user_rating(lot["seller"])
+        promo = "🔥 " if lot["promoted"] else ""
+        stars = f"⭐{sr['avg']}" if sr['avg'] else "🆕"
+        text += f"{promo}<b>{lot['title']}</b> — <code>{lot['price']}⭐</code> ({stars})\n"
+        kb.button(text=f"🛒 {lot['title'][:20]} ({lot['price']}⭐)", callback_data=f"mlot_{lot['id']}")
+    if not lots: text += "<i>Пусто</i>"
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "market_nft")
+async def cb_market_nft(cb: CallbackQuery):
+    await answer_cb(cb)
+    lots = market_get_active_lots(20, nft_only=True)
+    text = (f"💎 <b>NFT Юзернеймы</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Юзернеймы купленные на Fragment.\n"
+            f"Размещение: <code>{MARKET_NFT_LISTING_FEE}⭐</code>\n\n")
+    kb = InlineKeyboardBuilder()
+    for lot in lots:
+        promo = "🔥 " if lot["promoted"] else ""
+        text += f"{promo}💎 <b>{lot['title']}</b> — <code>{lot['price']}⭐</code>\n"
+        if lot.get("fragment_url"): text += f"   🔗 <a href='{lot['fragment_url']}'>Fragment</a>\n"
+        text += "\n"
+        kb.button(text=f"💎 {lot['title'][:20]} ({lot['price']}⭐)", callback_data=f"mlot_{lot['id']}")
+    if not lots: text += "<i>Нет NFT лотов</i>"
+    kb.button(text="➕ Продать NFT", callback_data="market_sell_nft")
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data.startswith("mlot_"))
+async def cb_mlot(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[5:])
+    lot = market_get_lot(lot_id)
+    if not lot or lot["status"] != "active":
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="market_browse")
+        await edit_msg(cb.message, "❌ Лот не найден", kb.as_markup()); return
+
+    seller = get_user(lot["seller_uid"])
+    sr = get_user_rating(lot["seller_uid"])
+    name = f"@{seller.get('uname','')}" if seller.get('uname') else f"ID:{lot['seller_uid']}"
+    stars_d = "⭐"*int(sr['avg'])+"☆"*(5-int(sr['avg'])) if sr['avg'] else "🆕"
+    nft_badge = "💎 NFT | " if lot.get("is_nft") else ""
+    promo_badge = "🔥 ПРОМО | " if lot.get("promoted") else ""
+    type_names = {"username":"👤 Юзернейм","service":"🔧 Услуга","premium":"💎 Premium","other":"📦 Другое","nft":"💎 NFT"}
+
+    text = (f"📦 <b>Лот #{lot_id}</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"{promo_badge}{nft_badge}{type_names.get(lot['mtype'],'📦')}\n"
+            f"🏷 <b>{lot['title']}</b>\n"
+            f"📝 {lot['description']}\n\n"
+            f"💰 Цена: <code>{lot['price']}⭐</code> ({int(lot['price']*STAR_TO_RUB)}₽)\n\n"
+            f"👤 {name}\n"
+            f"⭐ {stars_d} ({sr['count']} отзывов)\n"
+            f"📅 {lot['created']}")
+
+    if lot.get("fragment_url"):
+        text += f"\n🔗 <a href='{lot['fragment_url']}'>Fragment</a>"
+
+    kb = InlineKeyboardBuilder()
+    if lot["seller_uid"] != uid:
+        kb.button(text=f"🛒 Купить за {lot['price']}⭐", callback_data=f"mbuy_{lot_id}")
+        kb.button(text="🏷 Есть промокод", callback_data=f"mpromo_{lot_id}")
+    else:
+        kb.button(text=f"🔥 Продвинуть ({MARKET_PROMOTE_PRICE}⭐)", callback_data=f"mpromote_{lot_id}")
+        kb.button(text="❌ Снять", callback_data=f"mcancel_{lot_id}")
+    kb.button(text="👤 Отзывы", callback_data=f"mrev_{lot['seller_uid']}")
+    back = "market_nft" if lot.get("is_nft") else "market_browse"
+    kb.button(text="🔙", callback_data=back); kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data.startswith("mbuy_"))
+async def cb_mbuy(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[5:])
+    lot = market_get_lot(lot_id)
+    if not lot or lot["status"] != "active":
+        await answer_cb(cb, "❌ Лот продан!", show_alert=True); return
+    if lot["seller_uid"] == uid:
+        await answer_cb(cb, "❌ Свой лот!", show_alert=True); return
+    await bot.send_invoice(uid,
+        title=f"🛒 {lot['title'][:50]}",
+        description=f"Маркет: {lot['description'][:100]}" if lot['description'] else f"Маркет: {lot['title']}",
+        payload=f"market_{lot_id}_{uid}_0",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label=lot["title"][:50], amount=lot["price"])])
+
+@dp.callback_query(F.data.startswith("mpromo_"))
+async def cb_mpromo(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[7:])
+    user_states[uid] = {"action":"market_enter_promo","lot_id":lot_id}
+    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data=f"mlot_{lot_id}")
+    await edit_msg(cb.message, "🏷 <b>Введите промокод:</b>", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("mpromote_"))
+async def cb_mpromote(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[9:])
+    lot = market_get_lot(lot_id)
+    if not lot or lot["seller_uid"] != uid: return
+    await bot.send_invoice(uid,
+        title=f"🔥 Продвижение лота #{lot_id}",
+        description=f"Лот будет наверху списка 24 часа",
+        payload=f"promote_{lot_id}_{uid}",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label="Продвижение 24ч", amount=MARKET_PROMOTE_PRICE)])
+
+@dp.callback_query(F.data.startswith("mcancel_"))
+async def cb_mcancel(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[8:])
+    market_cancel_lot(lot_id, uid); log_action(uid, "market_cancel", str(lot_id))
+    await cb_market(cb)
+
+@dp.callback_query(F.data.startswith("msellerok_"))
+async def cb_msellerok(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[10:]); lot = market_get_lot(lot_id)
+    if not lot or lot["seller_uid"] != uid: return
+    completed = market_confirm_seller(lot_id)
+    if completed:
+        payout = int(lot["price"] * (1 - MARKET_COMMISSION))
+        await edit_msg(cb.message, f"✅ <b>Сделка завершена!</b>\n+{payout}⭐ на баланс")
+        try: await bot.send_message(lot["buyer_uid"], "✅ Сделка завершена!", parse_mode="HTML")
+        except: pass
+    else:
+        await edit_msg(cb.message, "✅ Подтверждено! Ждём покупателя")
+
+@dp.callback_query(F.data.startswith("mbuyerok_"))
+async def cb_mbuyerok(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[9:]); lot = market_get_lot(lot_id)
+    if not lot or lot["buyer_uid"] != uid: return
+    completed = market_confirm_buyer(lot_id)
+    if completed:
+        await edit_msg(cb.message, "✅ <b>Сделка завершена!</b>\nСпасибо за покупку!")
+        payout = int(lot["price"] * (1 - MARKET_COMMISSION))
+        try: await bot.send_message(lot["seller_uid"], f"✅ Сделка завершена!\n💰 +{payout}⭐", parse_mode="HTML")
+        except: pass
+    else:
+        await edit_msg(cb.message, "✅ Подтверждено! Ждём продавца")
+
+@dp.callback_query(F.data.startswith("mdispute_"))
+async def cb_mdispute(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[9:])
+    user_states[uid] = {"action":"market_dispute_reason","lot_id":lot_id}
+    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="market_my_purchases")
+    await edit_msg(cb.message, "⚠️ <b>Причина спора:</b>", kb.as_markup())
+
+@dp.callback_query(F.data == "market_sell")
+async def cb_market_sell(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    max_lots = market_get_max_lots(uid)
+    current = market_count_user_lots(uid)
+    text = (f"➕ <b>Продать</b>\n\n"
+            f"📦 Лотов: {current}/{max_lots}\n"
+            f"💰 Размещение: {MARKET_LISTING_FEE}⭐\n"
+            f"📊 Комиссия: {int(MARKET_COMMISSION*100)}%\n")
+    kb = InlineKeyboardBuilder()
+    if current >= max_lots:
+        text += f"\n❌ Лимит! Купите доп слот ({MARKET_EXTRA_SLOT_PRICE}⭐)"
+        kb.button(text=f"📦 +1 слот ({MARKET_EXTRA_SLOT_PRICE}⭐)", callback_data="market_buy_slot")
+    else:
+        kb.button(text="👤 Юзернейм", callback_data="msell_username")
+        kb.button(text="💎 Premium", callback_data="msell_premium")
+        kb.button(text="🔧 Услуга", callback_data="msell_service")
+        kb.button(text="📦 Другое", callback_data="msell_other")
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(2,2,1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "market_sell_nft")
+async def cb_sell_nft(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    user_states[uid] = {"action":"msell_nft_title"}
+    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="market_nft")
+    await edit_msg(cb.message,
+        f"💎 <b>Продать NFT юзернейм</b>\n\n"
+        f"💰 Размещение: <code>{MARKET_NFT_LISTING_FEE}⭐</code>\n\n"
+        f"Введите @юзернейм:", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("msell_"))
+async def cb_msell_type(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    mtype = cb.data[6:]
+    user_states[uid] = {"action":"msell_title","mtype":mtype}
+    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="market_sell")
+    await edit_msg(cb.message, "📝 <b>Название лота:</b>", kb.as_markup())
+
+@dp.callback_query(F.data == "market_buy_slot")
+async def cb_buy_slot(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    await bot.send_invoice(uid,
+        title="📦 +1 слот маркета",
+        description="Дополнительный слот для размещения",
+        payload=f"mslot_{uid}",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label="+1 слот", amount=MARKET_EXTRA_SLOT_PRICE)])
+
+@dp.callback_query(F.data == "market_my")
+async def cb_market_my(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lots = market_get_user_lots(uid)
+    max_lots = market_get_max_lots(uid)
+    text = f"📦 <b>Мои лоты ({len(lots)}/{max_lots})</b>\n\n"
+    kb = InlineKeyboardBuilder()
+    for lot in lots:
+        st = {"pending":"⏳","active":"✅","escrow":"🔒"}.get(lot["status"],"❓")
+        nft = "💎" if lot["is_nft"] else ""
+        promo = "🔥" if lot["promoted"] else ""
+        text += f"{st}{nft}{promo} <b>{lot['title']}</b> — {lot['price']}⭐\n"
+        if lot["status"] == "escrow":
+            kb.button(text=f"✅ Передал #{lot['id']}", callback_data=f"msellerok_{lot['id']}")
+        elif lot["status"] in ("pending","active"):
+            kb.button(text=f"❌ #{lot['id']}", callback_data=f"mcancel_{lot['id']}")
+    if not lots: text += "<i>Нет</i>"
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "market_my_purchases")
+async def cb_market_purchases(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT id,title,price,status,buyer_confirmed FROM market WHERE buyer_uid=? AND status IN ('escrow','completed','dispute') ORDER BY id DESC LIMIT 20", (uid,))
+    rows = c.fetchall(); conn.close()
+    text = f"🛒 <b>Мои покупки</b>\n\n"
+    kb = InlineKeyboardBuilder()
+    for r in rows:
+        st = {"escrow":"🔒","completed":"✅","dispute":"⚠️"}.get(r[3],"❓")
+        text += f"{st} <b>{r[1]}</b> — {r[2]}⭐\n"
+        if r[3] == "escrow" and not r[4]:
+            kb.button(text=f"✅ Получил #{r[0]}", callback_data=f"mbuyerok_{r[0]}")
+            kb.button(text=f"⚠️ Спор #{r[0]}", callback_data=f"mdispute_{r[0]}")
+    if not rows: text += "<i>Нет</i>"
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data.startswith("mrev_"))
+async def cb_mrev(cb: CallbackQuery):
+    uid_target = int(cb.data[5:]); await answer_cb(cb)
+    reviews = get_user_reviews(uid_target)
+    rating = get_user_rating(uid_target)
+    u = get_user(uid_target)
+    name = f"@{u.get('uname','')}" if u.get('uname') else f"ID:{uid_target}"
+    text = f"⭐ <b>{name}</b>\n{'⭐'*int(rating['avg'])+'☆'*(5-int(rating['avg']))} ({rating['avg']}/5, {rating['count']})\n\n"
+    for r in reviews:
+        fn = f"@{get_user(r['from']).get('uname','')}" if get_user(r['from']).get('uname') else f"ID:{r['from']}"
+        text += f"{'⭐'*r['rating']} {fn}\n{r['text']}\n\n"
+    if not reviews: text += "<i>Нет отзывов</i>"
+    kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_market"); kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+# ═══ КОЛЕСО ═══
+
+@dp.callback_query(F.data == "market_wheel")
+async def cb_wheel(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    free_used = wheel_free_spins_today(uid)
+    free_left = max(0, WHEEL_FREE_DAILY - free_used)
+    text = (f"🎡 <b>Колесо фортуны</b>\n\n"
+            f"🎟 Бесплатных: <code>{free_left}</code>\n"
+            f"💰 Доп крутка: <code>{WHEEL_EXTRA_PRICE}⭐</code>\n\n"
+            f"🎁 Призы: звёзды, поиски, Premium, VIP!")
+    kb = InlineKeyboardBuilder()
+    if free_left > 0:
+        kb.button(text="🎡 Крутить бесплатно!", callback_data="wheel_spin_free")
+    kb.button(text=f"🎡 Крутить за {WHEEL_EXTRA_PRICE}⭐", callback_data="wheel_spin_paid")
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "wheel_spin_free")
+async def cb_wheel_free(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    if wheel_free_spins_today(uid) >= WHEEL_FREE_DAILY:
+        await answer_cb(cb, "❌ Бесплатные кончились!", show_alert=True); return
+    for e in ["🎡","🔍","🎰","🌟","✨","🎯"]:
+        await edit_msg(cb.message, f"{e} Крутим...")
+        await asyncio.sleep(0.3)
+    prize, ptype = wheel_spin(uid)
+    log_action(uid, "wheel_free", prize)
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🎡 Ещё!", callback_data="market_wheel")
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(1)
+    await edit_msg(cb.message, f"🎉 <b>{prize}</b>", kb.as_markup())
+
+@dp.callback_query(F.data == "wheel_spin_paid")
+async def cb_wheel_paid(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    await bot.send_invoice(uid,
+        title="🎡 Колесо фортуны",
+        description="Крутка колеса — выиграй звёзды и Premium!",
+        payload=f"wheel_{uid}",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label="Крутка", amount=WHEEL_EXTRA_PRICE)])
+
+# ═══ ЛУТБОКС ═══
+
+@dp.callback_query(F.data == "market_lootbox")
+async def cb_lootbox(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    can = lootbox_can_open(uid)
+    text = (f"📦 <b>Лутбокс</b>\n\n"
+            f"💰 Цена: <code>{LOOTBOX_PRICE}⭐</code>\n"
+            f"⏰ КД: 1 час\n\n"
+            f"🎁 Возможные призы:\n"
+            f"  💎 Premium (5%)\n  🌟 VIP (10%)\n  ⭐ Звёзды (20%)\n"
+            f"  🔍 Поиски (25%)\n  📦 Слот маркета (20%)\n  🧸 Сувенир (20%)")
+    kb = InlineKeyboardBuilder()
+    if can:
+        kb.button(text=f"📦 Открыть ({LOOTBOX_PRICE}⭐)", callback_data="lootbox_open")
+    else:
+        kb.button(text="⏰ Подождите...", callback_data="cmd_market")
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "lootbox_open")
+async def cb_lootbox_open(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    if not lootbox_can_open(uid):
+        await answer_cb(cb, "⏰ Подождите!", show_alert=True); return
+    await bot.send_invoice(uid,
+        title="📦 Лутбокс",
+        description="Случайный приз: Premium, VIP, звёзды...",
+        payload=f"lootbox_{uid}",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label="Лутбокс", amount=LOOTBOX_PRICE)])
+
+# ═══ ОБМЕННИК ═══
+
+@dp.callback_query(F.data == "market_exchange")
+async def cb_exchange(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    exs = exchange_get_open(10)
+    text = f"🔄 <b>Обменник:</b>\n\n"
+    kb = InlineKeyboardBuilder()
+    for ex in exs:
+        u = get_user(ex["uid"])
+        name = f"@{u.get('uname','')}" if u.get('uname') else f"ID:{ex['uid']}"
+        text += f"🔄 #{ex['id']} {name}: <b>{ex['offer']}</b>\n"
+        if ex["uid"] != uid:
+            kb.button(text=f"🔄 #{ex['id']}", callback_data=f"exview_{ex['id']}")
+    if not exs: text += "<i>Нет</i>\n"
+    kb.button(text="➕ Создать", callback_data="exchange_new")
+    kb.button(text="🔙 Маркет", callback_data="cmd_market")
+    kb.adjust(2,1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "exchange_new")
+async def cb_ex_new(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    user_states[uid] = {"action":"exchange_offer"}
+    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="market_exchange")
+    await edit_msg(cb.message, "🔄 <b>Что отдаёте?</b>\n\nНапример: <code>@myusername</code>", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("exview_"))
+async def cb_exview(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    eid = int(cb.data[7:]); ex = exchange_get(eid)
+    if not ex or ex["status"] != "open":
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="market_exchange")
+        await edit_msg(cb.message, "❌ Обмен закрыт", kb.as_markup()); return
+    u = get_user(ex["initiator_uid"])
+    name = f"@{u.get('uname','')}" if u.get('uname') else f"ID:{ex['initiator_uid']}"
+    text = f"🔄 <b>#{eid}</b>\n\n👤 {name}\n📦 <b>{ex['initiator_offer']}</b>"
+    kb = InlineKeyboardBuilder()
+    if ex["initiator_uid"] != uid:
+        kb.button(text="🔄 Предложить обмен", callback_data=f"exaccept_{eid}")
+    kb.button(text="🔙", callback_data="market_exchange")
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data.startswith("exaccept_"))
+async def cb_exaccept(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    eid = int(cb.data[9:])
+    user_states[uid] = {"action":"exchange_counter","eid":eid}
+    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data=f"exview_{eid}")
+    await edit_msg(cb.message, "🔄 <b>Что предлагаете взамен?</b>", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("exconfirm_"))
+async def cb_exconfirm(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    eid = int(cb.data[10:])
+    completed = exchange_confirm(eid, uid)
+    if completed:
+        ex = exchange_get(eid)
+        await edit_msg(cb.message, f"✅ <b>Обмен #{eid} завершён!</b>")
+        other = ex["partner_uid"] if uid == ex["initiator_uid"] else ex["initiator_uid"]
+        try: await bot.send_message(other, f"✅ Обмен #{eid} завершён!", parse_mode="HTML")
+        except: pass
+    else:
+        await edit_msg(cb.message, "✅ Подтверждено! Ждём другую сторону")
 
 
 # ═══════════════════════ CALLBACKS: Мониторинг ═══════════════════════
@@ -2702,6 +3636,93 @@ async def succ_pay(msg: Message):
             try: await bot.send_message(aid, f"🤖 Донат {amt}⭐ от {uid}")
             except: pass
 
+    # ═══ МАРКЕТПЛЕЙС ОПЛАТА ═══
+    elif parts[0]=="market" and len(parts)>=3:
+        lot_id=int(parts[1]); buyer_uid=int(parts[2])
+        discount=int(parts[3]) if len(parts)>=4 else 0
+        lot=market_get_lot(lot_id)
+        if not lot or lot["status"]!="active":
+            try:
+                await bot.refund_star_payment(uid, msg.successful_payment.telegram_payment_charge_id)
+                await msg.answer("❌ Лот продан! Возврат")
+            except: await msg.answer("❌ Лот продан! Напишите админу.")
+            return
+        ok=market_buy_lot(lot_id, buyer_uid)
+        if not ok:
+            try:
+                await bot.refund_star_payment(uid, msg.successful_payment.telegram_payment_charge_id)
+                await msg.answer("❌ Ошибка! Возврат")
+            except: await msg.answer("❌ Ошибка!")
+            return
+        conn=sqlite3.connect(DB); c=conn.cursor()
+        c.execute("UPDATE market SET charge_id=? WHERE id=?",
+                  (msg.successful_payment.telegram_payment_charge_id, lot_id))
+        conn.commit(); conn.close()
+        log_action(buyer_uid,"market_buy",f"lot={lot_id} paid={amount_paid}")
+        disc_text=f"\n🏷 Скидка: -{discount}⭐" if discount else ""
+        kb=InlineKeyboardBuilder()
+        kb.button(text="✅ Получил", callback_data=f"mbuyerok_{lot_id}")
+        kb.button(text="⚠️ Спор", callback_data=f"mdispute_{lot_id}")
+        kb.adjust(1)
+        await msg.answer(
+            f"✅ <b>Оплачено!</b>\n💰 {amount_paid}⭐{disc_text}\n\n"
+            f"🔒 Эскроу\n⏰ {MARKET_ESCROW_HOURS}ч",
+            reply_markup=kb.as_markup(), parse_mode="HTML")
+        bname=f"@{msg.from_user.username}" if msg.from_user.username else f"ID:{uid}"
+        skb=InlineKeyboardBuilder()
+        skb.button(text="✅ Передал", callback_data=f"msellerok_{lot_id}")
+        try: await bot.send_message(lot["seller_uid"],
+            f"🛒 <b>Покупка #{lot_id}!</b>\n📦 {lot['title']}\n👤 {bname}\n⏰ {MARKET_ESCROW_HOURS}ч",
+            reply_markup=skb.as_markup(), parse_mode="HTML")
+        except: pass
+
+    elif parts[0]=="promote" and len(parts)>=2:
+        lot_id=int(parts[1])
+        market_promote_lot(lot_id)
+        log_action(uid,"promote",str(lot_id))
+        await msg.answer("🔥 <b>Лот продвинут на 24ч!</b>", parse_mode="HTML")
+
+    elif parts[0]=="listing" and len(parts)>=3:
+        lot_id=int(parts[1])
+        conn=sqlite3.connect(DB); c=conn.cursor()
+        c.execute("UPDATE market SET listing_paid=1 WHERE id=?", (lot_id,))
+        conn.commit(); conn.close()
+        log_action(uid,"listing_paid",str(lot_id))
+        await msg.answer("✅ <b>Лот оплачен!</b>\nОжидайте модерации", parse_mode="HTML")
+        lot=market_get_lot(lot_id)
+        if lot:
+            akb=InlineKeyboardBuilder()
+            akb.button(text="✅",callback_data=f"mmod_ok_{lot_id}")
+            akb.button(text="❌",callback_data=f"mmod_no_{lot_id}")
+            fast="⚡ БЫСТРАЯ! " if lot.get("fast_mod") else ""
+            nft="💎 NFT " if lot.get("is_nft") else ""
+            await notify_admins(f"📦 {fast}{nft}Лот #{lot_id} — {lot['title']} ({lot['price']}⭐)", kb=akb.as_markup())
+
+    elif parts[0]=="fastmod" and len(parts)>=2:
+        lot_id=int(parts[1])
+        market_set_fast_mod(lot_id)
+        log_action(uid,"fast_mod",str(lot_id))
+        await msg.answer("⚡ <b>Быстрая модерация активна!</b>", parse_mode="HTML")
+        lot=market_get_lot(lot_id)
+        if lot: await notify_admins(f"⚡ СРОЧНО! Лот #{lot_id} — {lot['title']} ({lot['price']}⭐)")
+
+    elif parts[0]=="mslot":
+        market_add_slot(uid)
+        log_action(uid,"buy_slot","")
+        await msg.answer("📦 <b>+1 слот маркета!</b>", parse_mode="HTML")
+
+    elif parts[0]=="wheel":
+        prize, ptype = wheel_spin(uid)
+        log_action(uid,"wheel_paid",prize)
+        await msg.answer(f"🎡 <b>{prize}</b>", parse_mode="HTML")
+
+    elif parts[0]=="lootbox":
+        prize, ptype = lootbox_open(uid)
+        log_action(uid,"lootbox",prize)
+        for e in ["📦","🔍","🎰","🌟","✨"]:
+            try: await bot.send_message(uid, f"{e}"); await asyncio.sleep(0.3)
+            except: break
+        await msg.answer(f"🎉 <b>{prize}</b>", parse_mode="HTML")
 
 # ═══════════════════════ ВЫВОДЫ ═══════════════════════
 
@@ -2865,6 +3886,127 @@ async def handle_text(msg: Message):
             if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
         return
 
+    # ═══ МАРКЕТПЛЕЙС ТЕКСТОВЫЕ ХЕНДЛЕРЫ ═══
+    if action=="msell_title":
+        title=msg.text.strip()
+        if len(title)<3 or len(title)>100: await msg.answer("❌ 3-100 символов"); return
+        user_states[uid]={"action":"msell_desc","mtype":state["mtype"],"title":title}
+        await msg.answer("📝 <b>Описание:</b>", parse_mode="HTML"); return
+
+    if action=="msell_desc":
+        desc=msg.text.strip()[:500]
+        user_states[uid]={"action":"msell_price","mtype":state["mtype"],"title":state["title"],"desc":desc}
+        await msg.answer(f"💰 <b>Цена (⭐):</b>\n{MARKET_MIN_PRICE} до {MARKET_MAX_PRICE}", parse_mode="HTML"); return
+
+    if action=="msell_price":
+        try: price=int(msg.text.strip()); assert MARKET_MIN_PRICE<=price<=MARKET_MAX_PRICE
+        except: await msg.answer(f"❌ {MARKET_MIN_PRICE}-{MARKET_MAX_PRICE}"); return
+        user_states.pop(uid,None)
+        lot_id=market_create_lot(uid,state["mtype"],state["title"],state["desc"],price)
+        commission=int(price*MARKET_COMMISSION)
+        log_action(uid,"market_create",str(lot_id))
+        await bot.send_invoice(uid,
+            title=f"📦 Размещение лота #{lot_id}",
+            description=f"{state['title']} — {price}⭐ (получите {price-commission}⭐)",
+            payload=f"listing_{lot_id}_{uid}",
+            provider_token="",currency="XTR",
+            prices=[LabeledPrice(label="Размещение", amount=MARKET_LISTING_FEE)]); return
+
+    if action=="msell_nft_title":
+        username = msg.text.strip().replace("@","").lower()
+        if not validate_username(username):
+            await msg.answer("❌ Неверный юзернейм"); return
+        wm = await msg.answer("🔍 Проверяю на Fragment...")
+        frag = await check_fragment_nft(username)
+        if not frag["is_nft"]:
+            try: await wm.delete()
+            except: pass
+            await msg.answer("❌ <b>Этот юзернейм не NFT на Fragment!</b>\n\nМожно продавать только NFT юзернеймы купленные на Fragment.", parse_mode="HTML"); return
+        if frag["status"] == "on_sale":
+            try: await wm.delete()
+            except: pass
+            await msg.answer("⚠️ <b>Этот юз ещё на продаже на Fragment!</b>\n\nСначала купите его, потом продавайте здесь.", parse_mode="HTML"); return
+        is_owner = await verify_nft_owner(uid, username)
+        try: await wm.delete()
+        except: pass
+        if not is_owner:
+            await msg.answer(
+                f"⚠️ <b>Поставьте @{username} себе в профиль!</b>\n\n"
+                f"1. Зайдите в настройки Telegram\n"
+                f"2. Поставьте @{username} как юзернейм\n"
+                f"3. Попробуйте снова\n\n"
+                f"Это нужно для подтверждения владения.", parse_mode="HTML"); return
+        user_states[uid] = {"action":"msell_nft_desc","title":username,"url":f"https://fragment.com/username/{username}"}
+        await msg.answer(
+            f"✅ <b>Подтверждено!</b>\n\n"
+            f"💎 @{username} — NFT юзернейм\n"
+            f"👤 Владелец: вы\n\n"
+            f"📝 <b>Описание лота:</b>", parse_mode="HTML"); return
+
+    if action=="msell_nft_desc":
+        desc=msg.text.strip()[:500]
+        user_states[uid]={"action":"msell_nft_price","title":state["title"],"url":state["url"],"desc":desc}
+        await msg.answer(f"💰 <b>Цена (⭐):</b>\n{MARKET_MIN_PRICE} до {MARKET_MAX_PRICE}", parse_mode="HTML"); return
+
+    if action=="msell_nft_price":
+        try: price=int(msg.text.strip()); assert MARKET_MIN_PRICE<=price<=MARKET_MAX_PRICE
+        except: await msg.answer(f"❌ {MARKET_MIN_PRICE}-{MARKET_MAX_PRICE}"); return
+        user_states.pop(uid,None)
+        lot_id=market_create_lot(uid,"nft",state["title"],state["desc"],price,is_nft=1,fragment_url=state["url"])
+        log_action(uid,"nft_create",str(lot_id))
+        await bot.send_invoice(uid,
+            title=f"💎 Размещение NFT #{lot_id}",
+            description=f"NFT @{state['title']} — {price}⭐",
+            payload=f"listing_{lot_id}_{uid}",
+            provider_token="",currency="XTR",
+            prices=[LabeledPrice(label="NFT размещение", amount=MARKET_NFT_LISTING_FEE)]); return
+
+    if action=="market_enter_promo":
+        user_states.pop(uid,None)
+        lot_id=state["lot_id"]; lot=market_get_lot(lot_id)
+        if not lot: await msg.answer("❌"); return
+        result=check_promocode(msg.text.strip(),uid,lot["price"],"market")
+        if not result["valid"]: await msg.answer(f"❌ {result.get('reason','')}"); return
+        discount=result["discount"]; final=max(1,lot["price"]-discount)
+        use_promocode(msg.text.strip(),uid,discount)
+        log_action(uid,"promo",f"{msg.text.strip()} -{discount}")
+        await bot.send_invoice(uid,
+            title=f"🛒 {lot['title'][:50]} (скидка!)",
+            description=f"Было {lot['price']}⭐, скидка -{discount}⭐",
+            payload=f"market_{lot_id}_{uid}_{discount}",
+            provider_token="",currency="XTR",
+            prices=[LabeledPrice(label=lot["title"][:50],amount=final)]); return
+
+    if action=="market_dispute_reason":
+        user_states.pop(uid,None)
+        market_open_dispute(state["lot_id"],msg.text.strip(),uid)
+        log_action(uid,"dispute",str(state["lot_id"]))
+        await msg.answer("⚠️ <b>Спор открыт!</b>\nАдмин рассмотрит", parse_mode="HTML")
+        await notify_admins(f"⚠️ Спор #{state['lot_id']}: {msg.text.strip()}"); return
+
+    if action=="exchange_offer":
+        user_states.pop(uid,None)
+        if len(msg.text.strip())<3: await msg.answer("❌ Минимум 3 символа"); return
+        eid=exchange_create(uid,msg.text.strip())
+        log_action(uid,"exchange",str(eid))
+        await msg.answer(f"✅ <b>Обмен #{eid}!</b>\n📦 {msg.text.strip()}\n⏳ Ждите", parse_mode="HTML"); return
+
+    if action=="exchange_counter":
+        user_states.pop(uid,None); eid=state["eid"]
+        if len(msg.text.strip())<3: await msg.answer("❌ Минимум 3 символа"); return
+        ok=exchange_accept(eid,uid,msg.text.strip())
+        if not ok: await msg.answer("❌ Обмен закрыт"); return
+        ex=exchange_get(eid)
+        name=f"@{msg.from_user.username}" if msg.from_user.username else f"ID:{uid}"
+        ikb=InlineKeyboardBuilder()
+        ikb.button(text="✅ Подтвердить", callback_data=f"exconfirm_{eid}")
+        ikb.adjust(1)
+        try: await bot.send_message(ex["initiator_uid"],
+            f"🔄 Предложение обмена!\n👤 {name}: <b>{msg.text.strip()}</b>\nЗа: <b>{ex['initiator_offer']}</b>",
+            reply_markup=ikb.as_markup(), parse_mode="HTML")
+        except: pass
+        await msg.answer("✅ Отправлено!\n⏳ Ждём"); return
+    
     if action=="template_search":
         user_states.pop(uid,None); template=msg.text.strip().lower()
         if len(template)<3 or ("*" not in template and "?" not in template):
@@ -3055,6 +4197,43 @@ async def handle_text(msg: Message):
         except Exception as e: await msg.answer(f"❌ {e}")
         return
 
+    if action=="admin_create_promo_code":
+        code = msg.text.strip().upper()
+        if code == "AUTO":
+            code = f"PROMO-{secrets.token_hex(3).upper()}"
+        if len(code) < 3:
+            await msg.answer("❌ Минимум 3 символа"); return
+        user_states[uid] = {"action":"admin_create_promo_discount","code":code}
+        await msg.answer(f"🏷 Код: <code>{code}</code>\n\nВведите скидку:\n• <code>10%</code> — процент\n• <code>50</code> — фикс в ⭐", parse_mode="HTML"); return
+
+    if action=="admin_create_promo_discount":
+        text_val = msg.text.strip()
+        percent = 0; stars_disc = 0
+        if text_val.endswith("%"):
+            try: percent = int(text_val[:-1]); assert 1 <= percent <= 99
+            except: await msg.answer("❌ 1-99%"); return
+        else:
+            try: stars_disc = int(text_val); assert stars_disc > 0
+            except: await msg.answer("❌ Число > 0"); return
+        user_states[uid] = {"action":"admin_create_promo_uses","code":state["code"],
+                            "percent":percent,"stars":stars_disc}
+        await msg.answer("🔢 Макс использований (число):"); return
+
+    if action=="admin_create_promo_uses":
+        try: max_uses = int(msg.text.strip()); assert max_uses > 0
+        except: await msg.answer("❌ Число > 0"); return
+        user_states.pop(uid, None)
+        ok = create_promocode(state["code"], discount_percent=state["percent"],
+                              discount_stars=state["stars"], max_uses=max_uses,
+                              created_by=uid)
+        if ok:
+            disc = f"-{state['percent']}%" if state['percent'] else f"-{state['stars']}⭐"
+            log_action(uid, "promo_create", state["code"])
+            await msg.answer(f"✅ <b>Промокод создан!</b>\n\n<code>{state['code']}</code>\n{disc}\nМакс: {max_uses}", parse_mode="HTML")
+        else:
+            await msg.answer("❌ Код уже существует")
+        return
+    
     if action=="admin_add_session_api_id":
         try: api_id=int(msg.text.strip())
         except: await msg.answer("❌ Число"); return
@@ -3184,6 +4363,11 @@ async def cb_admin(cb: CallbackQuery):
     kb.button(text="🔄 Перезапуск", callback_data="a_restart")
     kb.button(text="📋 Логи", callback_data="a_logs")
     kb.button(text="💻 Сервер", callback_data="a_server")
+        pending_m = len(market_get_pending())
+    disputes_m = len(market_get_disputes())
+    kb.button(text=f"📦 Маркет ({pending_m})", callback_data="a_mmod")
+    kb.button(text=f"⚠️ Споры ({disputes_m})", callback_data="a_mdisputes")
+    kb.button(text="🏷 Промокоды", callback_data="a_promocodes")
     kb.button(text="🔙 Меню", callback_data="cmd_menu")
     kb.adjust(2)
     await edit_msg(cb.message, text, kb.as_markup())
@@ -3852,6 +5036,121 @@ async def cb_server(cb: CallbackQuery):
     kb=InlineKeyboardBuilder(); kb.button(text="🔄",callback_data="a_server"); kb.button(text="🔙",callback_data="cmd_admin"); kb.adjust(1)
     await edit_msg(cb.message,text,kb.as_markup())
 
+# ═══════════════════════ АДМИН МАРКЕТПЛЕЙС ═══════════════════════
+
+@dp.callback_query(F.data == "a_mmod")
+async def cb_a_mmod(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    lots=market_get_pending()
+    text=f"📦 <b>Модерация ({len(lots)})</b>\n\n"
+    kb=InlineKeyboardBuilder()
+    for l in lots:
+        fast="⚡" if l["fast"] else ""; nft="💎" if l["is_nft"] else ""
+        text+=f"{fast}{nft}#{l['id']} {l['title']} ({l['price']}⭐)\n"
+        kb.button(text=f"✅#{l['id']}",callback_data=f"mmod_ok_{l['id']}")
+        kb.button(text=f"❌#{l['id']}",callback_data=f"mmod_no_{l['id']}")
+    if not lots: text+="<i>Нет</i>"
+    kb.button(text="🔙 Админ",callback_data="cmd_admin")
+    kb.adjust(2)
+    await edit_msg(cb.message,text,kb.as_markup())
+
+@dp.callback_query(F.data.startswith("mmod_ok_"))
+async def cb_mmod_ok(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb); lot_id=int(cb.data[8:])
+    market_approve_lot(lot_id,cb.from_user.id)
+    lot=market_get_lot(lot_id)
+    if lot:
+        try: await bot.send_message(lot["seller_uid"],"✅ <b>Лот одобрен!</b>",parse_mode="HTML")
+        except: pass
+    await cb_a_mmod(cb)
+
+@dp.callback_query(F.data.startswith("mmod_no_"))
+async def cb_mmod_no(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb); lot_id=int(cb.data[8:])
+    market_reject_lot(lot_id,cb.from_user.id)
+    lot=market_get_lot(lot_id)
+    if lot:
+        try: await bot.send_message(lot["seller_uid"],"❌ <b>Лот отклонён</b>",parse_mode="HTML")
+        except: pass
+    await cb_a_mmod(cb)
+
+@dp.callback_query(F.data == "a_mdisputes")
+async def cb_a_mdisputes(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    disputes=market_get_disputes()
+    text=f"⚠️ <b>Споры ({len(disputes)})</b>\n\n"
+    kb=InlineKeyboardBuilder()
+    for d in disputes:
+        text+=f"#{d['id']} {d['title']} ({d['price']}⭐)\n  {d['reason']}\n\n"
+        kb.button(text=f"👤 Продавец #{d['id']}",callback_data=f"dwin_s_{d['id']}")
+        kb.button(text=f"👤 Покупатель #{d['id']}",callback_data=f"dwin_b_{d['id']}")
+    if not disputes: text+="<i>Нет</i>"
+    kb.button(text="🔙 Админ",callback_data="cmd_admin")
+    kb.adjust(2)
+    await edit_msg(cb.message,text,kb.as_markup())
+
+@dp.callback_query(F.data.startswith("dwin_s_"))
+async def cb_dwin_s(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb); lot_id=int(cb.data[7:])
+    market_resolve_dispute(lot_id,"seller",cb.from_user.id)
+    await answer_cb(cb,"✅ Продавцу",show_alert=True)
+    await cb_a_mdisputes(cb)
+
+@dp.callback_query(F.data.startswith("dwin_b_"))
+async def cb_dwin_b(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb); lot_id=int(cb.data[7:])
+    lot=market_get_lot(lot_id)
+    ok,charge_id=market_resolve_dispute(lot_id,"buyer",cb.from_user.id)
+    if ok and charge_id and lot:
+        try: await bot.refund_star_payment(lot["buyer_uid"],charge_id)
+        except: add_balance(lot["buyer_uid"],lot["price"])
+    elif ok and lot: add_balance(lot["buyer_uid"],lot["price"])
+    await answer_cb(cb,"✅ Возврат покупателю",show_alert=True)
+    await cb_a_mdisputes(cb)
+
+@dp.callback_query(F.data == "a_promocodes")
+async def cb_a_promocodes(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    promos = get_all_promocodes()
+    text = f"🏷 <b>Промокоды ({len(promos)})</b>\n\n"
+    kb = InlineKeyboardBuilder()
+    for p in promos[:20]:
+        active = "✅" if p["active"] else "❌"
+        disc = f"-{p['percent']}%" if p['percent'] else f"-{p['stars']}⭐"
+        text += f"{active} <code>{p['code']}</code> {disc} ({p['used']}/{p['max']})\n"
+        if p["active"]:
+            kb.button(text=f"❌ {p['code']}", callback_data=f"deact_promo_{p['code']}")
+    if not promos: text += "<i>Нет</i>"
+    kb.button(text="➕ Создать", callback_data="create_promo")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin")
+    kb.adjust(2,1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data.startswith("deact_promo_"))
+async def cb_deact_promo(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    code = cb.data[12:]
+    deactivate_promocode(code)
+    log_action(cb.from_user.id, "promo_deact", code)
+    await cb_a_promocodes(cb)
+
+@dp.callback_query(F.data == "create_promo")
+async def cb_create_promo(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    user_states[cb.from_user.id] = {"action":"admin_create_promo_code"}
+    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="a_promocodes")
+    await edit_msg(cb.message,
+        "🏷 <b>Создание промокода</b>\n\n"
+        "Введите код (или <code>auto</code> для автогенерации):", kb.as_markup())
 
 # ═══════════════════════ ФОНОВЫЕ ЗАДАЧИ ═══════════════════════
 
