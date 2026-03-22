@@ -1139,33 +1139,11 @@ def init_db():
     try: c.execute("ALTER TABLE promotions ADD COLUMN button_text TEXT DEFAULT ''")
     except: pass
 
-    # Фикс: добавляем недостающие колонки в market
-    for col, cdef in [
-        ("mtype", "TEXT DEFAULT 'username'"),
-        ("title", "TEXT DEFAULT ''"),
-        ("description", "TEXT DEFAULT ''"),
-        ("seller_uid", "INTEGER DEFAULT 0"),
-        ("buyer_uid", "INTEGER DEFAULT 0"),
-        ("price", "INTEGER DEFAULT 0"),
-        ("status", "TEXT DEFAULT 'pending'"),
-        ("created", "TEXT DEFAULT ''"),
-        ("sold_at", "TEXT DEFAULT ''"),
-        ("moderated_by", "INTEGER DEFAULT 0"),
-        ("escrow_deadline", "TEXT DEFAULT ''"),
-        ("seller_confirmed", "INTEGER DEFAULT 0"),
-        ("buyer_confirmed", "INTEGER DEFAULT 0"),
-        ("dispute", "INTEGER DEFAULT 0"),
-        ("dispute_reason", "TEXT DEFAULT ''"),
-        ("charge_id", "TEXT DEFAULT ''"),
-        ("promoted", "INTEGER DEFAULT 0"),
-        ("promoted_until", "TEXT DEFAULT ''"),
-        ("is_nft", "INTEGER DEFAULT 0"),
-        ("fragment_url", "TEXT DEFAULT ''"),
-        ("fast_mod", "INTEGER DEFAULT 0"),
-        ("listing_paid", "INTEGER DEFAULT 0"),
-    ]:
-        try: c.execute(f"ALTER TABLE market ADD COLUMN {col} {cdef}")
-        except: pass
+    # Фикс: пересоздаём таблицу market с правильной структурой
+    try:
+        c.execute("SELECT mtype FROM market LIMIT 1")
+    except:
+        c.execute("DROP TABLE IF EXISTS market")
     
     # ═══ МАРКЕТПЛЕЙС ТАБЛИЦЫ ═══
     c.execute("""CREATE TABLE IF NOT EXISTS market (
