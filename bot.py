@@ -2736,7 +2736,7 @@ async def cb_mlot(cb: CallbackQuery):
             f"{promo_badge}{nft_badge}{type_names.get(lot['mtype'],'📦')}\n"
             f"🏷 <b>{lot['title']}</b>\n"
             f"📝 {lot['description']}\n\n"
-            f"💰 Цена: <code>{lot['price']}⭐</code> ({int(lot['price']*STAR_TO_RUB)}₽)\n\n"
+            f"💰 Цена: <code>{lot['price']}⭐</code> ({int(int(lot['price'])*STAR_TO_RUB)}₽)\n\n"
             f"👤 {name}\n"
             f"⭐ {stars_d} ({sr['count']} отзывов)\n"
             f"📅 {lot['created']}")
@@ -2767,7 +2767,7 @@ async def cb_mbuy(cb: CallbackQuery):
         await answer_cb(cb, "❌ Нельзя купить свой лот!", show_alert=True); return
     
     bal = get_balance(uid)
-    price = lot["price"]
+    price = int(lot["price"])
     rub = int(price * STAR_TO_RUB)
     
     kb = InlineKeyboardBuilder()
@@ -2794,7 +2794,7 @@ async def cb_paybal_lot(cb: CallbackQuery):
     if lot["seller_uid"] == uid:
         await answer_cb(cb, "❌ Свой лот!", show_alert=True); return
     
-    price = lot["price"]
+    price = int(lot["price"])
     bal = get_balance(uid)
     if bal < price:
         await answer_cb(cb, f"❌ Нужно {price}⭐, у вас {bal:.1f}⭐", show_alert=True); return
