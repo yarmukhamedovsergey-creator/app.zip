@@ -71,7 +71,7 @@ MONITOR_MAX_PREMIUM = 5
 RATE_SEARCH_PER_MIN = 3
 RATE_CHECK_PER_HOUR = 50
 TEMP_BAN_MINUTES = 30
-STAR_TO_RUB = 1.8  # ═ НОВОЕ: курс звезды к рублям ═
+STAR_TO_RUB = 1.25  # ═ НОВОЕ: курс звезды к рублям ═
 
 TIKTOK_COMMENT_TEXT = "@SworuserN_bot бесплатные звёзды, найти юз, оценить юз"
 TIKTOK_REWARD_GIFT = "🧸 Мишка (15⭐)"
@@ -81,13 +81,13 @@ REMINDER_DAYS = [3, 1]
 REMINDER_CHECK_INTERVAL = 3600
 
 PRICES = {
-    "1d":      {"days": 1,     "stars": 36,   "stars_orig": 40,   "label": "1 день"},
-    "3d":      {"days": 3,     "stars": 90,   "stars_orig": 100,  "label": "3 дня"},
-    "7d":      {"days": 7,     "stars": 180,  "stars_orig": 200,  "label": "7 дней"},
-    "1m":      {"days": 30,    "stars": 585,  "stars_orig": 650,  "label": "1 месяц"},
-    "3m":      {"days": 90,    "stars": 1800, "stars_orig": 2000, "label": "3 месяца"},
-    "1y":      {"days": 365,   "stars": 5850, "stars_orig": 6500, "label": "1 год"},
-    "forever": {"days": 99999, "stars": 8999, "stars_orig": 9999, "label": "Навсегда"},
+    "1d":      {"days": 1,     "stars": 36,   "rub": 45,    "label": "1 день"},
+    "3d":      {"days": 3,     "stars": 90,   "rub": 120,   "label": "3 дня"},
+    "7d":      {"days": 7,     "stars": 180,  "rub": 250,   "label": "7 дней"},
+    "1m":      {"days": 30,    "stars": 585,  "rub": 800,   "label": "1 месяц"},
+    "3m":      {"days": 90,    "stars": 1800, "rub": 2200,  "label": "3 месяца"},
+    "1y":      {"days": 365,   "stars": 5850, "rub": 8000,  "label": "1 год"},
+    "forever": {"days": 99999, "stars": 8999, "rub": 11999, "label": "Навсегда"},
 }
 
 # ═══ НОВОЕ: VIP ЦЕНЫ ═══
@@ -2762,9 +2762,102 @@ async def cb_mbuy(cb: CallbackQuery):
     lot_id = int(cb.data[5:])
     lot = market_get_lot(lot_id)
     if not lot or lot["status"] != "active":
+        await answer_cb(cb, "❌ Лот уже продан!", show_alert=True); return
+    if lot["seller_uid"] == uid:
+        await answer_cb(cb, "❌ Нельзя купить свой лот!", show_alert=True); return
+    
+    bal = get_balance(uid)
+    price = lot["price"]
+    rub = int(price * STAR_TO_RUB)
+    
+    kb = InlineKeyboardBuilder()
+    if bal >= price:
+        kb.button(text=f"💰 С баланса ({price}⭐)", callback_data=f"paybal_lot_{lot_id}")
+    kb.button(text=f"⭐ Telegram Stars ({price}⭐)", callback_data=f"paystars_lot_{lot_id}")
+    kb.button(text="❌ Отмена", callback_data=f"mlot_{lot_id}")
+    kb.adjust(1)
+    
+    await edit_msg(cb.message,
+        f"🛒 <b>Покупка лота #{lot_id}</b>\n\n"
+        f"📦 {lot['title']}\n"
+        f"💰 Цена: <code>{price}⭐</code> (<code>{rub}₽</code>)\n\n"
+        f"💰 Ваш баланс: <code>{bal:.1f}⭐</code>\n\n"
+        f"Выберите способ оплаты:", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("paybal_lot_"))
+async def cb_paybal_lot(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[11:])
+    lot = market_get_lot(lot_id)
+    if not lot or lot["status"] != "active":
         await answer_cb(cb, "❌ Лот продан!", show_alert=True); return
     if lot["seller_uid"] == uid:
         await answer_cb(cb, "❌ Свой лот!", show_alert=True); return
+    
+    price = lot["price"]
+    bal = get_balance(uid)
+    if bal < price:
+        await answer_cb(cb, f"❌ Нужно {price}⭐, у вас {bal:.1f}⭐", show_alert=True); return
+    
+    # Списываем с баланса
+    set_balance(uid, bal - price)
+    
+    # Переводим в эскроу
+    ok = market_buy_lot(lot_id, uid)
+    if not ok:
+        add_balance(uid, price)  # возврат
+        await answer_cb(cb, "❌ Ошибка покупки!", show_alert=True); return
+    
+    log_action(uid, "market_buy_bal", f"lot={lot_id} paid={price}")
+    display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
+    
+    # Кнопки покупателю
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Получил товар", callback_data=f"mbuyerok_{lot_id}")
+    kb.button(text="⚠️ Открыть спор", callback_data=f"mdispute_{lot_id}")
+    kb.adjust(1)
+    await edit_msg(cb.message,
+        f"✅ <b>Оплачено с баланса!</b>\n\n"
+        f"📦 {lot['title']}\n"
+        f"💰 Списано: {price}⭐\n"
+        f"💰 Остаток: {bal-price:.1f}⭐\n\n"
+        f"🔒 Деньги на эскроу\n"
+        f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
+        f"Когда получите товар — нажмите <b>✅ Получил товар</b>",
+        kb.as_markup())
+    
+    # Уведомление продавцу
+    skb = InlineKeyboardBuilder()
+    skb.button(text="✅ Я передал товар", callback_data=f"msellerok_{lot_id}")
+    try: await bot.send_message(lot["seller_uid"],
+        f"🛒 <b>Ваш лот куплен!</b>\n\n"
+        f"📦 {lot['title']}\n"
+        f"💰 {price}⭐\n"
+        f"👤 Покупатель: {display}\n\n"
+        f"⏰ Передайте товар в течение {MARKET_ESCROW_HOURS} часов",
+        reply_markup=skb.as_markup(), parse_mode="HTML")
+    except: pass
+    
+    # Уведомление админу
+    commission = int(price * MARKET_COMMISSION)
+    payout = price - commission
+    await notify_admins(
+        f"🛒 <b>ПРОДАЖА (баланс)</b>\n"
+        f"📦 {lot['title']}\n"
+        f"💰 {price}⭐ | Комиссия: {commission}⭐\n"
+        f"👤 Покупатель: {display}\n"
+        f"👤 Продавец: <code>{lot['seller_uid']}</code>")
+
+@dp.callback_query(F.data.startswith("paystars_lot_"))
+async def cb_paystars_lot(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[13:])
+    lot = market_get_lot(lot_id)
+    if not lot or lot["status"] != "active":
+        await answer_cb(cb, "❌ Лот продан!", show_alert=True); return
+    if lot["seller_uid"] == uid:
+        await answer_cb(cb, "❌ Свой лот!", show_alert=True); return
+    
     await bot.send_invoice(uid,
         title=f"🛒 {lot['title'][:50]}",
         description=f"Маркет: {lot['description'][:100]}" if lot['description'] else f"Маркет: {lot['title']}",
@@ -3142,17 +3235,16 @@ async def cb_shop(cb: CallbackQuery):
     text = (f"🏪 <b>Магазин</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             f"💰 Баланс: <code>{bal:.1f}⭐</code>\n"
             f"🔍 Доп. поисков: <code>{extra}</code>\n\n"
-            f"<b>🔍 Поиски:</b>\n"
-            f"Цена: <code>{SEARCH_PRICE_STARS}⭐</code> (<code>{int(SEARCH_PRICE_STARS*STAR_TO_RUB)}₽</code>) за 1\n\n"
-            f"💳 Рубли — @{PAY_CONTACT}")
+            f"💎 <b>Premium:</b>\n")
+    
+    for p in PRICES.values():
+        text += f"• {p['label']} — <code>{p['stars']}⭐</code>/<code>{p['rub']}₽</code>\n"
     
     kb = InlineKeyboardBuilder()
     kb.button(text="🔍 Купить поиски", callback_data="shop_buy_searches")
     kb.button(text="💎 Premium", callback_data="shop_premium")
     kb.button(text="🌟 VIP", callback_data="shop_vip")
     kb.button(text="📦 Бандл Premium+VIP", callback_data="shop_bundle")
-    kb.button(text="🏪 Маркет", callback_data="cmd_market")
-    kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
     kb.button(text="🔙 Меню", callback_data="cmd_menu")
     kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
@@ -3160,26 +3252,47 @@ async def cb_shop(cb: CallbackQuery):
 @dp.callback_query(F.data == "shop_buy_searches")
 async def cb_shop_buy(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
+    bal = get_balance(uid)
+    
+    text = (f"🔍 <b>Купить поиски</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"Цена: <code>{SEARCH_PRICE_STARS}⭐</code>/<code>{int(SEARCH_PRICE_STARS*STAR_TO_RUB)}₽</code> за 1 поиск\n\n"
+            f"💰 Баланс: <code>{bal:.1f}⭐</code>\n"
+            f"💳 Рубли — @{PAY_CONTACT}\n\n"
+            f"Введите количество (1-1000):")
+    
     user_states[uid] = {"action":"shop_custom_amount"}
-    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_shop")
-    await edit_msg(cb.message,
-        f"🔍 <b>Купить поиски</b>\n\n"
-        f"Цена: <code>{SEARCH_PRICE_STARS}⭐</code>/шт\n\n"
-        f"Введите количество (1-1000):", kb.as_markup())
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
+    kb.button(text="❌ Отмена", callback_data="cmd_shop")
+    kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
 
 @dp.callback_query(F.data == "shop_premium")
 async def cb_shop_prem(cb: CallbackQuery):
-    await answer_cb(cb)
-    text = f"💎 <b>Premium</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    text += f"• {PREMIUM_COUNT} юзов/поиск\n• {PREMIUM_SEARCHES_LIMIT} поисков/день\n• Все режимы\n• Шаблон + Похожие\n• Мониторинг {MONITOR_MAX_PREMIUM} юзов\n• Рулетка\n\n"
+    uid = cb.from_user.id; await answer_cb(cb)
+    bal = get_balance(uid)
+    
+    text = (f"💎 <b>Premium</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Преимущества:\n\n"
+            f"• {PREMIUM_COUNT} юзов/поиск\n"
+            f"• {PREMIUM_SEARCHES_LIMIT} поисков/день\n"
+            f"• Все режимы\n"
+            f"• Шаблон + Похожие\n"
+            f"• Мониторинг {MONITOR_MAX_PREMIUM} юзов\n"
+            f"• Рулетка\n\n"
+            f"<b>Цены:</b>\n\n")
+    
     for p in PRICES.values():
-        rub = int(p['stars'] * STAR_TO_RUB)
-        text += f"• <b>{p['label']}</b> — <code>{p['stars']}⭐</code> (<code>{rub}₽</code>) <s>{p['stars_orig']}⭐</s>\n"
-    text += f"\n💳 Рубли — @{PAY_CONTACT}"
+        text += f"• {p['label']} — <code>{p['stars']}⭐</code>/<code>{p['rub']}₽</code>\n"
+    
+    text += f"\n💰 Баланс: <code>{bal:.1f}⭐</code>\n💳 Рубли — @{PAY_CONTACT}"
+    
     kb = InlineKeyboardBuilder()
-    for k,p in PRICES.items(): kb.button(text=f"{p['label']} — {p['stars']}⭐", callback_data=f"buy_{k}")
-    kb.button(text=f"💳 @{PAY_CONTACT}", url=f"https://t.me/{PAY_CONTACT}")
-    kb.button(text="🔙", callback_data="cmd_shop"); kb.adjust(1)
+    for k,p in PRICES.items():
+        kb.button(text=f"{p['label']} — {p['stars']}⭐/{p['rub']}₽", callback_data=f"buy_{k}")
+    kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
+    kb.button(text="🔙 Магазин", callback_data="cmd_shop")
+    kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
 
 # ═══ НОВОЕ: VIP магазин ═══
@@ -3187,43 +3300,63 @@ async def cb_shop_prem(cb: CallbackQuery):
 async def cb_shop_vip(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     is_prem = has_subscription(uid)
+    bal = get_balance(uid)
     
-    text = f"🌟 <b>VIP</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    text += f"• {VIP_COUNT} юзов/поиск\n• {VIP_SEARCHES_LIMIT} поисков/день\n• 🎯 Тематический поиск по слову\n"
+    text = (f"🌟 <b>VIP</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Преимущества:\n\n"
+            f"• {VIP_COUNT} юзов/поиск (вместо {PREMIUM_COUNT})\n"
+            f"• {VIP_SEARCHES_LIMIT} поисков/день (вместо {PREMIUM_SEARCHES_LIMIT})\n"
+            f"• 🎯 Тематический поиск по слову\n\n")
     
     if not is_prem and uid not in ADMIN_IDS:
-        text += "\n⚠️ <b>Сначала нужен Premium!</b>\nИли купите бандл Premium+VIP."
+        text += "⚠️ <b>Сначала нужен Premium!</b>\nИли купите бандл Premium+VIP.\n"
         kb = InlineKeyboardBuilder()
         kb.button(text="💎 Купить Premium", callback_data="shop_premium")
         kb.button(text="📦 Бандл", callback_data="shop_bundle")
-        kb.button(text="🔙", callback_data="cmd_shop"); kb.adjust(1)
+        kb.button(text="🔙 Магазин", callback_data="cmd_shop")
+        kb.adjust(1)
     else:
-        text += "\n<b>Цены апгрейда:</b>\n"
+        text += f"<b>Цены апгрейда:</b>\n\n"
         for k, vp in VIP_PRICES.items():
             rub = int(vp['stars'] * STAR_TO_RUB)
-            text += f"• {vp['label']} — <code>{vp['stars']}⭐</code> (<code>{rub}₽</code>)\n"
+            text += f"• {vp['label']} — <code>{vp['stars']}⭐</code>/<code>{rub}₽</code>\n"
+        text += f"\n💰 Баланс: <code>{bal:.1f}⭐</code>\n💳 Рубли — @{PAY_CONTACT}"
         kb = InlineKeyboardBuilder()
         for k, vp in VIP_PRICES.items():
-            kb.button(text=f"{vp['label']} — {vp['stars']}⭐", callback_data=f"buyvip_{k}")
-        kb.button(text="🔙", callback_data="cmd_shop"); kb.adjust(1)
+            rub = int(vp['stars'] * STAR_TO_RUB)
+            kb.button(text=f"{vp['label']} — {vp['stars']}⭐/{rub}₽", callback_data=f"buyvip_{k}")
+        kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
+        kb.button(text="🔙 Магазин", callback_data="cmd_shop")
+        kb.adjust(1)
     
     await edit_msg(cb.message, text, kb.as_markup())
 
 # ═══ НОВОЕ: Бандл Premium+VIP ═══
 @dp.callback_query(F.data == "shop_bundle")
 async def cb_shop_bundle(cb: CallbackQuery):
-    await answer_cb(cb)
-    text = f"📦 <b>Бандл Premium+VIP</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    text += f"💎 Premium + 🌟 VIP в одном!\n<b>Скидка 5%</b> от суммарной цены\n\n"
+    uid = cb.from_user.id; await answer_cb(cb)
+    bal = get_balance(uid)
+    
+    text = (f"📦 <b>Бандл Premium+VIP</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💎 Premium + 🌟 VIP в одном!\n"
+            f"<b>Скидка 5%</b> от суммарной цены\n\n"
+            f"<b>Цены:</b>\n\n")
+    
     for k, bp in BUNDLE_PRICES.items():
         p = PRICES[k]; vp = VIP_PRICES[k]
         full = p['stars'] + vp['stars']
         rub = int(bp['stars'] * STAR_TO_RUB)
-        text += f"• <b>{bp['label']}</b> — <code>{bp['stars']}⭐</code> (<code>{rub}₽</code>) <s>{full}⭐</s>\n"
+        text += f"• {bp['label']} — <code>{bp['stars']}⭐</code>/<code>{rub}₽</code> <s>{full}⭐</s>\n"
+    
+    text += f"\n💰 Баланс: <code>{bal:.1f}⭐</code>\n💳 Рубли — @{PAY_CONTACT}"
+    
     kb = InlineKeyboardBuilder()
     for k, bp in BUNDLE_PRICES.items():
-        kb.button(text=f"{bp['label']} — {bp['stars']}⭐", callback_data=f"buybundle_{k}")
-    kb.button(text="🔙", callback_data="cmd_shop"); kb.adjust(1)
+        rub = int(bp['stars'] * STAR_TO_RUB)
+        kb.button(text=f"{bp['label']} — {bp['stars']}⭐/{rub}₽", callback_data=f"buybundle_{k}")
+    kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
+    kb.button(text="🔙 Магазин", callback_data="cmd_shop")
+    kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
 
 # ═══ ВЫБОР ОПЛАТЫ: БАЛАНС ═══
