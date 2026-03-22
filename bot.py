@@ -1401,13 +1401,16 @@ def process_referral(new_uid, ref_uid):
     if new_uid == ref_uid: return False
     u = get_user(new_uid)
     if u.get("referred_by", 0) != 0: return False
+    ensure_user(ref_uid)
     uname = get_user(new_uid).get("uname", "")
     conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("UPDATE users SET referred_by=? WHERE uid=?", (ref_uid, new_uid))
-    c.execute("UPDATE users SET ref_count=ref_count+1, free=free+? WHERE uid=?", (REF_BONUS, ref_uid))
+    c.execute("UPDATE users SET ref_count=ref_count+1, extra_searches=extra_searches+? WHERE uid=?", (REF_BONUS, ref_uid))
     c.execute("INSERT INTO referrals (referrer_uid,referred_uid,referred_uname,created) VALUES (?,?,?,?)",
               (ref_uid, new_uid, uname, datetime.now().strftime("%Y-%m-%d %H:%M")))
-    conn.commit(); conn.close(); return True
+    conn.commit(); conn.close()
+    log_action(ref_uid, "ref_bonus", f"+{REF_BONUS} searches from {new_uid}")
+    return True
 
 def get_user_referrals(uid, limit=50):
     conn = sqlite3.connect(DB); c = conn.cursor()
@@ -3134,52 +3137,24 @@ async def cb_mon_del(cb: CallbackQuery):
 async def cb_shop(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     u = get_user(uid); extra = u.get("extra_searches",0)
-    config = load_bot_config()
-    custom_header = config.get("text_shop_header","")
-    is_prem = has_subscription(uid)
-    is_vip_user = has_vip(uid)
+    bal = get_balance(uid)
     
-    text = f"🏪 <b>Магазин</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    if custom_header: text += f"{custom_header}\n\n"
-    text += f"🔍 Доп. поисков: <code>{extra}</code>\n\n"
-    
-    # Поиски
-    text += (f"<b>🔍 Поиски:</b>\n"
-             f"Цена: <code>{SEARCH_PRICE_STARS}⭐</code> (<code>{SEARCH_PRICE_STARS*STAR_TO_RUB:.0f}₽</code>) за 1\n\n")
-    
-    # Premium
-    text += f"<b>💎 Premium:</b>\n"
-    for p in PRICES.values():
-        rub = int(p['stars'] * STAR_TO_RUB)
-        text += f"• {p['label']} — <code>{p['stars']}⭐</code> (<code>{rub}₽</code>) <s>{p['stars_orig']}⭐</s>\n"
-    
-    # VIP
-    text += f"\n<b>🌟 VIP (доп. к Premium):</b>\n"
-    text += f"• {VIP_COUNT} юзов/поиск (вместо {PREMIUM_COUNT})\n"
-    text += f"• {VIP_SEARCHES_LIMIT} поисков/день (вместо {PREMIUM_SEARCHES_LIMIT})\n"
-    text += f"• 🎯 Тематический поиск по слову\n\n"
-    
-    # VIP цены
-    text += f"<b>Апгрейд до VIP (при Premium):</b>\n"
-    for k, vp in VIP_PRICES.items():
-        rub = int(vp['stars'] * STAR_TO_RUB)
-        text += f"• {vp['label']} — <code>{vp['stars']}⭐</code> (<code>{rub}₽</code>)\n"
-    
-    # Бандлы
-    text += f"\n<b>📦 Бандл Premium+VIP (скидка 5%):</b>\n"
-    for k, bp in BUNDLE_PRICES.items():
-        rub = int(bp['stars'] * STAR_TO_RUB)
-        text += f"• {bp['label']} — <code>{bp['stars']}⭐</code> (<code>{rub}₽</code>)\n"
-    
-    text += f"\n💳 Рубли — @{PAY_CONTACT}"
+    text = (f"🏪 <b>Магазин</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"💰 Баланс: <code>{bal:.1f}⭐</code>\n"
+            f"🔍 Доп. поисков: <code>{extra}</code>\n\n"
+            f"<b>🔍 Поиски:</b>\n"
+            f"Цена: <code>{SEARCH_PRICE_STARS}⭐</code> (<code>{int(SEARCH_PRICE_STARS*STAR_TO_RUB)}₽</code>) за 1\n\n"
+            f"💳 Рубли — @{PAY_CONTACT}")
     
     kb = InlineKeyboardBuilder()
     kb.button(text="🔍 Купить поиски", callback_data="shop_buy_searches")
-    kb.button(text="💎 Купить Premium", callback_data="shop_premium")
-    kb.button(text="🌟 Купить VIP", callback_data="shop_vip")
+    kb.button(text="💎 Premium", callback_data="shop_premium")
+    kb.button(text="🌟 VIP", callback_data="shop_vip")
     kb.button(text="📦 Бандл Premium+VIP", callback_data="shop_bundle")
+    kb.button(text="🏪 Маркет", callback_data="cmd_market")
     kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
-    kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
+    kb.button(text="🔙 Меню", callback_data="cmd_menu")
+    kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
 
 @dp.callback_query(F.data == "shop_buy_searches")
@@ -3187,7 +3162,10 @@ async def cb_shop_buy(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     user_states[uid] = {"action":"shop_custom_amount"}
     kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_shop")
-    await edit_msg(cb.message, f"🔍 <b>Купить поиски</b>\n\nЦена: <code>{SEARCH_PRICE_STARS}⭐</code> (<code>{int(SEARCH_PRICE_STARS*STAR_TO_RUB)}₽</code>)/шт\n\nВведите количество (1-1000):", kb.as_markup())
+    await edit_msg(cb.message,
+        f"🔍 <b>Купить поиски</b>\n\n"
+        f"Цена: <code>{SEARCH_PRICE_STARS}⭐</code>/шт\n\n"
+        f"Введите количество (1-1000):", kb.as_markup())
 
 @dp.callback_query(F.data == "shop_premium")
 async def cb_shop_prem(cb: CallbackQuery):
@@ -3231,17 +3209,6 @@ async def cb_shop_vip(cb: CallbackQuery):
     
     await edit_msg(cb.message, text, kb.as_markup())
 
-@dp.callback_query(F.data.startswith("buyvip_"))
-async def cb_buyvip(cb: CallbackQuery):
-    uid = cb.from_user.id; k = cb.data[7:]; vp = VIP_PRICES.get(k)
-    if not vp: await answer_cb(cb,"❌",show_alert=True); return
-    if not has_subscription(uid) and uid not in ADMIN_IDS:
-        await answer_cb(cb,"⚠️ Сначала купите Premium!",show_alert=True); return
-    await answer_cb(cb)
-    await bot.send_invoice(uid, title=f"🌟 {vp['label']}", description=f"VIP апгрейд {vp['label']}",
-        payload=f"vip_{k}_{uid}", provider_token="", currency="XTR",
-        prices=[LabeledPrice(label=vp["label"], amount=vp["stars"])])
-
 # ═══ НОВОЕ: Бандл Premium+VIP ═══
 @dp.callback_query(F.data == "shop_bundle")
 async def cb_shop_bundle(cb: CallbackQuery):
@@ -3259,23 +3226,194 @@ async def cb_shop_bundle(cb: CallbackQuery):
     kb.button(text="🔙", callback_data="cmd_shop"); kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
 
-@dp.callback_query(F.data.startswith("buybundle_"))
-async def cb_buybundle(cb: CallbackQuery):
-    k = cb.data[10:]; bp = BUNDLE_PRICES.get(k)
-    if not bp: await answer_cb(cb,"❌",show_alert=True); return
-    await answer_cb(cb)
-    await bot.send_invoice(cb.from_user.id, title=f"📦 {bp['label']}", description=f"Premium+VIP {bp['label']}",
-        payload=f"bundle_{k}_{cb.from_user.id}", provider_token="", currency="XTR",
-        prices=[LabeledPrice(label=bp["label"], amount=bp["stars"])])
+# ═══ ВЫБОР ОПЛАТЫ: БАЛАНС ═══
+
+@dp.callback_query(F.data.startswith("paybal_searches_"))
+async def cb_paybal_searches(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    count = int(cb.data[16:])
+    cost = count * SEARCH_PRICE_STARS
+    bal = get_balance(uid)
+    if bal < cost:
+        await answer_cb(cb, f"❌ Нужно {cost}⭐, у вас {bal:.1f}⭐", show_alert=True); return
+    set_balance(uid, bal - cost)
+    add_extra_searches(uid, count)
+    log_action(uid, "buy_searches_bal", f"{count}шт -{cost}⭐")
+    display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
+    kb = InlineKeyboardBuilder(); kb.button(text="🔙 Магазин", callback_data="cmd_shop")
+    await edit_msg(cb.message,
+        f"✅ <b>Куплено!</b>\n\n"
+        f"🔍 +{count} поисков\n"
+        f"💰 Списано: {cost}⭐\n"
+        f"💰 Остаток: {bal-cost:.1f}⭐", kb.as_markup())
+    await notify_admins(f"🛒 {display} купил {count} поисков за баланс (-{cost}⭐)")
+
+@dp.callback_query(F.data.startswith("paystars_searches_"))
+async def cb_paystars_searches(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    count = int(cb.data[18:])
+    total = count * SEARCH_PRICE_STARS
+    await bot.send_invoice(uid, title=f"🔍 +{count} поисков",
+        description=f"{count} поисков",
+        payload=f"searches_{count}_{uid}",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label=f"+{count}", amount=total)])
+
+# ═══ ВЫБОР ОПЛАТЫ: PREMIUM ═══
 
 @dp.callback_query(F.data.startswith("buy_"))
 async def cb_buy(cb: CallbackQuery):
-    k = cb.data[4:]; p = PRICES.get(k)
+    uid = cb.from_user.id; k = cb.data[4:]; p = PRICES.get(k)
     if not p: await answer_cb(cb,"❌",show_alert=True); return
     await answer_cb(cb)
-    await bot.send_invoice(cb.from_user.id, title=f"💎 {p['label']}", description=f"Premium {p['label']}",
-        payload=f"sub_{k}_{cb.from_user.id}", provider_token="", currency="XTR",
+    bal = get_balance(uid)
+    kb = InlineKeyboardBuilder()
+    if bal >= p["stars"]:
+        kb.button(text=f"💰 С баланса ({p['stars']}⭐)", callback_data=f"paybal_prem_{k}")
+    kb.button(text=f"⭐ Telegram Stars ({p['stars']}⭐)", callback_data=f"paystars_prem_{k}")
+    kb.button(text="❌ Отмена", callback_data="shop_premium")
+    kb.adjust(1)
+    await edit_msg(cb.message,
+        f"💎 <b>Premium {p['label']}</b>\n\n"
+        f"💰 Цена: {p['stars']}⭐\n"
+        f"💰 Баланс: {bal:.1f}⭐\n\n"
+        f"Способ оплаты:", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("paybal_prem_"))
+async def cb_paybal_prem(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    k = cb.data[12:]; p = PRICES.get(k)
+    if not p: return
+    bal = get_balance(uid)
+    if bal < p["stars"]:
+        await answer_cb(cb, "❌ Недостаточно средств", show_alert=True); return
+    set_balance(uid, bal - p["stars"])
+    end = give_subscription(uid, p["days"])
+    log_action(uid, "buy_prem_bal", f"{k} -{p['stars']}⭐")
+    display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
+    kb = InlineKeyboardBuilder(); kb.button(text="👤 Профиль", callback_data="cmd_profile")
+    await edit_msg(cb.message,
+        f"✅ <b>Куплено!</b>\n\n"
+        f"💎 Premium {p['label']}\n"
+        f"📅 До: {end}\n"
+        f"💰 Списано: {p['stars']}⭐", kb.as_markup())
+    await notify_admins(f"🛒 <b>ПОКУПКА ЗА БАЛАНС</b>\n👤 {display}\n💎 Premium {p['label']}\n💰 -{p['stars']}⭐")
+
+@dp.callback_query(F.data.startswith("paystars_prem_"))
+async def cb_paystars_prem(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    k = cb.data[14:]; p = PRICES.get(k)
+    if not p: return
+    await bot.send_invoice(uid, title=f"💎 {p['label']}",
+        description=f"Premium {p['label']}",
+        payload=f"sub_{k}_{uid}",
+        provider_token="", currency="XTR",
         prices=[LabeledPrice(label=p["label"], amount=p["stars"])])
+
+# ═══ ВЫБОР ОПЛАТЫ: VIP ═══
+
+@dp.callback_query(F.data.startswith("buyvip_"))
+async def cb_buyvip(cb: CallbackQuery):
+    uid = cb.from_user.id; k = cb.data[7:]; vp = VIP_PRICES.get(k)
+    if not vp: await answer_cb(cb,"❌",show_alert=True); return
+    if not has_subscription(uid) and uid not in ADMIN_IDS:
+        await answer_cb(cb,"⚠️ Сначала купите Premium!",show_alert=True); return
+    await answer_cb(cb)
+    bal = get_balance(uid)
+    kb = InlineKeyboardBuilder()
+    if bal >= vp["stars"]:
+        kb.button(text=f"💰 С баланса ({vp['stars']}⭐)", callback_data=f"paybal_vip_{k}")
+    kb.button(text=f"⭐ Telegram Stars ({vp['stars']}⭐)", callback_data=f"paystars_vip_{k}")
+    kb.button(text="❌ Отмена", callback_data="shop_vip")
+    kb.adjust(1)
+    await edit_msg(cb.message,
+        f"🌟 <b>VIP {vp['label']}</b>\n\n"
+        f"💰 Цена: {vp['stars']}⭐\n"
+        f"💰 Баланс: {bal:.1f}⭐\n\n"
+        f"Способ оплаты:", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("paybal_vip_"))
+async def cb_paybal_vip(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    k = cb.data[11:]; vp = VIP_PRICES.get(k)
+    if not vp: return
+    bal = get_balance(uid)
+    if bal < vp["stars"]:
+        await answer_cb(cb, "❌ Недостаточно средств", show_alert=True); return
+    set_balance(uid, bal - vp["stars"])
+    end = give_vip(uid, vp["days"])
+    log_action(uid, "buy_vip_bal", f"{k} -{vp['stars']}⭐")
+    display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
+    kb = InlineKeyboardBuilder(); kb.button(text="👤 Профиль", callback_data="cmd_profile")
+    await edit_msg(cb.message,
+        f"✅ <b>Куплено!</b>\n\n"
+        f"🌟 VIP {vp['label']}\n"
+        f"📅 До: {end}\n"
+        f"💰 Списано: {vp['stars']}⭐", kb.as_markup())
+    await notify_admins(f"🛒 <b>VIP ЗА БАЛАНС</b>\n👤 {display}\n🌟 {vp['label']}\n💰 -{vp['stars']}⭐")
+
+@dp.callback_query(F.data.startswith("paystars_vip_"))
+async def cb_paystars_vip(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    k = cb.data[13:]; vp = VIP_PRICES.get(k)
+    if not vp: return
+    await bot.send_invoice(uid, title=f"🌟 {vp['label']}",
+        description=f"VIP {vp['label']}",
+        payload=f"vip_{k}_{uid}",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label=vp["label"], amount=vp["stars"])])
+
+# ═══ ВЫБОР ОПЛАТЫ: БАНДЛ ═══
+
+@dp.callback_query(F.data.startswith("buybundle_"))
+async def cb_buybundle(cb: CallbackQuery):
+    uid = cb.from_user.id; k = cb.data[10:]; bp = BUNDLE_PRICES.get(k)
+    if not bp: await answer_cb(cb,"❌",show_alert=True); return
+    await answer_cb(cb)
+    bal = get_balance(uid)
+    kb = InlineKeyboardBuilder()
+    if bal >= bp["stars"]:
+        kb.button(text=f"💰 С баланса ({bp['stars']}⭐)", callback_data=f"paybal_bundle_{k}")
+    kb.button(text=f"⭐ Telegram Stars ({bp['stars']}⭐)", callback_data=f"paystars_bundle_{k}")
+    kb.button(text="❌ Отмена", callback_data="shop_bundle")
+    kb.adjust(1)
+    await edit_msg(cb.message,
+        f"📦 <b>{bp['label']}</b>\n\n"
+        f"💰 Цена: {bp['stars']}⭐\n"
+        f"💰 Баланс: {bal:.1f}⭐\n\n"
+        f"Способ оплаты:", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("paybal_bundle_"))
+async def cb_paybal_bundle(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    k = cb.data[14:]; bp = BUNDLE_PRICES.get(k); p = PRICES.get(k)
+    if not bp or not p: return
+    bal = get_balance(uid)
+    if bal < bp["stars"]:
+        await answer_cb(cb, "❌ Недостаточно средств", show_alert=True); return
+    set_balance(uid, bal - bp["stars"])
+    end_prem = give_subscription(uid, p["days"])
+    end_vip = give_vip(uid, p["days"])
+    log_action(uid, "buy_bundle_bal", f"{k} -{bp['stars']}⭐")
+    display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
+    kb = InlineKeyboardBuilder(); kb.button(text="👤 Профиль", callback_data="cmd_profile")
+    await edit_msg(cb.message,
+        f"✅ <b>Куплено!</b>\n\n"
+        f"💎 Premium до {end_prem}\n"
+        f"🌟 VIP до {end_vip}\n"
+        f"💰 Списано: {bp['stars']}⭐", kb.as_markup())
+    await notify_admins(f"🛒 <b>БАНДЛ ЗА БАЛАНС</b>\n👤 {display}\n📦 {bp['label']}\n💰 -{bp['stars']}⭐")
+
+@dp.callback_query(F.data.startswith("paystars_bundle_"))
+async def cb_paystars_bundle(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    k = cb.data[16:]; bp = BUNDLE_PRICES.get(k)
+    if not bp: return
+    await bot.send_invoice(uid, title=f"📦 {bp['label']}",
+        description=f"Premium+VIP {bp['label']}",
+        payload=f"bundle_{k}_{uid}",
+        provider_token="", currency="XTR",
+        prices=[LabeledPrice(label=bp["label"], amount=bp["stars"])])
 
 
 # ═══════════════════════ CALLBACKS: Профиль ═══════════════════════
@@ -3575,9 +3713,13 @@ async def pre_checkout(q: PreCheckoutQuery): await q.answer(ok=True)
 
 @dp.message(F.successful_payment)
 async def succ_pay(msg: Message):
-    payload = msg.successful_payment.invoice_payload; parts = payload.split("_")
-    amount_paid = msg.successful_payment.total_amount; uid = msg.from_user.id
+    payload = msg.successful_payment.invoice_payload
+    parts = payload.split("_")
+    amount_paid = msg.successful_payment.total_amount
+    uid = msg.from_user.id
     config = load_bot_config()
+    uname = msg.from_user.username or ""
+    display = f"@{uname}" if uname else f"ID:{uid}"
 
     if parts[0]=="sub" and len(parts)>=3:
         k=parts[1]; tuid=int(parts[2]); p=PRICES.get(k)
@@ -3589,26 +3731,18 @@ async def succ_pay(msg: Message):
             if ref_uid and ref_uid!=tuid:
                 comm = round(amount_paid*REFERRAL_COMMISSION,1)
                 if comm>0: add_balance(ref_uid,comm)
-                try: await bot.send_message(ref_uid, f"💰 +<code>{comm}</code>⭐", parse_mode="HTML")
+                try: await bot.send_message(ref_uid, f"💰 +<code>{comm}</code>⭐ реф. бонус", parse_mode="HTML")
                 except: pass
-            if config.get("notify_purchases",True):
-                for aid in ADMIN_IDS:
-                    try: await bot.send_message(aid, f"💰 {tuid} — Premium {p['label']} ({p['stars']}⭐)")
-                    except: pass
+            await notify_admins(f"💰 <b>ПОКУПКА</b>\n👤 {display} (<code>{tuid}</code>)\n💎 Premium {p['label']}\n⭐ {p['stars']}⭐")
 
-    # ═══ НОВОЕ: VIP оплата ═══
     elif parts[0]=="vip" and len(parts)>=3:
         k=parts[1]; tuid=int(parts[2]); vp=VIP_PRICES.get(k)
         if vp:
             end = give_vip(tuid, vp["days"])
             log_action(tuid,"purchase_vip",f"{k}={vp['stars']}⭐")
             await msg.answer(f"🎉 <b>Оплачено!</b> 🌟 VIP {vp['label']} до {end}", parse_mode="HTML")
-            if config.get("notify_purchases",True):
-                for aid in ADMIN_IDS:
-                    try: await bot.send_message(aid, f"🌟 {tuid} — VIP {vp['label']} ({vp['stars']}⭐)")
-                    except: pass
+            await notify_admins(f"💰 <b>ПОКУПКА</b>\n👤 {display} (<code>{tuid}</code>)\n🌟 VIP {vp['label']}\n⭐ {vp['stars']}⭐")
 
-    # ═══ НОВОЕ: Бандл оплата ═══
     elif parts[0]=="bundle" and len(parts)>=3:
         k=parts[1]; tuid=int(parts[2])
         p=PRICES.get(k); bp=BUNDLE_PRICES.get(k)
@@ -3621,12 +3755,9 @@ async def succ_pay(msg: Message):
             if ref_uid and ref_uid!=tuid:
                 comm = round(amount_paid*REFERRAL_COMMISSION,1)
                 if comm>0: add_balance(ref_uid,comm)
-                try: await bot.send_message(ref_uid, f"💰 +<code>{comm}</code>⭐", parse_mode="HTML")
+                try: await bot.send_message(ref_uid, f"💰 +<code>{comm}</code>⭐ реф. бонус", parse_mode="HTML")
                 except: pass
-            if config.get("notify_purchases",True):
-                for aid in ADMIN_IDS:
-                    try: await bot.send_message(aid, f"📦 {tuid} — Bundle {bp['label']} ({bp['stars']}⭐)")
-                    except: pass
+            await notify_admins(f"💰 <b>ПОКУПКА</b>\n👤 {display} (<code>{tuid}</code>)\n📦 Бандл {bp['label']}\n⭐ {bp['stars']}⭐")
 
     elif parts[0]=="gift" and len(parts)>=4:
         k=parts[1]; tuid=int(parts[2]); p=PRICES.get(k)
@@ -3636,25 +3767,27 @@ async def succ_pay(msg: Message):
             await msg.answer(f"🎁 <b>Отправлено!</b>", parse_mode="HTML")
             try: await bot.send_message(tuid, f"🎁 Вам подарили <b>{p['label']}</b>!\nДо: {end}", parse_mode="HTML")
             except: pass
+            await notify_admins(f"🎁 <b>ПОДАРОК</b>\n👤 {display} → <code>{tuid}</code>\n💎 {p['label']}\n⭐ {p['stars']}⭐")
 
     elif parts[0]=="topup" and len(parts)>=3:
         amount=int(parts[1]); tuid=int(parts[2])
         add_balance(tuid, amount); log_action(tuid,"topup",str(amount))
         await msg.answer(f"✅ <b>+{amount}⭐</b>", parse_mode="HTML")
+        await notify_admins(f"💰 <b>ПОПОЛНЕНИЕ</b>\n👤 {display}\n⭐ +{amount}⭐")
 
     elif parts[0]=="searches" and len(parts)>=3:
         count=int(parts[1]); tuid=int(parts[2])
         add_extra_searches(tuid, count); log_action(tuid,"buy_searches",str(count))
         await msg.answer(f"✅ <b>+{count} поисков!</b>", parse_mode="HTML")
+        await notify_admins(f"💰 <b>ПОКУПКА</b>\n👤 {display}\n🔍 +{count} поисков\n⭐ {count*SEARCH_PRICE_STARS}⭐")
 
     elif parts[0]=="donate" and len(parts)>=3:
         amt=int(parts[1]); log_action(uid,"donate",str(amt))
         await msg.answer("❤️ <b>Спасибо!</b>", parse_mode="HTML")
-        for aid in ADMIN_IDS:
-            try: await bot.send_message(aid, f"🤖 Донат {amt}⭐ от {uid}")
-            except: pass
+        await notify_admins(f"❤️ <b>ДОНАТ</b>\n👤 {display}\n⭐ {amt}⭐")
 
-    # ═══ МАРКЕТПЛЕЙС ОПЛАТА ═══
+    # ═══════════════════════ МАРКЕТПЛЕЙС ОПЛАТА ═══════════════════════
+
     elif parts[0]=="market" and len(parts)>=3:
         lot_id=int(parts[1]); buyer_uid=int(parts[2])
         discount=int(parts[3]) if len(parts)>=4 else 0
@@ -3662,85 +3795,142 @@ async def succ_pay(msg: Message):
         if not lot or lot["status"]!="active":
             try:
                 await bot.refund_star_payment(uid, msg.successful_payment.telegram_payment_charge_id)
-                await msg.answer("❌ Лот продан! Возврат")
-            except: await msg.answer("❌ Лот продан! Напишите админу.")
+                await msg.answer("❌ Лот уже продан! Возврат средств")
+            except: await msg.answer("❌ Лот продан! Напишите админу для возврата.")
             return
         ok=market_buy_lot(lot_id, buyer_uid)
         if not ok:
             try:
                 await bot.refund_star_payment(uid, msg.successful_payment.telegram_payment_charge_id)
-                await msg.answer("❌ Ошибка! Возврат")
-            except: await msg.answer("❌ Ошибка!")
+                await msg.answer("❌ Ошибка покупки! Возврат средств")
+            except: await msg.answer("❌ Ошибка! Напишите админу.")
             return
+        # Сохраняем charge_id для возможного рефанда при споре
         conn=sqlite3.connect(DB); c=conn.cursor()
         c.execute("UPDATE market SET charge_id=? WHERE id=?",
                   (msg.successful_payment.telegram_payment_charge_id, lot_id))
         conn.commit(); conn.close()
         log_action(buyer_uid,"market_buy",f"lot={lot_id} paid={amount_paid}")
         disc_text=f"\n🏷 Скидка: -{discount}⭐" if discount else ""
+        # Кнопки для покупателя
         kb=InlineKeyboardBuilder()
-        kb.button(text="✅ Получил", callback_data=f"mbuyerok_{lot_id}")
-        kb.button(text="⚠️ Спор", callback_data=f"mdispute_{lot_id}")
+        kb.button(text="✅ Получил товар", callback_data=f"mbuyerok_{lot_id}")
+        kb.button(text="⚠️ Открыть спор", callback_data=f"mdispute_{lot_id}")
         kb.adjust(1)
         await msg.answer(
-            f"✅ <b>Оплачено!</b>\n💰 {amount_paid}⭐{disc_text}\n\n"
-            f"🔒 Эскроу\n⏰ {MARKET_ESCROW_HOURS}ч",
+            f"✅ <b>Оплачено!</b>\n"
+            f"📦 {lot['title']}\n"
+            f"💰 {amount_paid}⭐{disc_text}\n\n"
+            f"🔒 Деньги на эскроу — продавец получит после подтверждения\n"
+            f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
+            f"Когда получите товар — нажмите <b>✅ Получил товар</b>",
             reply_markup=kb.as_markup(), parse_mode="HTML")
+        # Уведомление продавцу
         bname=f"@{msg.from_user.username}" if msg.from_user.username else f"ID:{uid}"
         skb=InlineKeyboardBuilder()
-        skb.button(text="✅ Передал", callback_data=f"msellerok_{lot_id}")
+        skb.button(text="✅ Я передал товар", callback_data=f"msellerok_{lot_id}")
         try: await bot.send_message(lot["seller_uid"],
-            f"🛒 <b>Покупка #{lot_id}!</b>\n📦 {lot['title']}\n👤 {bname}\n⏰ {MARKET_ESCROW_HOURS}ч",
+            f"🛒 <b>Ваш лот куплен!</b>\n\n"
+            f"📦 {lot['title']}\n"
+            f"💰 {lot['price']}⭐\n"
+            f"👤 Покупатель: {bname}\n\n"
+            f"⏰ Передайте товар в течение {MARKET_ESCROW_HOURS} часов\n"
+            f"После передачи нажмите <b>✅ Я передал товар</b>",
             reply_markup=skb.as_markup(), parse_mode="HTML")
         except: pass
+        # Уведомление админу
+        commission = int(lot['price'] * MARKET_COMMISSION)
+        payout = lot['price'] - commission
+        await notify_admins(
+            f"🛒 <b>ПРОДАЖА НА МАРКЕТЕ</b>\n"
+            f"📦 {lot['title']}\n"
+            f"💰 Цена: {lot['price']}⭐\n"
+            f"📊 Комиссия: {commission}⭐ (твой доход)\n"
+            f"💸 Продавцу: {payout}⭐\n"
+            f"👤 Продавец: <code>{lot['seller_uid']}</code>\n"
+            f"👤 Покупатель: {bname} (<code>{uid}</code>)")
 
     elif parts[0]=="promote" and len(parts)>=2:
         lot_id=int(parts[1])
         market_promote_lot(lot_id)
         log_action(uid,"promote",str(lot_id))
-        await msg.answer("🔥 <b>Лот продвинут на 24ч!</b>", parse_mode="HTML")
+        await msg.answer("🔥 <b>Лот продвинут на 24 часа!</b>", parse_mode="HTML")
+        await notify_admins(f"🔥 <b>ПРОДВИЖЕНИЕ</b>\n👤 {display}\n📦 Лот #{lot_id}\n⭐ {MARKET_PROMOTE_PRICE}⭐")
 
-    elif parts[0]=="listing" and len(parts)>=3:
+    elif parts[0]=="listing" and len(parts)>=2:
         lot_id=int(parts[1])
         conn=sqlite3.connect(DB); c=conn.cursor()
         c.execute("UPDATE market SET listing_paid=1 WHERE id=?", (lot_id,))
         conn.commit(); conn.close()
         log_action(uid,"listing_paid",str(lot_id))
-        await msg.answer("✅ <b>Лот оплачен!</b>\nОжидайте модерации", parse_mode="HTML")
+        await msg.answer("✅ <b>Лот оплачен!</b>\nОжидайте модерации администратором", parse_mode="HTML")
+        # Уведомление админу на модерацию
         lot=market_get_lot(lot_id)
         if lot:
             akb=InlineKeyboardBuilder()
-            akb.button(text="✅",callback_data=f"mmod_ok_{lot_id}")
-            akb.button(text="❌",callback_data=f"mmod_no_{lot_id}")
-            fast="⚡ БЫСТРАЯ! " if lot.get("fast_mod") else ""
+            akb.button(text="✅ Одобрить",callback_data=f"mmod_ok_{lot_id}")
+            akb.button(text="❌ Отклонить",callback_data=f"mmod_no_{lot_id}")
+            akb.adjust(2)
+            fast="⚡ СРОЧНО! " if lot.get("fast_mod") else ""
             nft="💎 NFT " if lot.get("is_nft") else ""
-            await notify_admins(f"📦 {fast}{nft}Лот #{lot_id} — {lot['title']} ({lot['price']}⭐)", kb=akb.as_markup())
+            seller = get_user(lot['seller_uid'])
+            sname = f"@{seller.get('uname','')}" if seller.get('uname') else f"ID:{lot['seller_uid']}"
+            await notify_admins(
+                f"📦 <b>НОВЫЙ ЛОТ НА МОДЕРАЦИИ</b>\n\n"
+                f"{fast}{nft}#{lot_id}\n"
+                f"📌 {lot['title']}\n"
+                f"📝 {lot.get('description','')}\n"
+                f"💰 {lot['price']}⭐\n"
+                f"👤 {sname}\n"
+                f"💳 Размещение оплачено ✅",
+                kb=akb.as_markup())
 
     elif parts[0]=="fastmod" and len(parts)>=2:
         lot_id=int(parts[1])
         market_set_fast_mod(lot_id)
         log_action(uid,"fast_mod",str(lot_id))
-        await msg.answer("⚡ <b>Быстрая модерация активна!</b>", parse_mode="HTML")
+        await msg.answer("⚡ <b>Быстрая модерация активирована!</b>\nАдмин получил уведомление", parse_mode="HTML")
         lot=market_get_lot(lot_id)
-        if lot: await notify_admins(f"⚡ СРОЧНО! Лот #{lot_id} — {lot['title']} ({lot['price']}⭐)")
+        if lot:
+            akb=InlineKeyboardBuilder()
+            akb.button(text="✅ Одобрить",callback_data=f"mmod_ok_{lot_id}")
+            akb.button(text="❌ Отклонить",callback_data=f"mmod_no_{lot_id}")
+            akb.adjust(2)
+            await notify_admins(
+                f"⚡⚡⚡ <b>СРОЧНАЯ МОДЕРАЦИЯ!</b>\n\n"
+                f"#{lot_id} — {lot['title']}\n"
+                f"💰 {lot['price']}⭐\n"
+                f"👤 <code>{lot['seller_uid']}</code>",
+                kb=akb.as_markup())
+        await notify_admins(f"⚡ Быстрая модерация: {MARKET_FAST_MOD_PRICE}⭐ от {display}")
 
     elif parts[0]=="mslot":
         market_add_slot(uid)
         log_action(uid,"buy_slot","")
-        await msg.answer("📦 <b>+1 слот маркета!</b>", parse_mode="HTML")
+        await msg.answer("📦 <b>+1 слот маркета!</b>\nТеперь можете размещать больше лотов", parse_mode="HTML")
+        await notify_admins(f"📦 <b>ПОКУПКА СЛОТА</b>\n👤 {display}\n⭐ {MARKET_EXTRA_SLOT_PRICE}⭐")
 
     elif parts[0]=="wheel":
         prize, ptype = wheel_spin(uid)
         log_action(uid,"wheel_paid",prize)
+        # Анимация
+        for e in ["🎡","🔄","💫","🌟","✨","🎯"]:
+            try: await bot.send_message(uid, f"{e} Крутим...")
+            except: break
+            await asyncio.sleep(0.3)
         await msg.answer(f"🎡 <b>{prize}</b>", parse_mode="HTML")
+        await notify_admins(f"🎡 <b>КОЛЕСО</b>\n👤 {display}\n🎁 {prize}\n⭐ {WHEEL_EXTRA_PRICE}⭐")
 
     elif parts[0]=="lootbox":
         prize, ptype = lootbox_open(uid)
         log_action(uid,"lootbox",prize)
+        # Анимация
         for e in ["📦","🔍","🎰","🌟","✨"]:
-            try: await bot.send_message(uid, f"{e}"); await asyncio.sleep(0.3)
+            try: await bot.send_message(uid, f"{e}")
             except: break
+            await asyncio.sleep(0.3)
         await msg.answer(f"🎉 <b>{prize}</b>", parse_mode="HTML")
+        await notify_admins(f"📦 <b>ЛУТБОКС</b>\n👤 {display}\n🎁 {prize}\n⭐ {LOOTBOX_PRICE}⭐")
 
 # ═══════════════════════ ВЫВОДЫ ═══════════════════════
 
@@ -4095,14 +4285,23 @@ async def handle_text(msg: Message):
             payload=f"gift_{plan}_{tuid}_{uid}",provider_token="",currency="XTR",
             prices=[LabeledPrice(label=p["label"],amount=p["stars"])]); return
 
-    if action=="shop_custom_amount":
+       if action=="shop_custom_amount":
         user_states.pop(uid,None)
         try: count=int(msg.text.strip()); assert 1<=count<=1000
         except: await msg.answer("❌ 1-1000"); return
         total=count*SEARCH_PRICE_STARS
-        await bot.send_invoice(uid,title=f"🔍 +{count}",description=f"{count} поисков",
-            payload=f"searches_{count}_{uid}",provider_token="",currency="XTR",
-            prices=[LabeledPrice(label=f"+{count}",amount=total)]); return
+        bal=get_balance(uid)
+        kb=InlineKeyboardBuilder()
+        if bal>=total:
+            kb.button(text=f"💰 С баланса ({total}⭐)", callback_data=f"paybal_searches_{count}")
+        kb.button(text=f"⭐ Telegram Stars ({total}⭐)", callback_data=f"paystars_searches_{count}")
+        kb.button(text="❌ Отмена", callback_data="cmd_shop")
+        kb.adjust(1)
+        await msg.answer(
+            f"🔍 <b>{count} поисков = {total}⭐</b>\n\n"
+            f"💰 Баланс: <code>{bal:.1f}⭐</code>\n\n"
+            f"Выберите способ оплаты:",
+            reply_markup=kb.as_markup(), parse_mode="HTML"); return
 
     # ─── АДМИНСКИЕ СОСТОЯНИЯ ───
     if action=="admin_broadcast_text":
