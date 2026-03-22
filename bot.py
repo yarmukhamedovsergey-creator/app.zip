@@ -1738,7 +1738,7 @@ def market_get_active_lots(limit=20, nft_only=False):
     if nft_only:
         c.execute("SELECT id,seller_uid,mtype,title,description,price,created,promoted,is_nft,fragment_url FROM market WHERE status='active' AND is_nft=1 ORDER BY promoted DESC, id DESC LIMIT ?", (limit,))
     else:
-        c.execute("SELECT id,seller_uid,ntype,title,description,price,created,promoted,is_nft,fragment_url FROM market WHERE status='active' AND is_nft=0 ORDER BY promoted DESC, id DESC LIMIT ?", (limit,))
+        c.execute("SELECT id,seller_uid,mtype,title,description,price,created,promoted,is_nft,fragment_url FROM market WHERE status='active' AND is_nft=0 ORDER BY promoted DESC, id DESC LIMIT ?", (limit,))
     rows = c.fetchall(); conn.close()
     return [{"id":r[0],"seller":r[1],"type":r[2],"title":r[3],"desc":r[4],"price":r[5],
              "created":r[6],"promoted":r[7],"is_nft":r[8],"fragment_url":r[9]} for r in rows]
