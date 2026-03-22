@@ -4285,7 +4285,7 @@ async def handle_text(msg: Message):
             payload=f"gift_{plan}_{tuid}_{uid}",provider_token="",currency="XTR",
             prices=[LabeledPrice(label=p["label"],amount=p["stars"])]); return
 
-       if action=="shop_custom_amount":
+    if action=="shop_custom_amount":
         user_states.pop(uid,None)
         try: count=int(msg.text.strip()); assert 1<=count<=1000
         except: await msg.answer("❌ 1-1000"); return
