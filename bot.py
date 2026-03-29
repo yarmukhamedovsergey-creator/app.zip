@@ -36,7 +36,8 @@ try:
 except ImportError:
     HAS_TELETHON = False
 
-# ======================= НАСТРОЙКИ =======================
+# ═══════════════════════ НАСТРОЙКИ ═══════════════════════
+
 MAIN_TOKEN = "8325751391:AAHZo7xC6TO4ldKEEqM--Ik9EXaszULnwWc"
 ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "pdwqb"
@@ -54,9 +55,9 @@ ACCOUNTS = [
 FREE_SEARCHES = 3
 FREE_COUNT = 1
 PREMIUM_COUNT = 3
-VIP_COUNT = 5 # = НОВОЕ =
+VIP_COUNT = 5  # ═ НОВОЕ ═
 PREMIUM_SEARCHES_LIMIT = 7
-VIP_SEARCHES_LIMIT = 15 # = НОВОЕ =
+VIP_SEARCHES_LIMIT = 15  # ═ НОВОЕ ═
 REF_BONUS = 2
 REFERRAL_COMMISSION = 0.04
 SEARCH_COOLDOWN = 10
@@ -70,26 +71,26 @@ MONITOR_MAX_PREMIUM = 5
 RATE_SEARCH_PER_MIN = 3
 RATE_CHECK_PER_HOUR = 50
 TEMP_BAN_MINUTES = 30
-STAR_TO_RUB = 1.25 # = НОВОЕ: курс звезды к рублям =
+STAR_TO_RUB = 1.25  # ═ НОВОЕ: курс звезды к рублям ═
 
 TIKTOK_COMMENT_TEXT = "@SworuserN_bot бесплатные звёзды, найти юз, оценить юз"
-TIKTOK_REWARD_GIFT = "🎁 Мишка (15⭐)"
+TIKTOK_REWARD_GIFT = "🧸 Мишка (15⭐)"
 TIKTOK_SCREENSHOTS_NEEDED = 35
 TIKTOK_DAILY_LIMIT = 2
 REMINDER_DAYS = [3, 1]
 REMINDER_CHECK_INTERVAL = 3600
 
 PRICES = {
-    "1d": {"days": 1, "stars": 36, "rub": 45, "label": "1 день"},
-    "3d": {"days": 3, "stars": 90, "rub": 120, "label": "3 дня"},
-    "7d": {"days": 7, "stars": 180, "rub": 250, "label": "7 дней"},
-    "1m": {"days": 30, "stars": 585, "rub": 800, "label": "1 месяц"},
-    "3m": {"days": 90, "stars": 1800, "rub": 2200, "label": "3 месяца"},
-    "1y": {"days": 365, "stars": 5850, "rub": 8000, "label": "1 год"},
+    "1d":      {"days": 1,     "stars": 36,   "rub": 45,    "label": "1 день"},
+    "3d":      {"days": 3,     "stars": 90,   "rub": 120,   "label": "3 дня"},
+    "7d":      {"days": 7,     "stars": 180,  "rub": 250,   "label": "7 дней"},
+    "1m":      {"days": 30,    "stars": 585,  "rub": 800,   "label": "1 месяц"},
+    "3m":      {"days": 90,    "stars": 1800, "rub": 2200,  "label": "3 месяца"},
+    "1y":      {"days": 365,   "stars": 5850, "rub": 8000,  "label": "1 год"},
     "forever": {"days": 99999, "stars": 8999, "rub": 11999, "label": "Навсегда"},
 }
 
-#=== НОВОЕ: VIP ЦЕНЫ ===
+# ═══ НОВОЕ: VIP ЦЕНЫ ═══
 # VIP = 50% от Premium (апгрейд)
 VIP_PRICES = {}
 for _k, _p in PRICES.items():
@@ -111,7 +112,8 @@ for _k, _p in PRICES.items():
 
 DONATE_OPTIONS = [20, 50, 100, 200, 300, 500, 1000]
 
-# ======================= МАРКЕТПЛЕЙС =======================
+# ═══════════════════════ МАРКЕТПЛЕЙС ═══════════════════════
+
 MARKET_COMMISSION = 0.10
 MARKET_LISTING_FEE = 5
 MARKET_NFT_LISTING_FEE = 25
@@ -130,9 +132,10 @@ WHEEL_EXTRA_PRICE = 10
 WITHDRAW_MIN = 50
 WITHDRAW_FEE_PERCENT = 5
 
-#======================= INIT =======================
+# ═══════════════════════ INIT ═══════════════════════
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__) # ИСПРАВЛЕНО: было (name), должно быть (__name__)
+logger = logging.getLogger(__name__)
 bot = Bot(token=MAIN_TOKEN)
 dp = Dispatcher()
 user_states = {}
@@ -147,18 +150,15 @@ _fragment_cache_ttl = 600
 BOT_CONFIG_FILE = "bot_config.json"
 
 async def edit_msg(msg, text, kb=None):
-    try: 
-        await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
-    except: 
-        pass
+    try: await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except: pass
 
 async def answer_cb(cb, text=None, show_alert=False):
-    try: 
-        await cb.answer(text, show_alert=show_alert)
-    except: 
-        pass
+    try: await cb.answer(text, show_alert=show_alert)
+    except: pass
 
-# ======================= КОНФИГ =======================
+# ═══════════════════════ КОНФИГ ═══════════════════════
+
 DEFAULT_CONFIG = {
     "free_searches": 3, "free_count": 1, "premium_count": 3, "vip_count": 5,
     "premium_searches_limit": 7, "vip_searches_limit": 15,
@@ -167,7 +167,7 @@ DEFAULT_CONFIG = {
     "required_channels": ["SwordUsers"],
     "text_welcome": "", "text_found": "", "text_empty": "",
     "text_profile_header": "", "text_shop_header": "",
-    "btn_tiktok": True, "btn_monitor": True,
+    "btn_tiktok": True, "btn_roulette": True, "btn_monitor": True,
     "btn_shop": True, "btn_support": True, "btn_referral": True,
     "mode_default": True, "mode_beautiful": True, "mode_meaningful": True,
     "mode_anyword": True, "mode_mat": True, "mode_telegram": True,
@@ -184,8 +184,7 @@ def load_bot_config():
         try:
             with open(BOT_CONFIG_FILE, "r") as f:
                 config.update(json.load(f))
-        except: 
-            pass
+        except: pass
     return config
 
 def save_bot_config(config):
@@ -197,7 +196,6 @@ def apply_config(config):
     global PREMIUM_SEARCHES_LIMIT, VIP_SEARCHES_LIMIT
     global REF_BONUS, SEARCH_COOLDOWN, SEARCH_PRICE_STARS, MIN_WITHDRAW
     global PAY_CONTACT, REQUIRED_CHANNELS
-    
     FREE_SEARCHES = config.get("free_searches", 3)
     FREE_COUNT = config.get("free_count", 1)
     PREMIUM_COUNT = config.get("premium_count", 3)
@@ -210,7 +208,6 @@ def apply_config(config):
     MIN_WITHDRAW = config.get("min_withdraw", 50)
     PAY_CONTACT = config.get("pay_contact", "Soveqk")
     REQUIRED_CHANNELS = config.get("required_channels", ["SwordUsers"])
-    
     for key in SEARCH_MODES:
         SEARCH_MODES[key]["premium"] = config.get(f"mode_{key}_premium", SEARCH_MODES[key].get("_default_premium", False))
         SEARCH_MODES[key]["disabled"] = not config.get(f"mode_{key}", True)
@@ -281,12 +278,12 @@ class AccountPool:
         self.window_start = {}
         self.flood_times = {}
         self.adaptive_delay = {}
-        self.BASE_DELAY = 1.5
-        self.MAX_DELAY = 12.0
-        self.BUDGET_PER_MIN = 20  # увеличим пропускную способность
-        self.MAX_ERROR_STREAK = 5
-        self.FLOOD_REST_TIME = 180
-        self.WARMUP_EXTRA_DELAY = 5.0
+        self.BASE_DELAY = 2.0
+        self.MAX_DELAY = 20.0
+        self.BUDGET_PER_MIN = 12
+        self.MAX_ERROR_STREAK = 3
+        self.FLOOD_REST_TIME = 600
+        self.WARMUP_EXTRA_DELAY = 10.0
         self.total_checks = 0
         self.caught_by_botapi = 0
         self.caught_by_recheck = 0
@@ -369,50 +366,37 @@ class AccountPool:
                 logger.info(f"🔄 #{i+1} reconnected")
         except Exception as e: logger.error(f"Reconnect #{i+1}: {e}")
 
-    def _best(self, uid=None, force=False):
-        now = time.time(); cands = []
+    def _best(self, uid=None):
+        now=time.time(); cands=[]
         for i in range(len(self.clients)):
-            st = self.status.get(i, 'dead')
-            if st not in ('healthy', 'warming'): continue
-            if now - self.window_start.get(i, 0) > 60:
-                self.req_count[i] = 0; self.window_start[i] = now
-            b = self.BUDGET_PER_MIN
-            if not force and self.req_count.get(i, 0) >= b: continue
-            d = self.adaptive_delay.get(i, self.BASE_DELAY)
-            if st == 'warming': d += self.WARMUP_EXTRA_DELAY
-            if not force and now - self.last_used.get(i, 0) < d: continue
-            sc = self.error_streak.get(i, 0)*20 + self.req_count.get(i, 0)*2
-            if st == 'warming': sc += 50
-            if uid and uid in self.active_users.get(i, set()): sc -= 25
-            cands.append((i, sc))
-        if not cands and force:
-            for i in range(len(self.clients)):
-                if self.status.get(i) not in ('healthy', 'warming'): continue
-                cands.append((i, 999))
+            st=self.status.get(i,'dead')
+            if st=='dead': continue
+            if st=='cooldown' and now<self.cooldown_until.get(i,0): continue
+            if now-self.window_start.get(i,0)>60: self.req_count[i]=0; self.window_start[i]=now
+            b=self.BUDGET_PER_MIN
+            alive=sum(1 for j in range(len(self.clients)) if self.status.get(j) in ('healthy','warming'))
+            if alive<=2: b=max(5,b//2)
+            if self.req_count.get(i,0)>=b: continue
+            d=self.adaptive_delay.get(i,self.BASE_DELAY)
+            if st=='warming': d+=self.WARMUP_EXTRA_DELAY
+            if now-self.last_used.get(i,0)<d: continue
+            sc=self.error_streak.get(i,0)*20+self.req_count.get(i,0)*2
+            if st=='warming': sc+=50
+            if uid and uid in self.active_users.get(i,set()): sc-=25
+            cands.append((i,sc))
         if not cands: return None
-        cands.sort(key=lambda x: x[1])
-        return random.choice(cands[:min(3, len(cands))])[0]
+        cands.sort(key=lambda x:x[1])
+        return random.choice(cands[:min(3,len(cands))])[0]
 
-    async def _acquire(self, uid=None, timeout=60):
-        dl = time.time() + timeout; a = 0
-        while time.time() < dl:
+    async def _acquire(self, uid=None, timeout=45):
+        dl=time.time()+timeout; a=0
+        while time.time()<dl:
             async with self.lock:
-                i = self._best(uid)
+                i=self._best(uid)
                 if i is not None:
-                    self.last_used[i] = time.time()
-                    self.req_count[i] = self.req_count.get(i, 0) + 1
-                    self.total_checks += 1
-                    return i, self.clients[i]
-            if time.time() > dl - timeout/2:
-                async with self.lock:
-                    i = self._best(uid, force=True)
-                    if i is not None:
-                        self.last_used[i] = time.time()
-                        self.req_count[i] = self.req_count.get(i, 0) + 1
-                        self.total_checks += 1
-                        return i, self.clients[i]
-            await asyncio.sleep(min(0.3*(1.2**a), 3) + random.uniform(0, 0.5))
-            a += 1
+                    self.last_used[i]=time.time(); self.req_count[i]=self.req_count.get(i,0)+1
+                    self.total_checks+=1; return i, self.clients[i]
+            await asyncio.sleep(min(0.3*(1.2**a),3)+random.uniform(0,0.5)); a+=1
         return None, None
 
     def _ok(self, i):
@@ -956,159 +940,68 @@ def evaluate_username(u):
 # ═══════════════════════ ПОИСК v5 ═══════════════════════
 
 async def do_search(count, gen_func, msg, mode_name, uid):
-    found = []; attempts = 0; start = time.time()
-    last_update = 0; checked = set()
-    errors = 0; fallback = not pool.has_sessions()
-    warned_slow = False; skip_streak = 0
-
+    found=[]; attempts=0; start=time.time(); last_update=0
+    checked=set(); errors=0; fallback=not pool.has_sessions()
+    warned_slow=False
+    config=load_bot_config()
+    
     if fallback:
-        await edit_msg(msg,
-            f"⚠️ <b>{mode_name}</b>\n\n"
-            f"Сессии недоступны — Bot API режим\n"
-            f"(медленнее обычного)")
-
+        await edit_msg(msg, f"⚠️ <b>{mode_name}</b>\n\n⏳ Все сессии заняты — поиск будет дольше обычного...")
+    
     try:
-        while len(found) < count and attempts < 2000:
-            u = None
+        while len(found)<count and attempts<1500:
+            u=None
             for _ in range(30):
-                c = gen_func()
-                if (len(c) >= 5
-                        and re.match(
-                            r'^[a-zA-Z][a-zA-Z0-9_]*$', c)
-                        and c.lower() not in checked
-                        and is_valid_username(c)):
-                    u = c.lower(); break
-
-            if not u: attempts += 1; continue
-            checked.add(u); attempts += 1
+                c=gen_func()
+                if len(c)>=5 and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$',c) and c.lower() not in checked and is_valid_username(c):
+                    u=c.lower(); break
+            if not u: attempts+=1; continue
+            checked.add(u); attempts+=1
 
             if fallback:
-                b = await pool._botapi(u)
-                if b != "taken":
-                    fr = await check_fragment(u)
-                    found.append({
-                        "username": u,
-                        "fragment": fr
-                    })
-                    save_history(
-                        uid, u, mode_name, len(u))
-                await asyncio.sleep(1.5)
-
+                b=await pool._botapi(u)
+                if b!="taken":
+                    fr=await check_fragment(u)
+                    found.append({"username":u,"fragment":fr})
+                    save_history(uid,u,mode_name,len(u))
+                await asyncio.sleep(2)  # ═ МЕДЛЕННЕЕ чтобы не ломать ═
             else:
-                r = await pool.check(u, uid)
-
-                if r == "taken":
-                    errors = 0
-                    skip_streak = 0
-                    await asyncio.sleep(0.2)
-                    continue
-
-                if r == "skip":
-                    errors += 1
-                    skip_streak += 1
-
-                    # Первые 3 skip — просто ждём
-                    if skip_streak <= 3:
-                        await asyncio.sleep(2)
-                        continue
-
-                    # 4-8 skip подряд — предупреждаем
-                    if skip_streak <= 8 and not warned_slow:
-                        warned_slow = True
-                        ps = pool.stats()
-                        await edit_msg(msg,
-                            f"⏳ <b>{mode_name}</b>\n\n"
-                            f"🔄 Сессии перегружены, "
-                            f"жду...\n\n"
-                            f"🔢 Попыток: "
-                            f"<code>{attempts}</code>\n"
-                            f"✅ Найдено: "
-                            f"<code>{len(found)}"
-                            f"/{count}</code>\n"
-                            f"🟢 Живых: "
-                            f"{ps['active']}")
-                        await asyncio.sleep(3)
-                        continue
-
-                    # 9+ skip — переходим в fallback
-                    if skip_streak > 8:
-                        fallback = True
-                        skip_streak = 0
-                        errors = 0
+                r=await pool.check(u,uid)
+                if r=="taken": errors=0; await asyncio.sleep(0.2); continue
+                if r=="skip":
+                    errors+=1
+                    if errors>=3 and not warned_slow:
+                        warned_slow=True
+                        fallback=True
                         await edit_msg(msg,
                             f"⚠️ <b>{mode_name}</b>\n\n"
-                            f"Сессии недоступны — "
-                            f"переключаюсь на Bot API\n\n"
-                            f"🔢 Попыток: "
-                            f"<code>{attempts}</code>\n"
-                            f"✅ Найдено: "
-                            f"<code>{len(found)}"
-                            f"/{count}</code>")
-                        await asyncio.sleep(2)
-                        continue
+                            f"⏳ Все сессии заняты — поиск будет дольше обычного...\n\n"
+                            f"📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>")
+                        errors=0
+                    await asyncio.sleep(2); continue  # ═ МЕДЛЕННЕЕ ═
+                errors=0
+                if r=="maybe_free":
+                    final=await pool.strong_check(u,uid)
+                    if final=="taken": await asyncio.sleep(0.5); continue  # ═ чуть медленнее ═
+                    if final=="skip": await asyncio.sleep(2); continue  # ═ МЕДЛЕННЕЕ ═
+                    if final=="free":
+                        fr=await check_fragment(u)
+                        if fr!="fragment":
+                            found.append({"username":u,"fragment":fr})
+                            save_history(uid,u,mode_name,len(u))
+                    await asyncio.sleep(0.8)  # ═ чуть медленнее ═
 
-                    await asyncio.sleep(2)
-                    continue
-
-                # Если дошли сюда — сессия работает
-                errors = 0
-                skip_streak = 0
-                warned_slow = False
-
-                if r == "maybe_free":
-                    final = await pool.strong_check(
-                        u, uid)
-                    if final == "taken":
-                        await asyncio.sleep(0.5)
-                        continue
-                    if final == "skip":
-                        skip_streak += 1
-                        await asyncio.sleep(1.5)
-                        continue
-                    if final == "free":
-                        fr = await check_fragment(u)
-                        if fr != "fragment":
-                            found.append({
-                                "username": u,
-                                "fragment": fr
-                            })
-                            save_history(
-                                uid, u,
-                                mode_name, len(u))
-                        await asyncio.sleep(0.8)
-
-            # Обновление статуса
-            now = time.time()
-            if now - last_update > 2.0:
-                last_update = now
-                el = int(now - start)
-                ps = pool.stats()
-
+            now=time.time()
+            if now-last_update>2.0:
+                last_update=now; el=int(now-start)
                 if fallback:
-                    sl = "⚠️ Bot API режим"
+                    sl="⚠️ Сессии заняты"
                 else:
-                    sl = (
-                        f"🟢{ps['active']-ps.get('warming',0)} "
-                        f"🟡{ps.get('warming',0)} "
-                        f"🟠{ps.get('cooldown',0)} "
-                        f"🔴{ps.get('dead',0)}"
-                    )
-
-                await edit_msg(msg,
-                    f"🔍 <b>{mode_name}</b>\n\n"
-                    f"🔢 Проверено: "
-                    f"<code>{attempts}</code>\n"
-                    f"✅ Найдено: "
-                    f"<code>{len(found)}"
-                    f"/{count}</code>\n"
-                    f"🔑 {sl}\n"
-                    f"⏱ {el}с")
-
-        return found, {
-            "attempts": attempts,
-            "elapsed": int(time.time() - start)
-        }
-
+                    ps=pool.stats()
+                    sl=f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
+                slow_txt = "\n⏳ Поиск дольше обычного..." if (warned_slow or fallback) else ""
+                await edit_msg(msg,f"🔎 <b>{mode_name}</b>\n\n📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>\n🔄 {sl}\n⏱ {el}с{slow_txt}")
+        return found, {"attempts":attempts,"elapsed":int(time.time()-start)}
     finally:
         pool.remove_user(uid)
 
@@ -1823,14 +1716,6 @@ def find_user(inp):
     r = c.fetchone(); conn.close()
     return r[0] if r else None
 
-def load_saved_sessions():
-    try:
-        if os.path.exists("added_sessions.json"):
-            with open("added_sessions.json") as f:
-                return json.load(f)
-    except: pass
-    return []
-
 # ═══════════════════════ МАРКЕТПЛЕЙС ФУНКЦИИ ═══════════════════════
 
 def market_create_lot(seller_uid, mtype, title, description, price, is_nft=0, fragment_url=""):
@@ -1985,93 +1870,33 @@ def lootbox_can_open(uid):
 
 def lootbox_open(uid):
     roll = random.randint(1, 100)
-    
-    # Убраны premium (5%) и vip (10%)
-    # Перераспределяем проценты
-    if roll <= 5:  # было 35% звёзды, теперь 40%
-        prize_type = "stars"
-        amount = random.choice([5, 10])
+    if roll <= 5:
+        prize_type = "premium"; days = random.choice([3, 7])
+        give_subscription(uid, days)
+        prize = f"💎 Premium {days} дней!"
+    elif roll <= 15:
+        prize_type = "vip"; days = random.choice([1, 3])
+        give_vip(uid, days)
+        prize = f"🌟 VIP {days} дней!"
+    elif roll <= 35:
+        prize_type = "stars"; amount = random.choice([5, 10, 15, 20, 25, 50])
         add_balance(uid, amount)
-        prize = f"+⭐ {amount} звёзд!"
-    elif roll <= 70:  # было 25% поиски, теперь 30%
-        prize_type = "searches"
-        count = random.choice([2, 3, 5, 7, 10])
+        prize = f"⭐ {amount} звёзд!"
+    elif roll <= 60:
+        prize_type = "searches"; count = random.choice([2, 3, 5, 7, 10])
         add_extra_searches(uid, count)
         prize = f"🔍 {count} поисков!"
-    elif roll <= 90:  # было 20% слот, теперь 20%
-        prize_type = "slot"
-        market_add_slot(uid)
-        prize = f"🎰 +1 слот маркета!"
-    else:  # 10% — утешительный
-        prize_type = "emoji"
-        prize = random.choice([
-            "🎭 Повезёт в следующий раз!",
-            "🎪 Почти!",
-            "🎠 Попробуй ещё!"
-        ])
-    
-    conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute(
-        "INSERT INTO lootbox_history "
-        "(uid,prize,prize_type,created) VALUES (?,?,?,?)",
-        (uid, prize, prize_type,
-         datetime.now().strftime("%Y-%m-%d %H:%M")))
-    conn.commit(); conn.close()
-    
-    return prize, prize_type
-
-
-@dp.callback_query(F.data == "market_lootbox")
-async def cb_lootbox(cb: CallbackQuery):
-    uid = cb.from_user.id; await answer_cb(cb)
-    can = lootbox_can_open(uid)
-    
-    text = (
-        f"🎰 <b>Лутбокс</b>\n"
-        f"{'='*20}\n\n"
-        f"💰 Цена: <code>{LOOTBOX_PRICE}⭐</code>\n"
-        f"⏰ КД: 1 час\n\n"
-        f"🎁 <b>Возможные призы:</b>\n"
-        f"  ⭐ Звёзды 5-50 (5%)\n"
-        f"  🔍 Поиски 2-10 (30%)\n"
-        f"  🎰 Слот маркета (20%)\n"
-        f"  🎭 Утешительный (10%)\n\n"
-    )
-    
-    if not can:
-        # Считаем когда можно
-        conn = sqlite3.connect(DB); c = conn.cursor()
-        c.execute(
-            "SELECT created FROM lootbox_history "
-            "WHERE uid=? ORDER BY id DESC LIMIT 1",
-            (uid,))
-        row = c.fetchone(); conn.close()
-        if row:
-            try:
-                last = datetime.strptime(
-                    row[0], "%Y-%m-%d %H:%M")
-                next_time = last + timedelta(
-                    seconds=LOOTBOX_COOLDOWN)
-                remaining = int(
-                    (next_time - datetime.now()
-                     ).total_seconds() / 60)
-                text += f"⏰ Следующий через: {remaining} мин"
-            except: pass
-    
-    kb = InlineKeyboardBuilder()
-    if can:
-        kb.button(
-            text=f"🎰 Открыть ({LOOTBOX_PRICE}⭐)",
-            callback_data="lootbox_open")
+    elif roll <= 80:
+        prize_type = "slot"; market_add_slot(uid)
+        prize = f"📦 +1 слот маркета!"
     else:
-        kb.button(
-            text="⏰ Ещё не готов",
-            callback_data="market_lootbox")
-    kb.button(text="🔙 Маркет",
-              callback_data="cmd_market")
-    kb.adjust(1)
-    
-    await edit_msg(cb.message, text, kb.as_markup())
+        prize_type = "emoji"
+        prize = random.choice(["🧸 Плюшевый мишка!", "🃏 Джокер!", "🎭 Маска!", "🎉 Ура!"])
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("INSERT INTO lootbox_history (uid,prize,prize_type,created) VALUES (?,?,?,?)",
+              (uid, prize, prize_type, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit(); conn.close()
+    return prize, prize_type
 
 # ═══ КОЛЕСО ФОРТУНЫ ═══
 
@@ -2083,35 +1908,34 @@ def wheel_free_spins_today(uid):
     return cnt
 
 def wheel_spin(uid):
-    # Только поиски — никаких звёзд
     prizes = [
-        (40, "searches", 1,  "🔍 +1 поиск"),
-        (30, "searches", 2,  "🔍 +2 поиска"),
-        (20, "searches", 5,  "🔍 +5 поисков"),
-        (8,  "searches", 10, "🔍 +10 поисков"),
-        (2,  "searches", 20, "🔍 +20 поисков!!!"),
+        (30, "stars", 5, "⭐ 5 звёзд"),
+        (20, "stars", 10, "⭐ 10 звёзд"),
+        (15, "searches", 2, "🔍 2 поиска"),
+        (10, "searches", 5, "🔍 5 поисков"),
+        (8, "stars", 25, "⭐ 25 звёзд"),
+        (5, "premium", 1, "💎 1 день Premium"),
+        (5, "stars", 50, "⭐ 50 звёзд"),
+        (3, "vip", 1, "🌟 1 день VIP"),
+        (2, "premium", 3, "💎 3 дня Premium"),
+        (1, "stars", 100, "⭐ 100 звёзд !!!"),
+        (1, "premium", 7, "💎 7 дней PREMIUM!!!")
     ]
-    
-    roll = random.randint(1, 100)
-    cumulative = 0
-    
+    roll = random.randint(1, 100); cumulative = 0
     for chance, ptype, value, text in prizes:
         cumulative += chance
         if roll <= cumulative:
-            add_extra_searches(uid, value)
-            conn = sqlite3.connect(DB)
-            c = conn.cursor()
-            c.execute(
-                "INSERT INTO wheel_spins "
-                "(uid,prize,created) VALUES (?,?,?)",
-                (uid, text,
-                 datetime.now().strftime(
-                     "%Y-%m-%d %H:%M")))
+            if ptype == "stars": add_balance(uid, value)
+            elif ptype == "searches": add_extra_searches(uid, value)
+            elif ptype == "premium": give_subscription(uid, value)
+            elif ptype == "vip": give_vip(uid, value)
+            conn = sqlite3.connect(DB); c = conn.cursor()
+            c.execute("INSERT INTO wheel_spins (uid,prize,created) VALUES (?,?,?)",
+                      (uid, text, datetime.now().strftime("%Y-%m-%d %H:%M")))
             conn.commit(); conn.close()
             return text, ptype
-    
-    return "🎭 Попробуй ещё!", "nothing"
-    
+    return "🧸 Утешительный приз!", "nothing"
+
 # ═══ ПРОМОКОДЫ ═══
 
 def create_promocode(code, discount_percent=0, discount_stars=0, max_uses=1,
@@ -2200,258 +2024,28 @@ def exchange_create(uid, offer):
 
 def exchange_accept(eid, partner_uid, partner_offer):
     conn = sqlite3.connect(DB); c = conn.cursor()
-    deadline = (
-        datetime.now() +
-        timedelta(hours=MARKET_ESCROW_HOURS)
-    ).strftime("%Y-%m-%d %H:%M")
-    
-    c.execute(
-        """UPDATE exchanges SET
-           partner_uid=?,
-           partner_offer=?,
-           status='escrow',
-           escrow_deadline=?
-           WHERE id=? AND status='open'
-           AND initiator_uid!=?""",
-        (partner_uid, partner_offer,
-         deadline, eid, partner_uid))
-    changed = c.rowcount
-    
-    if changed > 0:
-        c.execute(
-            """SELECT initiator_uid,
-                      initiator_offer
-               FROM exchanges WHERE id=?""",
-            (eid,))
-        row = c.fetchone()
-        conn.commit(); conn.close()
-        if row:
-            return True, {
-                "initiator_uid": row[0],
-                "initiator_offer": row[1]
-            }
-    
-    conn.commit(); conn.close()
-    return False, None
-    
-    if not ok:
-        await msg.answer(
-            "❌ Обмен уже закрыт или недоступен")
-        return
-    
-    ex = exchange_get(eid)
-    init_uid = ex["initiator_uid"]
-    init_offer = ex["initiator_offer"]
-    
-    # Кнопка подтверждения
-    confirm_kb = InlineKeyboardBuilder()
-    confirm_kb.button(
-        text="✅ Подтверждаю — готов отдать юз",
-        callback_data=f"exconfirm_{eid}")
-    confirm_kb.adjust(1)
-    
-    # Уведомляем инициатора
-    try:
-        await bot.send_message(
-            init_uid,
-            f"🤝 <b>Обмен #{eid} принят!</b>\n"
-            f"{'='*20}\n\n"
-            f"📤 Ты отдаёшь: "
-            f"<code>@{init_offer}</code>\n"
-            f"📥 Ты получишь: "
-            f"<code>@{offer}</code>\n\n"
-            f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
-            f"Когда будешь готов отдать юзернейм — "
-            f"нажми кнопку:",
-            reply_markup=confirm_kb.as_markup(),
-            parse_mode="HTML")
-    except: pass
-    
-    # Сообщение партнёру
-    await msg.answer(
-        f"✅ <b>Обмен #{eid} создан!</b>\n"
-        f"{'='*20}\n\n"
-        f"📥 Ты получишь: "
-        f"<code>@{init_offer}</code>\n"
-        f"📤 Ты отдаёшь: "
-        f"<code>@{offer}</code>\n\n"
-        f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
-        f"Когда будешь готов отдать юзернейм — "
-        f"нажми кнопку:",
-        reply_markup=confirm_kb.as_markup(),
-        parse_mode="HTML")
+    deadline = (datetime.now() + timedelta(hours=MARKET_ESCROW_HOURS)).strftime("%Y-%m-%d %H:%M")
+    c.execute("UPDATE exchanges SET partner_uid=?,partner_offer=?,status='escrow',escrow_deadline=? WHERE id=? AND status='open' AND initiator_uid!=?",
+              (partner_uid, partner_offer, deadline, eid, partner_uid))
+    changed = c.rowcount; conn.commit(); conn.close(); return changed > 0
 
 def exchange_confirm(eid, uid):
     conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute(
-        """SELECT initiator_uid, partner_uid, status,
-                  initiator_confirmed, partner_confirmed,
-                  initiator_offer, partner_offer
-           FROM exchanges WHERE id=?""", (eid,))
+    c.execute("SELECT initiator_uid,partner_uid FROM exchanges WHERE id=?", (eid,))
     row = c.fetchone()
-    if not row:
-        conn.close(); return False, None
-    
-    (init_uid, part_uid, status,
-     init_conf, part_conf,
-     init_offer, part_offer) = row
-    
-    if status not in ('escrow', 'open'):
-        conn.close(); return False, None
-    
-    if uid == init_uid:
-        c.execute(
-            "UPDATE exchanges SET "
-            "initiator_confirmed=1 WHERE id=?",
-            (eid,))
-    elif uid == part_uid:
-        c.execute(
-            "UPDATE exchanges SET "
-            "partner_confirmed=1 WHERE id=?",
-            (eid,))
-    else:
-        conn.close(); return False, None
-    
-    conn.commit()
-    
-    # Проверяем оба в том же соединении
-    c.execute(
-        """SELECT initiator_confirmed,
-                  partner_confirmed,
-                  initiator_uid, partner_uid,
-                  initiator_offer, partner_offer
-           FROM exchanges WHERE id=?""", (eid,))
+    if not row: conn.close(); return False
+    if uid == row[0]: c.execute("UPDATE exchanges SET initiator_confirmed=1 WHERE id=?", (eid,))
+    elif uid == row[1]: c.execute("UPDATE exchanges SET partner_confirmed=1 WHERE id=?", (eid,))
+    else: conn.close(); return False
+    conn.commit(); conn.close()
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT initiator_confirmed,partner_confirmed FROM exchanges WHERE id=?", (eid,))
     r = c.fetchone()
-    
     if r and r[0] and r[1]:
-        c.execute(
-            """UPDATE exchanges SET
-               status='completed',
-               completed_at=?
-               WHERE id=?""",
-            (datetime.now().strftime(
-                "%Y-%m-%d %H:%M"), eid))
-        conn.commit()
-        conn.close()
-        return True, {
-            "initiator_uid": r[2],
-            "partner_uid": r[3],
-            "initiator_offer": r[4],
-            "partner_offer": r[5]
-        }
-    
-    conn.close()
-    return False, None
-
-
-@dp.callback_query(F.data.startswith("exconfirm_"))
-async def cb_exconfirm(cb: CallbackQuery):
-    uid = cb.from_user.id
-    await answer_cb(cb)
-    eid = int(cb.data[10:])
-    
-    completed, ex_data = exchange_confirm(eid, uid)
-    
-    if completed and ex_data:
-        init_uid = ex_data["initiator_uid"]
-        part_uid = ex_data["partner_uid"]
-        init_offer = ex_data["initiator_offer"]
-        part_offer = ex_data["partner_offer"]
-        
-        # Кто что получает:
-        # Инициатор получает юз партнёра
-        # Партнёр получает юз инициатора
-        
-        if uid == init_uid:
-            my_gain = part_offer    # я получаю
-            my_gave = init_offer    # я отдал
-            other_uid = part_uid
-            other_gain = init_offer
-            other_gave = part_offer
-        else:
-            my_gain = init_offer
-            my_gave = part_offer
-            other_uid = init_uid
-            other_gain = part_offer
-            other_gave = init_offer
-        
-        # Сообщение тому кто нажал
-        await edit_msg(cb.message,
-            f"🎉 <b>Обмен #{eid} завершён!</b>\n"
-            f"{'='*20}\n\n"
-            f"📤 Ты отдал: <code>@{my_gave}</code>\n"
-            f"📥 Ты получил: <code>@{my_gain}</code>\n\n"
-            f"🔗 Открыть: "
-            f"<a href='https://t.me/{my_gain}'>"
-            f"@{my_gain}</a>\n"
-            f"💎 Fragment: "
-            f"<a href='https://fragment.com/username/"
-            f"{my_gain}'>Проверить</a>\n\n"
-            f"⚠️ <b>Важно:</b> Юзернейм нужно "
-            f"<b>успеть забрать</b> пока его не заняли!\n"
-            f"Зайди в Настройки Telegram и смени юз.")
-        
-        log_action(uid, "exchange_complete",
-                   f"#{eid} got=@{my_gain}")
-        
-        # Уведомляем второго участника
-        try:
-            await bot.send_message(
-                other_uid,
-                f"🎉 <b>Обмен #{eid} завершён!</b>\n"
-                f"{'='*20}\n\n"
-                f"📤 Ты отдал: "
-                f"<code>@{other_gave}</code>\n"
-                f"📥 Ты получил: "
-                f"<code>@{other_gain}</code>\n\n"
-                f"🔗 Открыть: "
-                f"<a href='https://t.me/{other_gain}'>"
-                f"@{other_gain}</a>\n"
-                f"💎 Fragment: "
-                f"<a href='https://fragment.com/"
-                f"username/{other_gain}'>Проверить</a>"
-                f"\n\n"
-                f"⚠️ <b>Важно:</b> Юзернейм нужно "
-                f"<b>успеть забрать</b> пока его "
-                f"не заняли!\n"
-                f"Зайди в Настройки Telegram "
-                f"и смени юз.",
-                parse_mode="HTML",
-                disable_web_page_preview=True)
-        except: pass
-        
-    else:
-        # Ждём второго
-        ex = exchange_get(eid)
-        if not ex:
-            await edit_msg(cb.message,
-                "❌ Обмен не найден")
-            return
-        
-        if uid == ex.get("initiator_uid"):
-            my_offer = ex.get("initiator_offer", "?")
-            their_offer = ex.get("partner_offer", "?")
-        else:
-            my_offer = ex.get("partner_offer", "?")
-            their_offer = ex.get(
-                "initiator_offer", "?")
-        
-        kb = InlineKeyboardBuilder()
-        kb.button(text="🏪 Обменник",
-                  callback_data="market_exchange")
-        kb.adjust(1)
-        
-        await edit_msg(cb.message,
-            f"✅ <b>Ты подтвердил!</b>\n\n"
-            f"📤 Ты отдаёшь: "
-            f"<code>@{my_offer}</code>\n"
-            f"📥 Ты получишь: "
-            f"<code>@{their_offer}</code>\n\n"
-            f"⏳ Ждём подтверждения "
-            f"второй стороны...\n\n"
-            f"💡 Как только они подтвердят — "
-            f"вы оба получите юзернеймы!",
-            kb.as_markup())
+        c.execute("UPDATE exchanges SET status='completed',completed_at=? WHERE id=?",
+                  (datetime.now().strftime("%Y-%m-%d %H:%M"), eid))
+        conn.commit(); conn.close(); return True
+    conn.close(); return False
 
 def exchange_get_open(limit=20):
     conn = sqlite3.connect(DB); c = conn.cursor()
@@ -3056,6 +2650,7 @@ async def cb_market(cb: CallbackQuery):
     bal = get_balance(uid)
 
     text = (f"🏪 <b>Маркет</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 Баланс: <code>{bal:.0f}⭐</code>\n"
             f"⭐ Рейтинг: {'⭐'*int(rating['avg'])+'☆'*(5-int(rating['avg']))} ({rating['count']})\n"
             f"📊 Комиссия: {int(MARKET_COMMISSION*100)}%\n")
 
@@ -3177,8 +2772,8 @@ async def cb_mbuy(cb: CallbackQuery):
     
     kb = InlineKeyboardBuilder()
     if bal >= price:
-        kb.button(text=f"💰 Оплата балансом (не работает", callback_data=f"paybal_lot_{lot_id}")
-    kb.button(text=f"💎 Telegram Stars ({price}💎)", callback_data=f"paystars_lot_{lot_id}")
+        kb.button(text=f"💰 С баланса ({price}⭐)", callback_data=f"paybal_lot_{lot_id}")
+    kb.button(text=f"⭐ Telegram Stars ({price}⭐)", callback_data=f"paystars_lot_{lot_id}")
     kb.button(text="❌ Отмена", callback_data=f"mlot_{lot_id}")
     kb.adjust(1)
     
@@ -3186,7 +2781,72 @@ async def cb_mbuy(cb: CallbackQuery):
         f"🛒 <b>Покупка лота #{lot_id}</b>\n\n"
         f"📦 {lot['title']}\n"
         f"💰 Цена: <code>{price}⭐</code> (<code>{rub}₽</code>)\n\n"
+        f"💰 Ваш баланс: <code>{bal:.1f}⭐</code>\n\n"
         f"Выберите способ оплаты:", kb.as_markup())
+
+@dp.callback_query(F.data.startswith("paybal_lot_"))
+async def cb_paybal_lot(cb: CallbackQuery):
+    uid = cb.from_user.id; await answer_cb(cb)
+    lot_id = int(cb.data[11:])
+    lot = market_get_lot(lot_id)
+    if not lot or lot["status"] != "active":
+        await answer_cb(cb, "❌ Лот продан!", show_alert=True); return
+    if lot["seller_uid"] == uid:
+        await answer_cb(cb, "❌ Свой лот!", show_alert=True); return
+    
+    price = int(lot["price"])
+    bal = get_balance(uid)
+    if bal < price:
+        await answer_cb(cb, f"❌ Нужно {price}⭐, у вас {bal:.1f}⭐", show_alert=True); return
+    
+    # Списываем с баланса
+    set_balance(uid, bal - price)
+    
+    # Переводим в эскроу
+    ok = market_buy_lot(lot_id, uid)
+    if not ok:
+        add_balance(uid, price)  # возврат
+        await answer_cb(cb, "❌ Ошибка покупки!", show_alert=True); return
+    
+    log_action(uid, "market_buy_bal", f"lot={lot_id} paid={price}")
+    display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
+    
+    # Кнопки покупателю
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Получил товар", callback_data=f"mbuyerok_{lot_id}")
+    kb.button(text="⚠️ Открыть спор", callback_data=f"mdispute_{lot_id}")
+    kb.adjust(1)
+    await edit_msg(cb.message,
+        f"✅ <b>Оплачено с баланса!</b>\n\n"
+        f"📦 {lot['title']}\n"
+        f"💰 Списано: {price}⭐\n"
+        f"💰 Остаток: {bal-price:.1f}⭐\n\n"
+        f"🔒 Деньги на эскроу\n"
+        f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
+        f"Когда получите товар — нажмите <b>✅ Получил товар</b>",
+        kb.as_markup())
+    
+    # Уведомление продавцу
+    skb = InlineKeyboardBuilder()
+    skb.button(text="✅ Я передал товар", callback_data=f"msellerok_{lot_id}")
+    try: await bot.send_message(lot["seller_uid"],
+        f"🛒 <b>Ваш лот куплен!</b>\n\n"
+        f"📦 {lot['title']}\n"
+        f"💰 {price}⭐\n"
+        f"👤 Покупатель: {display}\n\n"
+        f"⏰ Передайте товар в течение {MARKET_ESCROW_HOURS} часов",
+        reply_markup=skb.as_markup(), parse_mode="HTML")
+    except: pass
+    
+    # Уведомление админу
+    commission = int(price * MARKET_COMMISSION)
+    payout = price - commission
+    await notify_admins(
+        f"🛒 <b>ПРОДАЖА (баланс)</b>\n"
+        f"📦 {lot['title']}\n"
+        f"💰 {price}⭐ | Комиссия: {commission}⭐\n"
+        f"👤 Покупатель: {display}\n"
+        f"👤 Продавец: <code>{lot['seller_uid']}</code>")
 
 @dp.callback_query(F.data.startswith("paystars_lot_"))
 async def cb_paystars_lot(cb: CallbackQuery):
@@ -3935,6 +3595,7 @@ async def cb_profile(cb: CallbackQuery):
     kb.button(text="🔑 Ключ", callback_data="cmd_activate")
     kb.button(text="🎁 Подарить", callback_data="gift_prem")
     if bal>=MIN_WITHDRAW: kb.button(text=f"💸 Вывести ({bal:.1f}⭐)", callback_data="cmd_withdraw")
+    if is_prem and is_button_enabled("roulette"): kb.button(text="🎰 Рулетка", callback_data="cmd_roulette")
     kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
     await edit_msg(cb.message, text, kb.as_markup())
 
@@ -4671,52 +4332,21 @@ async def handle_text(msg: Message):
         log_action(uid,"exchange",str(eid))
         await msg.answer(f"✅ <b>Обмен #{eid}!</b>\n📦 {msg.text.strip()}\n⏳ Ждите", parse_mode="HTML"); return
 
-if action == "exchange_counter":
-        user_states.pop(uid, None)
-        eid = state["eid"]
-        offer = msg.text.strip().replace("@", "").lower()
-        
-        if not validate_username(offer):
-            await msg.answer(
-                "❌ Некорректный юзернейм\n"
-                "Только латиница, цифры, _ от 5 до 32 символов")
-            return
-            
-        ok, data = exchange_accept(eid, uid, offer)
-        
-        if not ok:
-            await msg.answer("❌ Обмен уже закрыт или недоступен")
-            return
-        
-        ex = exchange_get(eid)
-        init_uid = ex["initiator_uid"]
-        init_offer = ex["initiator_offer"]
-        
-        confirm_kb = InlineKeyboardBuilder()
-        confirm_kb.button(text="✅ Подтверждаю — готов отдать юз", callback_data=f"exconfirm_{eid}")
-        confirm_kb.adjust(1)
-        
-        try:
-            await bot.send_message(
-                init_uid,
-                f"🤝 <b>Обмен #{eid} принят!</b>\n{'='*20}\n\n"
-                f"📤 Ты отдаёшь: <code>@{init_offer}</code>\n"
-                f"📥 Ты получишь: <code>@{offer}</code>\n\n"
-                f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
-                f"Когда будешь готов отдать юзернейм — нажми кнопку:",
-                reply_markup=confirm_kb.as_markup(),
-                parse_mode="HTML")
+    if action=="exchange_counter":
+        user_states.pop(uid,None); eid=state["eid"]
+        if len(msg.text.strip())<3: await msg.answer("❌ Минимум 3 символа"); return
+        ok=exchange_accept(eid,uid,msg.text.strip())
+        if not ok: await msg.answer("❌ Обмен закрыт"); return
+        ex=exchange_get(eid)
+        name=f"@{msg.from_user.username}" if msg.from_user.username else f"ID:{uid}"
+        ikb=InlineKeyboardBuilder()
+        ikb.button(text="✅ Подтвердить", callback_data=f"exconfirm_{eid}")
+        ikb.adjust(1)
+        try: await bot.send_message(ex["initiator_uid"],
+            f"🔄 Предложение обмена!\n👤 {name}: <b>{msg.text.strip()}</b>\nЗа: <b>{ex['initiator_offer']}</b>",
+            reply_markup=ikb.as_markup(), parse_mode="HTML")
         except: pass
-        
-        await msg.answer(
-            f"✅ <b>Обмен #{eid} создан!</b>\n{'='*20}\n\n"
-            f"📥 Ты получишь: <code>@{init_offer}</code>\n"
-            f"📤 Ты отдаёшь: <code>@{offer}</code>\n\n"
-            f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
-            f"Когда будешь готов отдать юзернейм — нажми кнопку:",
-            reply_markup=confirm_kb.as_markup(),
-            parse_mode="HTML")
-        return
+        await msg.answer("✅ Отправлено!\n⏳ Ждём"); return
     
     if action=="template_search":
         user_states.pop(uid,None); template=msg.text.strip().lower()
@@ -5054,213 +4684,43 @@ async def cb_admin(cb: CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
     s = get_stats(); ps = pool.stats()
+    sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
+    text = (
+        f"👑 <b>v25.0</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 <code>{s['users']}</code> | 💎 <code>{s['subs']}</code> | 🚫 <code>{s['banned']}</code>\n"
+        f"🔍 <code>{s['searches']}</code> | 📅 👤<code>{s['today_users']}</code> 🔍<code>{s['today_searches']}</code>\n\n"
+        f"🔄 {sl}\n📊 <code>{ps['checks']}</code> | 🛡 <code>{ps['botapi_saves']+ps.get('recheck_saves',0)}</code>\n\n"
+        f"👁 <code>{s['monitors']}</code> | ⛔ <code>{s['blacklist']}</code> | 📱 <code>{s['tasks']}</code> | 💸 <code>{s['withdrawals']}</code>")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="👤 Юзер", callback_data="a_user")
+    kb.button(text="💎 Premium", callback_data="a_plist")
+    kb.button(text="📩 Выдать", callback_data="a_give")
+    kb.button(text="🔑 Ключ", callback_data="a_keys")
+    kb.button(text="🚫 Бан", callback_data="a_ban")
+    kb.button(text="✅ Разбан", callback_data="a_unban")
+    kb.button(text="👥 Рефералы", callback_data="a_refs")
+    kb.button(text="📢 Акции", callback_data="a_promos")
+    kb.button(text="⛔ Чёрный список", callback_data="a_blacklist")
+    kb.button(text="🎁 Розыгрыш", callback_data="a_raffle")
+    kb.button(text=f"📱 TT ({s['tasks']})", callback_data="a_tt")
+    kb.button(text=f"💸 Выводы ({s['withdrawals']})", callback_data="a_wd")
+    kb.button(text="📤 Рассылка", callback_data="a_bcast")
+    kb.button(text="📊 Экспорт", callback_data="a_export")
+    kb.button(text=f"🔄 Сессии ({ps['active']}/{ps['total']})", callback_data="a_sessions")
+    kb.button(text="📋 Лог", callback_data="a_log")
+    kb.button(text="⚙️ Управление", callback_data="a_control")
+    kb.button(text="📥 Обновить код", callback_data="a_update")
+    kb.button(text="🔄 Перезапуск", callback_data="a_restart")
+    kb.button(text="📋 Логи", callback_data="a_logs")
+    kb.button(text="💻 Сервер", callback_data="a_server")
     pending_m = len(market_get_pending())
     disputes_m = len(market_get_disputes())
-    
-    sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
-    
-    text = (
-        f"👑 <b>Админ-панель v26.0</b>\n{'='*20}\n\n"
-        f"👥 <code>{s['users']}</code> юзеров | 💎 <code>{s['subs']}</code> Premium\n"
-        f"🔢 <code>{s['searches']}</code> поисков | 🆕 +<code>{s['today_users']}</code> сегодня\n"
-        f"🔑 Сессии: {sl}\n"
-        f"🏪 Маркет: <code>{pending_m}</code> модерация | ⚠️ <code>{disputes_m}</code> споров")
-    
-    kb = InlineKeyboardBuilder()
-    kb.button(text="👤 Юзеры", callback_data="adm_users")
-    kb.button(text="💎 Подписки", callback_data="adm_subs")
-    kb.button(text="🏪 Маркет", callback_data="adm_market")
-    kb.button(text="🔑 Сессии", callback_data="adm_sessions")
-    kb.button(text="📢 Рассылка", callback_data="adm_broadcast")
-    kb.button(text="⚙️ Настройки", callback_data="a_control")
-    kb.button(text="🖥 Сервер", callback_data="adm_server")
+    kb.button(text=f"📦 Маркет ({pending_m})", callback_data="a_mmod")
+    kb.button(text=f"⚠️ Споры ({disputes_m})", callback_data="a_mdisputes")
+    kb.button(text="🏷 Промокоды", callback_data="a_promocodes")
     kb.button(text="🔙 Меню", callback_data="cmd_menu")
     kb.adjust(2)
     await edit_msg(cb.message, text, kb.as_markup())
-
-# === ЮЗЕРЫ ===
-@dp.callback_query(F.data == "adm_users")
-async def cb_adm_users(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    s = get_stats()
-    text = f"👤 <b>Юзеры</b>\n\nВсего: <code>{s['users']}</code>\nБан: <code>{s['banned']}</code>"
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🔍 Найти", callback_data="a_user")
-    kb.button(text="🚫 Бан", callback_data="a_ban")
-    kb.button(text="✅ Разбан", callback_data="a_unban")
-    kb.button(text="📤 Экспорт", callback_data="a_export")
-    kb.button(text="👥 Рефералы", callback_data="a_refs")
-    kb.button(text="⚫ Чёрный список", callback_data="a_blacklist")
-    kb.button(text="📋 Лог", callback_data="a_log")
-    kb.button(text="🔙 Админ", callback_data="cmd_admin")
-    kb.adjust(2)
-    await edit_msg(cb.message, text, kb.as_markup())
-
-# === ПОДПИСКИ ===
-@dp.callback_query(F.data == "adm_subs")
-async def cb_adm_subs(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    s = get_stats()
-    text = f"💎 <b>Подписки</b>\n\nАктивных: <code>{s['subs']}</code>"
-    kb = InlineKeyboardBuilder()
-    kb.button(text="💎 Список Premium", callback_data="a_plist")
-    kb.button(text="🎁 Выдать", callback_data="a_give")
-    kb.button(text="🔑 Ключи", callback_data="a_keys")
-    kb.button(text="🎰 Розыгрыш", callback_data="a_raffle")
-    kb.button(text="🎪 Акции", callback_data="a_promos")
-    kb.button(text="🔙 Админ", callback_data="cmd_admin")
-    kb.adjust(2)
-    await edit_msg(cb.message, text, kb.as_markup())
-
-# === МАРКЕТ ===
-@dp.callback_query(F.data == "adm_market")
-async def cb_adm_market(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    pending_m = len(market_get_pending())
-    disputes_m = len(market_get_disputes())
-    s = get_stats()
-    text = (f"🏪 <b>Маркет</b>\n\n"
-            f"📋 Модерация: <code>{pending_m}</code>\n"
-            f"⚠️ Споры: <code>{disputes_m}</code>\n"
-            f"💸 Выводы: <code>{s['withdrawals']}</code>")
-    kb = InlineKeyboardBuilder()
-    kb.button(text=f"📋 Модерация ({pending_m})", callback_data="a_mmod")
-    kb.button(text=f"⚠️ Споры ({disputes_m})", callback_data="a_mdisputes")
-    kb.button(text="🏷️ Промокоды", callback_data="a_promocodes")
-    kb.button(text=f"💸 Выводы ({s['withdrawals']})", callback_data="a_wd")
-    kb.button(text="🔙 Админ", callback_data="cmd_admin")
-    kb.adjust(2)
-    await edit_msg(cb.message, text, kb.as_markup())
-
-# === СЕССИИ ===
-@dp.callback_query(F.data == "adm_sessions")
-async def cb_adm_sessions(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    ps = pool.stats(); detail = pool.detailed_status()
-    saved = load_saved_sessions()
-    text = (f"🔑 <b>Сессии</b>\n\n"
-            f"🟢 Активных: {ps['active']-ps.get('warming',0)}\n"
-            f"🟡 Прогрев: {ps.get('warming',0)}\n"
-            f"🟠 Кулдаун: {ps.get('cooldown',0)}\n"
-            f"🔴 Мёртвых: {ps.get('dead',0)}\n"
-            f"🔢 Проверок: {ps['checks']}\n\n"
-            f"<pre>{detail}</pre>\n\n"
-            f"💾 Сохранённых: <code>{len(saved)}</code>")
-    kb = InlineKeyboardBuilder()
-    for i in range(len(pool.clients)):
-        st = pool.status.get(i, 'dead')
-        em = {'healthy':'🟢','warming':'🟡','cooldown':'🟠','dead':'🔴'}.get(st,'❓')
-        if st == 'dead':
-            kb.button(text=f"🔄 #{i+1}", callback_data=f"a_revive_{i}")
-        else:
-            kb.button(text=f"{em} #{i+1}", callback_data=f"a_kill_{i}")
-    kb.button(text="➕ Добавить", callback_data="a_add_session")
-    kb.button(text="💾 Все аккаунты", callback_data="adm_all_accounts")
-    kb.button(text="⚡ Reconnect all", callback_data="a_reconnect_all")
-    kb.button(text="🔄 Обновить", callback_data="adm_sessions")
-    kb.button(text="🔙 Админ", callback_data="cmd_admin")
-    kb.adjust(2)
-    await edit_msg(cb.message, text, kb.as_markup())
-
-# === ВСЕ АККАУНТЫ ===
-@dp.callback_query(F.data == "adm_all_accounts")
-async def cb_all_accounts(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    saved = load_saved_sessions()
-    if not saved:
-        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="adm_sessions")
-        await edit_msg(cb.message, "💾 <b>Нет сохранённых аккаунтов</b>", kb.as_markup())
-        return
-    text = f"💾 <b>Все аккаунты ({len(saved)})</b>\n{'='*20}\n\n"
-    for i, s in enumerate(saved):
-        st_em = "🟢" if s.get("status") == "active" else "🔴"
-        phone = s.get("phone", "?")
-        hidden = phone[:4] + "****" + phone[-3:] if len(phone) > 7 else phone
-        text += (f"{st_em} <b>#{i+1}</b> {hidden}\n"
-                f"   api_id: <code>{s.get('api_id','?')}</code>\n"
-                f"   hash: <code>{str(s.get('api_hash','?'))[:8]}...</code>\n\n")
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📤 Скачать JSON", callback_data="adm_export_sessions")
-    kb.button(text="➕ Добавить", callback_data="a_add_session")
-    kb.button(text="🔙 Сессии", callback_data="adm_sessions")
-    kb.adjust(1)
-    await edit_msg(cb.message, text, kb.as_markup())
-
-@dp.callback_query(F.data == "adm_export_sessions")
-async def cb_export_sessions(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    saved = load_saved_sessions()
-    content = json.dumps(saved, indent=2, ensure_ascii=False)
-    await bot.send_document(cb.from_user.id,
-        BufferedInputFile(content.encode(), filename=f"sessions_{datetime.now().strftime('%Y%m%d_%H%M')}.json"),
-        caption=f"💾 {len(saved)} аккаунтов")
-
-# === РАССЫЛКА ===
-@dp.callback_query(F.data == "adm_broadcast")
-async def cb_adm_broadcast(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    s = get_stats()
-    text = f"📢 <b>Рассылка и экспорт</b>"
-    kb = InlineKeyboardBuilder()
-    kb.button(text="📢 Рассылка", callback_data="a_bcast")
-    kb.button(text="📊 Экспорт юзеров", callback_data="a_export")
-    kb.button(text=f"🎬 TikTok ({s['tasks']})", callback_data="a_tt")
-    kb.button(text="🔙 Админ", callback_data="cmd_admin")
-    kb.adjust(2)
-    await edit_msg(cb.message, text, kb.as_markup())
-
-# === СЕРВЕР ===
-@dp.callback_query(F.data == "adm_server")
-async def cb_adm_server_menu(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    text = f"🖥 <b>Сервер и код</b>"
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🖥 Состояние", callback_data="a_server")
-    kb.button(text="📋 Логи", callback_data="a_logs")
-    kb.button(text="🔄 Обновить код", callback_data="a_update")
-    kb.button(text="🔄 Перезапуск", callback_data="a_restart")
-    kb.button(text="📥 Скачать bot.py", callback_data="adm_download_code")
-    kb.button(text="📥 Скачать БД", callback_data="adm_download_db")
-    kb.button(text="🔙 Админ", callback_data="cmd_admin")
-    kb.adjust(2)
-    await edit_msg(cb.message, text, kb.as_markup())
-
-# === СКАЧАТЬ КОД И БД ===
-@dp.callback_query(F.data == "adm_download_code")
-async def cb_download_code(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    try:
-        fn = "bot.py"
-        if not os.path.exists(fn):
-            # Пробуем найти текущий файл
-            fn = os.path.abspath(__file__)
-        with open(fn, "rb") as f:
-            await bot.send_document(cb.from_user.id,
-                BufferedInputFile(f.read(), filename=f"bot_{datetime.now().strftime('%Y%m%d_%H%M')}.py"),
-                caption="📥 Текущий код бота")
-    except Exception as e:
-        await cb.message.answer(f"❌ {e}")
-
-@dp.callback_query(F.data == "adm_download_db")
-async def cb_download_db(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
-    await answer_cb(cb)
-    try:
-        with open(DB, "rb") as f:
-            await bot.send_document(cb.from_user.id,
-                BufferedInputFile(f.read(), filename=f"hunter_{datetime.now().strftime('%Y%m%d_%H%M')}.db"),
-                caption="📥 База данных")
-    except Exception as e:
-        await cb.message.answer(f"❌ {e}")
 
 @dp.callback_query(F.data == "a_user")
 async def cb_a_user(cb: CallbackQuery):
@@ -5697,13 +5157,7 @@ async def cb_sett(cb: CallbackQuery):
 async def cb_ctl_btns(cb: CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb); config=load_bot_config()
-    btns = {
-        "tiktok": "🎬 TikTok",
-        "monitor": "👁 Мониторинг",
-        "shop": "🛒 Магазин",
-        "support": "❤️ Поддержать",
-        "referral": "👥 Рефералы"
-    }
+    btns={"tiktok":"🎁 TikTok","roulette":"🎰 Рулетка","monitor":"👁 Мониторинг","shop":"🏪 Магазин","support":"🤖 Донат","referral":"👥 Рефералы"}
     text="🔘 <b>Кнопки</b>\n\n"; kb=InlineKeyboardBuilder()
     for k,n in btns.items():
         on=config.get(f"btn_{k}",True); icon="✅" if on else "❌"
