@@ -2233,18 +2233,6 @@ def exchange_accept(eid, partner_uid, partner_offer):
     
     conn.commit(); conn.close()
     return False, None
-
-
-    if action == "exchange_counter":
-        user_states.pop(uid, None)
-        eid = state["eid"]
-        offer = msg.text.strip().replace("@", "").lower()
-        
-        if not validate_username(offer):
-            await msg.answer(
-                "❌ Некорректный юзернейм\n"
-                "Только латиница, цифры, _ от 5 до 32 символов")
-            return
             
         ok, data = exchange_accept(eid, uid, offer)
     
