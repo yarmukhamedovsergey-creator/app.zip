@@ -28,13 +28,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 try:
-from telethon import TelegramClient
-from telethon.tl.functions.contacts import ResolveUsernameRequest
-from telethon.tl.functions.account import CheckUsernameRequest as AccountCheckUsername
-from telethon.errors import FloodWaitError, UsernameNotOccupiedError, UsernameInvalidError
-HAS_TELETHON = True
+    from telethon import TelegramClient
+    from telethon.tl.functions.contacts import ResolveUsernameRequest
+    from telethon.tl.functions.account import CheckUsernameRequest as AccountCheckUsername
+    from telethon.errors import FloodWaitError, UsernameNotOccupiedError, UsernameInvalidError
+    HAS_TELETHON = True
 except ImportError:
-HAS_TELETHON = False
+    HAS_TELETHON = False
 
 ======================= НАСТРОЙКИ =======================
 MAIN_TOKEN = "8325751391:AAHZo7xC6TO4ldKEEqM--Ik9EXaszULnwWc"
