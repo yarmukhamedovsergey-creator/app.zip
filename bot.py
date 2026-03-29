@@ -369,7 +369,7 @@ class AccountPool:
                 logger.info(f"🔄 #{i+1} reconnected")
         except Exception as e: logger.error(f"Reconnect #{i+1}: {e}")
 
-def _best(self, uid=None, force=False):
+    def _best(self, uid=None, force=False):
         now = time.time(); cands = []
         for i in range(len(self.clients)):
             st = self.status.get(i, 'dead')
@@ -2235,7 +2235,6 @@ def exchange_accept(eid, partner_uid, partner_offer):
     return False, None
 
 
-# В handle_text замени exchange_counter:
     if action == "exchange_counter":
         user_states.pop(uid, None)
         eid = state["eid"]
