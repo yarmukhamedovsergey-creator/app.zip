@@ -89,7 +89,7 @@ PRICES = {
 "forever": {"days": 99999, "stars": 8999, "rub": 11999, "label": "Навсегда"},
 }
 
-=== НОВОЕ: VIP ЦЕНЫ ===
+#=== НОВОЕ: VIP ЦЕНЫ ===
 VIP = 50% от Premium (апгрейд)
 VIP_PRICES = {}
 for _k, _p in PRICES.items():
