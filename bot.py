@@ -3186,7 +3186,8 @@ async def cb_mbuy(cb: CallbackQuery):
     
     kb = InlineKeyboardBuilder()
     if bal >= price:
-    kb.button(text=f"⭐ Telegram Stars ({price}⭐)", callback_data=f"paystars_lot_{lot_id}")
+        kb.button(text=f"💰 Оплата балансом (не работает", callback_data=f"paybal_lot_{lot_id}")
+    kb.button(text=f"💎 Telegram Stars ({price}💎)", callback_data=f"paystars_lot_{lot_id}")
     kb.button(text="❌ Отмена", callback_data=f"mlot_{lot_id}")
     kb.adjust(1)
     
