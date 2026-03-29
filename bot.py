@@ -2234,7 +2234,7 @@ def exchange_accept(eid, partner_uid, partner_offer):
     conn.commit(); conn.close()
     return False, None
             
-elif action == "exchange_counter":
+    elif action == "exchange_counter":
             user_states.pop(uid, None)
             eid = state["eid"]
             offer = msg.text.strip()
