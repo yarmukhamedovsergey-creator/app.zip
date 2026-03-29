@@ -36,7 +36,7 @@ try:
 except ImportError:
     HAS_TELETHON = False
 
-======================= НАСТРОЙКИ =======================
+#======================= НАСТРОЙКИ =======================
 MAIN_TOKEN = "8325751391:AAHZo7xC6TO4ldKEEqM--Ik9EXaszULnwWc"
 ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "pdwqb"
@@ -111,7 +111,7 @@ BUNDLE_PRICES[_k] = {
 
 DONATE_OPTIONS = [20, 50, 100, 200, 300, 500, 1000]
 
-======================= МАРКЕТПЛЕЙС =======================
+#======================= МАРКЕТПЛЕЙС =======================
 MARKET_COMMISSION = 0.10
 MARKET_LISTING_FEE = 5
 MARKET_NFT_LISTING_FEE = 25
@@ -130,7 +130,7 @@ WHEEL_EXTRA_PRICE = 10
 WITHDRAW_MIN = 50
 WITHDRAW_FEE_PERCENT = 5
 
-======================= INIT =======================
+#======================= INIT =======================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(name)
 bot = Bot(token=MAIN_TOKEN)
@@ -154,7 +154,7 @@ async def answer_cb(cb, text=None, show_alert=False):
 try: await cb.answer(text, show_alert=show_alert)
 except: pass
 
-======================= КОНФИГ =======================
+#======================= КОНФИГ =======================
 DEFAULT_CONFIG = {
 "free_searches": 3, "free_count": 1, "premium_count": 3, "vip_count": 5,
 "premium_searches_limit": 7, "vip_searches_limit": 15,
