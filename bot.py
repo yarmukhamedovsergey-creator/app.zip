@@ -2234,7 +2234,23 @@ def exchange_accept(eid, partner_uid, partner_offer):
     conn.commit(); conn.close()
     return False, None
             
-        ok, data = exchange_accept(eid, uid, offer)
+elif action == "exchange_counter":
+            user_states.pop(uid, None)
+            eid = state["eid"]
+            offer = msg.text.strip()
+            if len(offer) < 3:
+                await msg.answer("❌ Слишком короткое предложение")
+                return
+            
+            # Вот та самая строка, про которую ты говоришь:
+            ok, data = exchange_accept(eid, uid, offer)
+            
+            if ok:
+                await msg.answer("✅ Ваше встречное предложение отправлено!")
+                # Логика уведомления второго участника...
+            else:
+                await msg.answer(f"❌ Ошибка: {data}")
+            return
     
     if not ok:
         await msg.answer(
