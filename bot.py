@@ -2230,18 +2230,18 @@ def exchange_accept(eid, partner_uid, partner_offer):
 
 
 # В handle_text замени exchange_counter:
-if action == "exchange_counter":
-    user_states.pop(uid, None)
-    eid = state["eid"]
-    offer = msg.text.strip().replace("@", "").lower()
-    
-    if not validate_username(offer):
-        await msg.answer(
-            "❌ Некорректный юзернейм\n"
-            "Только латиница, цифры, _ от 5 до 32 символов")
-        return
-    
-    ok, data = exchange_accept(eid, uid, offer)
+    if action == "exchange_counter":
+        user_states.pop(uid, None)
+        eid = state["eid"]
+        offer = msg.text.strip().replace("@", "").lower()
+        
+        if not validate_username(offer):
+            await msg.answer(
+                "❌ Некорректный юзернейм\n"
+                "Только латиница, цифры, _ от 5 до 32 символов")
+            return
+            
+        ok, data = exchange_accept(eid, uid, offer)
     
     if not ok:
         await msg.answer(
