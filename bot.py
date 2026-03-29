@@ -21,8 +21,8 @@ import aiohttp
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
-Message, CallbackQuery, BufferedInputFile,
-LabeledPrice, PreCheckoutQuery
+    Message, CallbackQuery, BufferedInputFile,
+    LabeledPrice, PreCheckoutQuery
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
@@ -42,13 +42,13 @@ ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "pdwqb"
 
 ACCOUNTS = [
-{"api_id": 35094180, "api_hash": "8732d865063dadaf1cba0ace1ef87de9", "phone": "+959790770236"},
-{"api_id": 34992704, "api_hash": "d54449feb7289284c9e4598911d08068", "phone": "+959973228130"},
-{"api_id": 36284654, "api_hash": "1073109c2e1085dd601ad289a9a65562", "phone": "+67077454464"},
-{"api_id": 34792667, "api_hash": "fc2eb570576ddc72819a5ba22f8c0f5d", "phone": "+959980062721"},
-{"api_id": 36347986, "api_hash": "2ef08b03748cdf3b688efc18a1e540b7", "phone": "+13347793071"},
-{"api_id": 36037729, "api_hash": "c48c8326dfb577fd4b8d503cb7dce2a4", "phone": "+19316345068"},
-{"api_id": 36360664, "api_hash": "facb9902e2eafe009a2fb43c901c2328", "phone": "+959694410210"},
+    {"api_id": 35094180, "api_hash": "8732d865063dadaf1cba0ace1ef87de9", "phone": "+959790770236"},
+    {"api_id": 34992704, "api_hash": "d54449feb7289284c9e4598911d08068", "phone": "+959973228130"},
+    {"api_id": 36284654, "api_hash": "1073109c2e1085dd601ad289a9a65562", "phone": "+67077454464"},
+    {"api_id": 34792667, "api_hash": "fc2eb570576ddc72819a5ba22f8c0f5d", "phone": "+959980062721"},
+    {"api_id": 36347986, "api_hash": "2ef08b03748cdf3b688efc18a1e540b7", "phone": "+13347793071"},
+    {"api_id": 36037729, "api_hash": "c48c8326dfb577fd4b8d503cb7dce2a4", "phone": "+19316345068"},
+    {"api_id": 36360664, "api_hash": "facb9902e2eafe009a2fb43c901c2328", "phone": "+959694410210"},
 ]
 
 FREE_SEARCHES = 3
@@ -73,41 +73,41 @@ TEMP_BAN_MINUTES = 30
 STAR_TO_RUB = 1.25 # = НОВОЕ: курс звезды к рублям =
 
 TIKTOK_COMMENT_TEXT = "@SworuserN_bot бесплатные звёзды, найти юз, оценить юз"
-TIKTOK_REWARD_GIFT = "?? Мишка (15?)"
+TIKTOK_REWARD_GIFT = "🎁 Мишка (15⭐)"
 TIKTOK_SCREENSHOTS_NEEDED = 35
 TIKTOK_DAILY_LIMIT = 2
 REMINDER_DAYS = [3, 1]
 REMINDER_CHECK_INTERVAL = 3600
 
 PRICES = {
-"1d": {"days": 1, "stars": 36, "rub": 45, "label": "1 день"},
-"3d": {"days": 3, "stars": 90, "rub": 120, "label": "3 дня"},
-"7d": {"days": 7, "stars": 180, "rub": 250, "label": "7 дней"},
-"1m": {"days": 30, "stars": 585, "rub": 800, "label": "1 месяц"},
-"3m": {"days": 90, "stars": 1800, "rub": 2200, "label": "3 месяца"},
-"1y": {"days": 365, "stars": 5850, "rub": 8000, "label": "1 год"},
-"forever": {"days": 99999, "stars": 8999, "rub": 11999, "label": "Навсегда"},
+    "1d": {"days": 1, "stars": 36, "rub": 45, "label": "1 день"},
+    "3d": {"days": 3, "stars": 90, "rub": 120, "label": "3 дня"},
+    "7d": {"days": 7, "stars": 180, "rub": 250, "label": "7 дней"},
+    "1m": {"days": 30, "stars": 585, "rub": 800, "label": "1 месяц"},
+    "3m": {"days": 90, "stars": 1800, "rub": 2200, "label": "3 месяца"},
+    "1y": {"days": 365, "stars": 5850, "rub": 8000, "label": "1 год"},
+    "forever": {"days": 99999, "stars": 8999, "rub": 11999, "label": "Навсегда"},
 }
 
 #=== НОВОЕ: VIP ЦЕНЫ ===
-VIP = 50% от Premium (апгрейд)
+# VIP = 50% от Premium (апгрейд)
 VIP_PRICES = {}
 for _k, _p in PRICES.items():
-VIP_PRICES[_k] = {
-"days": _p["days"],
-"stars": max(1, _p["stars"] // 2),
-"label": f"VIP {_p['label']}"
-}
+    VIP_PRICES[_k] = {
+        "days": _p["days"],
+        "stars": max(1, _p["stars"] // 2),
+        "label": f"VIP {_p['label']}"
+    }
 
-Бандл Premium+VIP сразу = (Premium + VIP) * 0.95 (скидка 5%)
+# Бандл Premium+VIP сразу = (Premium + VIP) * 0.95 (скидка 5%)
 BUNDLE_PRICES = {}
 for _k, _p in PRICES.items():
-_vip_stars = VIP_PRICES[_k]["stars"]
-BUNDLE_PRICES[_k] = {
-"days": _p["days"],
-"stars": int((_p["stars"] + _vip_stars) * 0.95),
-"label": f"Premium+VIP {_p['label']}"
-}
+    _vip_stars = VIP_PRICES[_k]["stars"]
+    BUNDLE_PRICES[_k] = {
+        "days": _p["days"],
+        "stars": int((_p["stars"] + _vip_stars) * 0.95),
+        "label": f"Premium+VIP {_p['label']}"
+    }
 
 DONATE_OPTIONS = [20, 50, 100, 200, 300, 500, 1000]
 
@@ -132,7 +132,7 @@ WITHDRAW_FEE_PERCENT = 5
 
 #======================= INIT =======================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(name)
+logger = logging.getLogger(__name__) # ИСПРАВЛЕНО: было (name), должно быть (__name__)
 bot = Bot(token=MAIN_TOKEN)
 dp = Dispatcher()
 user_states = {}
@@ -147,65 +147,72 @@ _fragment_cache_ttl = 600
 BOT_CONFIG_FILE = "bot_config.json"
 
 async def edit_msg(msg, text, kb=None):
-try: await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
-except: pass
+    try: 
+        await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except: 
+        pass
 
 async def answer_cb(cb, text=None, show_alert=False):
-try: await cb.answer(text, show_alert=show_alert)
-except: pass
+    try: 
+        await cb.answer(text, show_alert=show_alert)
+    except: 
+        pass
 
 # ======================= КОНФИГ =======================
 DEFAULT_CONFIG = {
-"free_searches": 3, "free_count": 1, "premium_count": 3, "vip_count": 5,
-"premium_searches_limit": 7, "vip_searches_limit": 15,
-"ref_bonus": 2, "search_cooldown": 10,
-"search_price_stars": 5, "min_withdraw": 50, "pay_contact": "Soveqk",
-"required_channels": ["SwordUsers"],
-"text_welcome": "", "text_found": "", "text_empty": "",
-"text_profile_header": "", "text_shop_header": "",
-"btn_tiktok": True, "btn_monitor": True,
-"btn_shop": True, "btn_support": True, "btn_referral": True,
-"mode_default": True, "mode_beautiful": True, "mode_meaningful": True,
-"mode_anyword": True, "mode_mat": True, "mode_telegram": True,
-"mode_default_premium": False, "mode_beautiful_premium": True,
-"mode_meaningful_premium": True, "mode_anyword_premium": True,
-"mode_mat_premium": True, "mode_telegram_premium": True,
-"prices": {}, "daily_report": True, "daily_report_hour": 23,
-"notify_purchases": True, "notify_milestones": True,
+    "free_searches": 3, "free_count": 1, "premium_count": 3, "vip_count": 5,
+    "premium_searches_limit": 7, "vip_searches_limit": 15,
+    "ref_bonus": 2, "search_cooldown": 10,
+    "search_price_stars": 5, "min_withdraw": 50, "pay_contact": "Soveqk",
+    "required_channels": ["SwordUsers"],
+    "text_welcome": "", "text_found": "", "text_empty": "",
+    "text_profile_header": "", "text_shop_header": "",
+    "btn_tiktok": True, "btn_monitor": True,
+    "btn_shop": True, "btn_support": True, "btn_referral": True,
+    "mode_default": True, "mode_beautiful": True, "mode_meaningful": True,
+    "mode_anyword": True, "mode_mat": True, "mode_telegram": True,
+    "mode_default_premium": False, "mode_beautiful_premium": True,
+    "mode_meaningful_premium": True, "mode_anyword_premium": True,
+    "mode_mat_premium": True, "mode_telegram_premium": True,
+    "prices": {}, "daily_report": True, "daily_report_hour": 23,
+    "notify_purchases": True, "notify_milestones": True,
 }
 
 def load_bot_config():
-config = dict(DEFAULT_CONFIG)
-if os.path.exists(BOT_CONFIG_FILE):
-try:
-with open(BOT_CONFIG_FILE, "r") as f:
-config.update(json.load(f))
-except: pass
-return config
+    config = dict(DEFAULT_CONFIG)
+    if os.path.exists(BOT_CONFIG_FILE):
+        try:
+            with open(BOT_CONFIG_FILE, "r") as f:
+                config.update(json.load(f))
+        except: 
+            pass
+    return config
 
 def save_bot_config(config):
-with open(BOT_CONFIG_FILE, "w") as f:
-json.dump(config, f, indent=2, ensure_ascii=False)
+    with open(BOT_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2, ensure_ascii=False)
 
 def apply_config(config):
-global FREE_SEARCHES, FREE_COUNT, PREMIUM_COUNT, VIP_COUNT
-global PREMIUM_SEARCHES_LIMIT, VIP_SEARCHES_LIMIT
-global REF_BONUS, SEARCH_COOLDOWN, SEARCH_PRICE_STARS, MIN_WITHDRAW
-global PAY_CONTACT, REQUIRED_CHANNELS
-FREE_SEARCHES = config.get("free_searches", 3)
-FREE_COUNT = config.get("free_count", 1)
-PREMIUM_COUNT = config.get("premium_count", 3)
-VIP_COUNT = config.get("vip_count", 5)
-PREMIUM_SEARCHES_LIMIT = config.get("premium_searches_limit", 7)
-VIP_SEARCHES_LIMIT = config.get("vip_searches_limit", 15)
-REF_BONUS = config.get("ref_bonus", 2)
-SEARCH_COOLDOWN = config.get("search_cooldown", 10)
-SEARCH_PRICE_STARS = config.get("search_price_stars", 5)
-MIN_WITHDRAW = config.get("min_withdraw", 50)
-PAY_CONTACT = config.get("pay_contact", "Soveqk")
-REQUIRED_CHANNELS = config.get("required_channels", ["SwordUsers"])
-for key in SEARCH_MODES:
-SEARCH_MODES[key]["premium"] = config.get(f"mode_{key}_premium", SEARCH_MODES[key].get("_default_premium", False))
+    global FREE_SEARCHES, FREE_COUNT, PREMIUM_COUNT, VIP_COUNT
+    global PREMIUM_SEARCHES_LIMIT, VIP_SEARCHES_LIMIT
+    global REF_BONUS, SEARCH_COOLDOWN, SEARCH_PRICE_STARS, MIN_WITHDRAW
+    global PAY_CONTACT, REQUIRED_CHANNELS
+    
+    FREE_SEARCHES = config.get("free_searches", 3)
+    FREE_COUNT = config.get("free_count", 1)
+    PREMIUM_COUNT = config.get("premium_count", 3)
+    VIP_COUNT = config.get("vip_count", 5)
+    PREMIUM_SEARCHES_LIMIT = config.get("premium_searches_limit", 7)
+    VIP_SEARCHES_LIMIT = config.get("vip_searches_limit", 15)
+    REF_BONUS = config.get("ref_bonus", 2)
+    SEARCH_COOLDOWN = config.get("search_cooldown", 10)
+    SEARCH_PRICE_STARS = config.get("search_price_stars", 5)
+    MIN_WITHDRAW = config.get("min_withdraw", 50)
+    PAY_CONTACT = config.get("pay_contact", "Soveqk")
+    REQUIRED_CHANNELS = config.get("required_channels", ["SwordUsers"])
+    
+    for key in SEARCH_MODES:
+        SEARCH_MODES[key]["premium"] = config.get(f"mode_{key}_premium", SEARCH_MODES[key].get("_default_premium", False))
         SEARCH_MODES[key]["disabled"] = not config.get(f"mode_{key}", True)
     if "prices" in config:
         for k, v in config["prices"].items():
