@@ -370,52 +370,50 @@ class AccountPool:
         except Exception as e: logger.error(f"Reconnect #{i+1}: {e}")
 
 def _best(self, uid=None, force=False):
-    now = time.time(); cands = []
-    for i in range(len(self.clients)):
-        st = self.status.get(i, 'dead')
-        if st not in ('healthy', 'warming'): continue
-        if now - self.window_start.get(i, 0) > 60:
-            self.req_count[i] = 0; self.window_start[i] = now
-        b = self.BUDGET_PER_MIN
-        if not force and self.req_count.get(i, 0) >= b: continue
-        d = self.adaptive_delay.get(i, self.BASE_DELAY)
-        if st == 'warming': d += self.WARMUP_EXTRA_DELAY
-        if not force and now - self.last_used.get(i, 0) < d: continue
-        sc = self.error_streak.get(i, 0)*20 + self.req_count.get(i, 0)*2
-        if st == 'warming': sc += 50
-        if uid and uid in self.active_users.get(i, set()): sc -= 25
-        cands.append((i, sc))
-    if not cands and force:
-        # Берём хоть кого-то живого
+        now = time.time(); cands = []
         for i in range(len(self.clients)):
-            if self.status.get(i) not in ('healthy', 'warming'): continue
-            cands.append((i, 999))
-    if not cands: return None
-    cands.sort(key=lambda x: x[1])
-    return random.choice(cands[:min(3, len(cands))])[0]
+            st = self.status.get(i, 'dead')
+            if st not in ('healthy', 'warming'): continue
+            if now - self.window_start.get(i, 0) > 60:
+                self.req_count[i] = 0; self.window_start[i] = now
+            b = self.BUDGET_PER_MIN
+            if not force and self.req_count.get(i, 0) >= b: continue
+            d = self.adaptive_delay.get(i, self.BASE_DELAY)
+            if st == 'warming': d += self.WARMUP_EXTRA_DELAY
+            if not force and now - self.last_used.get(i, 0) < d: continue
+            sc = self.error_streak.get(i, 0)*20 + self.req_count.get(i, 0)*2
+            if st == 'warming': sc += 50
+            if uid and uid in self.active_users.get(i, set()): sc -= 25
+            cands.append((i, sc))
+        if not cands and force:
+            for i in range(len(self.clients)):
+                if self.status.get(i) not in ('healthy', 'warming'): continue
+                cands.append((i, 999))
+        if not cands: return None
+        cands.sort(key=lambda x: x[1])
+        return random.choice(cands[:min(3, len(cands))])[0]
 
-async def _acquire(self, uid=None, timeout=60):
-    dl = time.time() + timeout; a = 0
-    while time.time() < dl:
-        async with self.lock:
-            i = self._best(uid)
-            if i is not None:
-                self.last_used[i] = time.time()
-                self.req_count[i] = self.req_count.get(i, 0) + 1
-                self.total_checks += 1
-                return i, self.clients[i]
-        # Если прошло 30 сек — пробуем force
-        if time.time() > dl - timeout/2:
+    async def _acquire(self, uid=None, timeout=60):
+        dl = time.time() + timeout; a = 0
+        while time.time() < dl:
             async with self.lock:
-                i = self._best(uid, force=True)
+                i = self._best(uid)
                 if i is not None:
                     self.last_used[i] = time.time()
                     self.req_count[i] = self.req_count.get(i, 0) + 1
                     self.total_checks += 1
                     return i, self.clients[i]
-        await asyncio.sleep(min(0.3*(1.2**a), 3) + random.uniform(0, 0.5))
-        a += 1
-    return None, None
+            if time.time() > dl - timeout/2:
+                async with self.lock:
+                    i = self._best(uid, force=True)
+                    if i is not None:
+                        self.last_used[i] = time.time()
+                        self.req_count[i] = self.req_count.get(i, 0) + 1
+                        self.total_checks += 1
+                        return i, self.clients[i]
+            await asyncio.sleep(min(0.3*(1.2**a), 3) + random.uniform(0, 0.5))
+            a += 1
+        return None, None
 
     def _ok(self, i):
         self.error_streak[i]=0
@@ -1824,6 +1822,14 @@ def find_user(inp):
     c.execute("SELECT uid FROM users WHERE uname=?", (inp,))
     r = c.fetchone(); conn.close()
     return r[0] if r else None
+
+def load_saved_sessions():
+    try:
+        if os.path.exists("added_sessions.json"):
+            with open("added_sessions.json") as f:
+                return json.load(f)
+    except: pass
+    return []
 
 # ═══════════════════════ МАРКЕТПЛЕЙС ФУНКЦИИ ═══════════════════════
 
@@ -4680,21 +4686,52 @@ async def handle_text(msg: Message):
         log_action(uid,"exchange",str(eid))
         await msg.answer(f"✅ <b>Обмен #{eid}!</b>\n📦 {msg.text.strip()}\n⏳ Ждите", parse_mode="HTML"); return
 
-    if action=="exchange_counter":
-        user_states.pop(uid,None); eid=state["eid"]
-        if len(msg.text.strip())<3: await msg.answer("❌ Минимум 3 символа"); return
-        ok=exchange_accept(eid,uid,msg.text.strip())
-        if not ok: await msg.answer("❌ Обмен закрыт"); return
-        ex=exchange_get(eid)
-        name=f"@{msg.from_user.username}" if msg.from_user.username else f"ID:{uid}"
-        ikb=InlineKeyboardBuilder()
-        ikb.button(text="✅ Подтвердить", callback_data=f"exconfirm_{eid}")
-        ikb.adjust(1)
-        try: await bot.send_message(ex["initiator_uid"],
-            f"🔄 Предложение обмена!\n👤 {name}: <b>{msg.text.strip()}</b>\nЗа: <b>{ex['initiator_offer']}</b>",
-            reply_markup=ikb.as_markup(), parse_mode="HTML")
+if action == "exchange_counter":
+        user_states.pop(uid, None)
+        eid = state["eid"]
+        offer = msg.text.strip().replace("@", "").lower()
+        
+        if not validate_username(offer):
+            await msg.answer(
+                "❌ Некорректный юзернейм\n"
+                "Только латиница, цифры, _ от 5 до 32 символов")
+            return
+            
+        ok, data = exchange_accept(eid, uid, offer)
+        
+        if not ok:
+            await msg.answer("❌ Обмен уже закрыт или недоступен")
+            return
+        
+        ex = exchange_get(eid)
+        init_uid = ex["initiator_uid"]
+        init_offer = ex["initiator_offer"]
+        
+        confirm_kb = InlineKeyboardBuilder()
+        confirm_kb.button(text="✅ Подтверждаю — готов отдать юз", callback_data=f"exconfirm_{eid}")
+        confirm_kb.adjust(1)
+        
+        try:
+            await bot.send_message(
+                init_uid,
+                f"🤝 <b>Обмен #{eid} принят!</b>\n{'='*20}\n\n"
+                f"📤 Ты отдаёшь: <code>@{init_offer}</code>\n"
+                f"📥 Ты получишь: <code>@{offer}</code>\n\n"
+                f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
+                f"Когда будешь готов отдать юзернейм — нажми кнопку:",
+                reply_markup=confirm_kb.as_markup(),
+                parse_mode="HTML")
         except: pass
-        await msg.answer("✅ Отправлено!\n⏳ Ждём"); return
+        
+        await msg.answer(
+            f"✅ <b>Обмен #{eid} создан!</b>\n{'='*20}\n\n"
+            f"📥 Ты получишь: <code>@{init_offer}</code>\n"
+            f"📤 Ты отдаёшь: <code>@{offer}</code>\n\n"
+            f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
+            f"Когда будешь готов отдать юзернейм — нажми кнопку:",
+            reply_markup=confirm_kb.as_markup(),
+            parse_mode="HTML")
+        return
     
     if action=="template_search":
         user_states.pop(uid,None); template=msg.text.strip().lower()
