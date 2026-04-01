@@ -81,13 +81,13 @@ REMINDER_DAYS = [3, 1]
 REMINDER_CHECK_INTERVAL = 3600
 
 PRICES = {
-    "1d":      {"days": 1,     "stars": 36,   "rub": 45,    "label": "1 день"},
-    "3d":      {"days": 3,     "stars": 90,   "rub": 120,   "label": "3 дня"},
-    "7d":      {"days": 7,     "stars": 180,  "rub": 250,   "label": "7 дней"},
-    "1m":      {"days": 30,    "stars": 585,  "rub": 800,   "label": "1 месяц"},
-    "3m":      {"days": 90,    "stars": 1800, "rub": 2200,  "label": "3 месяца"},
-    "1y":      {"days": 365,   "stars": 5850, "rub": 8000,  "label": "1 год"},
-    "forever": {"days": 99999, "stars": 8999, "rub": 11999, "label": "Навсегда"},
+    "1d":   {"label": "1 день",    "days": 1,     "stars": 40,   "rub": 45},
+    "3d":   {"label": "3 дня",     "days": 3,     "stars": 100,  "rub": 120},
+    "7d":   {"label": "7 дней",    "days": 7,     "stars": 180,  "rub": 250},
+    "30d":  {"label": "1 месяц",   "days": 30,    "stars": 600,  "rub": 800},
+    "90d":  {"label": "3 месяца",  "days": 90,    "stars": 1800, "rub": 2200},
+    "365d": {"label": "1 год",     "days": 365,   "stars": 6000, "rub": 8000},
+    "life": {"label": "Навсегда",  "days": 99999, "stars": 9000, "rub": 11999},
 }
 
 # ═══ НОВОЕ: VIP ЦЕНЫ ═══
@@ -215,6 +215,33 @@ def apply_config(config):
     if "prices" in config:
         for k, v in config["prices"].items():
             if k in PRICES: PRICES[k]["stars"] = v
+
+def load_saved_sessions():
+    """Загружает список всех аккаунтов (из конфига + добавленных)"""
+    result = []
+    # Основные аккаунты
+    for acc in ACCOUNTS:
+        result.append({
+            "phone": acc.get("phone", "?"),
+            "api_id": acc.get("api_id", "?"),
+            "api_hash": acc.get("api_hash", "?"),
+            "status": "active"
+        })
+    # Добавленные через бота
+    try:
+        if os.path.exists("added_sessions.json"):
+            with open("added_sessions.json") as f:
+                added = json.load(f)
+                for acc in added:
+                    result.append({
+                        "phone": acc.get("phone", "?"),
+                        "api_id": acc.get("api_id", "?"),
+                        "api_hash": acc.get("api_hash", "?"),
+                        "status": "added"
+                    })
+    except:
+        pass
+    return result 
 
 def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
@@ -640,6 +667,11 @@ def gen_mat():
         "hard_", "pure_", "total_", "absolute_", "fucking_", "trash_", "hell_", "dark_", "fat_", 
         "old_", "young_", "crazy_", "stupid_", "rich_", "poor_", "dead_", "evil_", "bloody_"
     ]
+    suf = [  # ← ДОБАВИТЬ ЭТО
+        "_bot", "_pro", "_god", "_king", "_gg", "_top",
+        "_go", "_dev", "_fan", "_life", "_love", "_man", "_boy",
+        "off", "on"
+    ]
     s=random.randint(1,6)
     if s==1: r=random.choice(pre)+random.choice(roots)
     elif s==2: r=random.choice(roots)+random.choice(suf)
@@ -688,6 +720,12 @@ def gen_telegram():
         "_pro", "_god", "_king", "_x", "_gg", "_1", "_top", "_go", "_bot", "_dev", "_fan", "_life", 
         "_love", "_man", "_boy", "er", "ist", "ik", "ka", "off", "on", "_channel", "_chat", "_group", 
         "hub", "zone", "net", "web", "app", "box", "lab", "studio", "inc", "corp", "team", "force"
+    ]
+    verbs = [  # ← ДОБАВИТЬ
+        "hack", "code", "mine", "farm", "trade", "swap", "flip", "hold"
+    ]
+    num = [  # ← ДОБАВИТЬ
+        "69", "67", "1337", "42", "52", "1488", "228", "666"
     ]
     s = random.randint(1, 12)
     if s == 1: r = random.choice(pre) + random.choice(tg_core) + random.choice(suf)
@@ -2769,6 +2807,25 @@ async def cb_utils(cb: CallbackQuery):
     kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(2)
     await edit_msg(cb.message, "🔧 <b>Утилиты</b>", kb.as_markup())
 
+@dp.callback_query(F.data == "util_check")
+async def cb_util_check(cb: CallbackQuery):
+    await answer_cb(cb)
+    user_states[cb.from_user.id] = {"action": "quick_check"}
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌", callback_data="cmd_utils")
+    await edit_msg(cb.message, "🔍 <b>Введите юзернейм для проверки:</b>", kb.as_markup())
+
+@dp.callback_query(F.data == "util_mass")
+async def cb_util_mass(cb: CallbackQuery):
+    await answer_cb(cb)
+    user_states[cb.from_user.id] = {"action": "mass_check"}
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌", callback_data="cmd_utils")
+    await edit_msg(cb.message,
+        "📋 <b>Массовая проверка</b>\n\n"
+        "Отправьте юзернеймы через пробел или по одному на строку\n"
+        "(макс 20):", kb.as_markup())
+
 @dp.callback_query(F.data == "util_hist")
 async def cb_uh(cb: CallbackQuery):
     await answer_cb(cb); uid = cb.from_user.id; hist = get_history(uid)
@@ -4062,6 +4119,18 @@ async def cb_ta(cb: CallbackQuery):
         try: await bot.send_message(uid, f"🎉 Одобрено! 🎁 {TIKTOK_REWARD_GIFT}")
         except: pass
 
+@dp.callback_query(F.data.startswith("tr_"))
+async def cb_tr(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb); tid = int(cb.data[3:])
+    uid = task_reject(tid, cb.from_user.id)
+    if uid:
+        log_action(cb.from_user.id, "task_reject", str(tid))
+        try: await cb.message.edit_text(f"❌ #{tid} отклонено")
+        except: pass
+        try: await bot.send_message(uid, "❌ Задание отклонено. Попробуйте снова.")
+        except: pass
+
 # ═══════════════════════ ФОТО ═══════════════════════
 
 @dp.message(F.photo)
@@ -4633,7 +4702,8 @@ async def handle_text(msg: Message):
             f"Нажми кнопку когда будешь готов передать юзернейм:",
             reply_markup=confirm_kb.as_markup(),
             parse_mode="HTML"
-        
+        )
+        return
     if action=="template_search":
         user_states.pop(uid,None); template=msg.text.strip().lower()
         if len(template)<3 or ("*" not in template and "?" not in template):
