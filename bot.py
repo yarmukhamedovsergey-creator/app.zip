@@ -150,7 +150,8 @@ _fragment_cache_ttl = 600
 BOT_CONFIG_FILE = "bot_config.json"
 
 async def edit_msg(msg, text, kb=None):
-    try: await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    try: await msg.edit_text(text, reply_markup=kb, parse_mode="HTML",
+                             disable_web_page_preview=True)
     except: pass
 
 async def answer_cb(cb, text=None, show_alert=False):
@@ -587,14 +588,26 @@ def gen_beautiful():
         return random.choice(_C)+random.choice(_V)+random.choice(_C)+random.choice(_V)+random.choice(_C)
 
 def gen_meaningful():
-    pre=["my","go","hi","ok","no","up","on","in","mr","dj","pro","top","hot","big",
-         "old","new","red","max","neo","zen","ice","sun","sky","air","sea","own",
-         "try","run","fly","win","get","set","fix","mix","pop","raw","now","day","one"]
-    suf=["bot","dev","pro","man","boy","cat","dog","fox","owl","god","war","run",
-         "fly","win","fan","art","lab","hub","app","web","net","box","job","pay",
-         "buy","car","map","log","key","pin","tag","tip","spy","doc","gem","ink"]
-    mid=["cool","fast","best","good","real","true","dark","wild","bold","epic",
-         "mega","gold","blue","easy","mini","deep","kind","wise","calm","warm"]
+    pre = [
+        "my", "go", "hi", "ok", "no", "up", "on", "in", "mr", "dj", "pro", "top", "hot", "big", 
+        "old", "new", "red", "max", "neo", "zen", "ice", "sun", "sky", "air", "sea", "own", 
+        "try", "run", "fly", "win", "get", "set", "fix", "mix", "pop", "raw", "now", "day", 
+        "one", "bit", "arc", "vox", "lux", "dot", "net", "web", "app", "sys", "bio", "geo",
+        "eco", "cry", "pay", "buy", "sell", "low", "high", "fast", "slow", "hard", "soft"
+    ]
+    mid = [
+        "cool", "fast", "best", "good", "real", "true", "dark", "wild", "bold", "epic", "mega", 
+        "gold", "blue", "easy", "mini", "deep", "kind", "wise", "calm", "warm", "vibe", "flow", 
+        "pure", "rare", "hard", "soft", "neon", "acid", "salt", "fire", "cold", "holy", "lost",
+        "zero", "void", "null", "core", "main", "base", "peak", "smart", "dumb", "full", "empty"
+    ]
+    suf = [
+        "bot", "dev", "pro", "man", "boy", "cat", "dog", "fox", "owl", "god", "war", "run", 
+        "fly", "win", "fan", "art", "lab", "hub", "app", "web", "net", "box", "job", "pay", 
+        "buy", "car", "map", "log", "key", "pin", "tag", "tip", "spy", "doc", "gem", "ink", 
+        "code", "core", "node", "link", "base", "site", "page", "room", "cell", "area", "zone",
+        "point", "spot", "path", "way", "mode", "form", "type", "kind", "part", "unit", "item"
+    ]
     s=random.choice(["ps","pm","us","um","sm","pn","two"])
     if s=="ps": r=random.choice(pre)+random.choice(suf)
     elif s=="pm": r=random.choice(pre)+random.choice(mid)
@@ -612,15 +625,21 @@ def gen_anyword():
     return _pronounceable(random.randint(5,7))
 
 def gen_mat():
-    roots=["blyad","suka","nahui","pizdec","huy","pizd","ebat","mraz","gand","shlyuh",
-           "pidor","mudak","chmo","loh","xyilo","padla","ueban","tvar","blya","fck",
-           "wtf","dmn","btch","azz","dck","fuk","shyt","pzdc","nah","suk","ebl","pid","lox",
-           "zalupa","dermo","gavno","zhopa","bzdun","obsos","gnida","ublud","padonok"]
-    suf=["_pro","_god","_king","_boss","_man","_boy","_top","_go","_gg","_xx",
-         "_69","_228","_666","_13","_1","_x","ka","on","ik","er","ok","ec",
-         "ych","an","off","iz","ov","in","chik","ina","stvo","nik"]
-    pre=["mr_","el_","big_","top_","my_","x_","da_","not_","im_","ya_","the_","super_",
-         "mega_","ultra_","king_","real_","true_","best_","cool_",""]
+    roots = [
+        "blyad","suka","nahui","pizdec","huy","pizda","ebat","mraz","gandon","shlyuha", 
+        "pidor","mudak","chmo","loh","xyilo","padla","ueban","tvar","blya","fck","wtf", 
+        "dmn","btch","azz","dick","fuk","shyt","pzdc","nah","suk","eblan","pidor","lox", 
+        "zalupa","dermo","gavno","zhopa","bzdun","obsos","gnida","ublud", "padonok", "ebun", 
+        "huesos", "manda", "ebal", "skot", "svoloch", "pizdabol", "ebnat", "vafli", "otsos", "shmara", 
+        "proshmandovka", "dayun", "petuh", "ebobo", "dolbaeb", "pizduk", "huylo", "pizdatiy", "shkura",
+        "eblanides", "pizdentry", "hyiviy", "ebuchiy", "sukin", "huilo", "mamkoeb", "otchim", "pizdos"
+    ]
+    pre = [
+        "mr_", "el_", "big_", "top_", "my_", "x_", "da_", "not_", "im_", "ya_", "the_", "super_", 
+        "mega_", "ultra_", "king_", "real_", "true_", "best_", "cool_", "dirty_", "bad_", "mad_", 
+        "hard_", "pure_", "total_", "absolute_", "fucking_", "trash_", "hell_", "dark_", "fat_", 
+        "old_", "young_", "crazy_", "stupid_", "rich_", "poor_", "dead_", "evil_", "bloody_"
+    ]
     s=random.randint(1,6)
     if s==1: r=random.choice(pre)+random.choice(roots)
     elif s==2: r=random.choice(roots)+random.choice(suf)
@@ -635,26 +654,41 @@ def gen_mat():
     return r
 
 def gen_telegram():
-    tg_core = ["tg","telegram","telega","durov","pavel","ton","gram","channel",
-               "chat","group","sticker","emoji","gif","media","voice","video",
-               "story","stories","premium","stars","boost","topic"]
-    tg_features = ["bot","admin","mod","owner","reply","forward","pin","edit",
-                   "delete","mute","ban","kick","invite","link","username",
-                   "bio","photo","pfp","status","online","typing","seen"]
-    tg_slang = ["tgk","tgram","telga","telegam","durik","pasha","tgbot",
-                "tgadm","tgmod","tgpro","tgod","tgking","tgboss","tglife",
-                "chatik","gruppa","kanal","sticer","smailik","gifka"]
-    roles = ["admin","mod","owner","god","king","boss","pro","master","guru",
-             "ninja","dev","hacker","geek","fan","lover","addict","lord",
-             "chief","head","main","super","mega","top","best","real"]
-    verbs = ["send","post","share","like","join","spam","flood","read",
-             "type","call","msg","dm","pm","text","write","chat","talk"]
-    suf = ["_pro","_god","_king","_x","_gg","_1","_top","_go","_bot",
-           "_dev","_fan","_life","_love","_man","_boy","er","ist",
-           "ik","ka","off","on","_channel","_chat","_group"]
-    pre = ["my_","the_","im_","mr_","x_","ya_","not_","just_","only_",
-           "real_","true_","best_","top_","pro_","super_","mega_",""]
-    num = ["","","","1","2","3","69","228","777","_01","_02","_99"]
+    tg_core = [
+        "tg", "telegram", "telega", "durov", "pavel", "ton", "gram", "channel", "chat", "group", 
+        "sticker", "emoji", "gif", "media", "voice", "video", "story", "stories", "premium", 
+        "stars", "boost", "topic", "wallet", "fragment", "anon", "nft", "ad", "stats", "proxy", 
+        "mtproto", "hub", "notcoin", "hamster", "major", "dogs", "blum", "pocket", "seed", 
+        "phrase", "key", "vault", "secure", "secret", "incognito", "ghost", "online", "typing",
+        "desktop", "mobile", "ios", "android", "tapps", "mini", "app", "botfather", "support"
+    ]
+    tg_features = [
+        "bot", "admin", "mod", "owner", "reply", "forward", "pin", "edit", "delete", "mute", 
+        "ban", "kick", "invite", "link", "username", "bio", "photo", "pfp", "status", "seen", 
+        "hash", "peer", "call", "stream", "live", "reaction", "folder", "archive", "burn", 
+        "timer", "selfdestruct", "cloud", "data", "cache", "session", "dc1", "dc2", "dc3", "dc4", "dc5"
+    ]
+    tg_slang = [
+        "tgk", "tgram", "telga", "telegam", "pasha", "tgbot", "tgadm", "tgpro", "tgod", "tgking", 
+        "tgboss", "tglife", "chatik", "kanal", "sticer", "smailik", "gifka", "tele", "tga", 
+        "toncoin", "pashok", "durovish", "cartel", "pabloso", "grid", "pumping", "tap", "clicker",
+        "telerogram", "teleg", "tlgr", "tlgrm", "telegich"
+    ]
+    roles = [
+        "admin", "owner", "god", "king", "boss", "pro", "master", "dev", "hacker", "fan", "lover", 
+        "lord", "main", "super", "mega", "top", "best", "real", "elite", "alpha", "prime", "chief", 
+        "lead", "legend", "hero", "star", "vip", "gold", "rich", "richman", "gentleman", "anonim"
+    ]
+    pre = [
+        "my_", "the_", "im_", "mr_", "not_", "just_", "only_", "real_", "true_", "best_", "top_", 
+        "pro_", "super_", "mega_", "ultra_", "neo_", "meta_", "hyper_", "dark_", "light_", "cyber_",
+        "pure_", "prime_", "alpha_", "omega_", "delta_", "sigma_", "mega_", "grand_", "official_"
+    ]
+    suf = [
+        "_pro", "_god", "_king", "_x", "_gg", "_1", "_top", "_go", "_bot", "_dev", "_fan", "_life", 
+        "_love", "_man", "_boy", "er", "ist", "ik", "ka", "off", "on", "_channel", "_chat", "_group", 
+        "hub", "zone", "net", "web", "app", "box", "lab", "studio", "inc", "corp", "team", "force"
+    ]
     s = random.randint(1, 12)
     if s == 1: r = random.choice(pre) + random.choice(tg_core) + random.choice(suf)
     elif s == 2: r = random.choice(tg_core) + "_" + random.choice(roles)
@@ -940,71 +974,162 @@ def evaluate_username(u):
 # ═══════════════════════ ПОИСК v5 ═══════════════════════
 
 async def do_search(count, gen_func, msg, mode_name, uid):
-    found=[]; attempts=0; start=time.time(); last_update=0
-    checked=set(); errors=0; fallback=not pool.has_sessions()
-    warned_slow=False
-    config=load_bot_config()
-    
+    found = []; attempts = 0; start = time.time()
+    last_update = 0; checked = set()
+    errors = 0; fallback = not pool.has_sessions()
+    warned_slow = False; skip_streak = 0
+
     if fallback:
-        await edit_msg(msg, f"⚠️ <b>{mode_name}</b>\n\n⏳ Все сессии заняты — поиск будет дольше обычного...")
-    
+        await edit_msg(msg,
+            f"⚠️ <b>{mode_name}</b>\n\n"
+            f"Сессии недоступны — Bot API режим\n"
+            f"(медленнее обычного)")
+
     try:
-        while len(found)<count and attempts<1500:
-            u=None
+        while len(found) < count and attempts < 2000:
+            u = None
             for _ in range(30):
-                c=gen_func()
-                if len(c)>=5 and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$',c) and c.lower() not in checked and is_valid_username(c):
-                    u=c.lower(); break
-            if not u: attempts+=1; continue
-            checked.add(u); attempts+=1
+                c = gen_func()
+                if (len(c) >= 5
+                        and re.match(
+                            r'^[a-zA-Z][a-zA-Z0-9_]*$', c)
+                        and c.lower() not in checked
+                        and is_valid_username(c)):
+                    u = c.lower(); break
+
+            if not u: attempts += 1; continue
+            checked.add(u); attempts += 1
 
             if fallback:
-                b=await pool._botapi(u)
-                if b!="taken":
-                    fr=await check_fragment(u)
-                    found.append({"username":u,"fragment":fr})
-                    save_history(uid,u,mode_name,len(u))
-                await asyncio.sleep(2)  # ═ МЕДЛЕННЕЕ чтобы не ломать ═
+                b = await pool._botapi(u)
+                if b != "taken":
+                    fr = await check_fragment(u)
+                    found.append({
+                        "username": u,
+                        "fragment": fr
+                    })
+                    save_history(
+                        uid, u, mode_name, len(u))
+                await asyncio.sleep(1.5)
+
             else:
-                r=await pool.check(u,uid)
-                if r=="taken": errors=0; await asyncio.sleep(0.2); continue
-                if r=="skip":
-                    errors+=1
-                    if errors>=3 and not warned_slow:
-                        warned_slow=True
-                        fallback=True
+                r = await pool.check(u, uid)
+
+                if r == "taken":
+                    errors = 0
+                    skip_streak = 0
+                    await asyncio.sleep(0.2)
+                    continue
+
+                if r == "skip":
+                    errors += 1
+                    skip_streak += 1
+
+                    # Первые 3 skip — просто ждём
+                    if skip_streak <= 3:
+                        await asyncio.sleep(2)
+                        continue
+
+                    # 4-8 skip подряд — предупреждаем
+                    if skip_streak <= 8 and not warned_slow:
+                        warned_slow = True
+                        ps = pool.stats()
+                        await edit_msg(msg,
+                            f"⏳ <b>{mode_name}</b>\n\n"
+                            f"🔄 Сессии перегружены, "
+                            f"жду...\n\n"
+                            f"🔢 Попыток: "
+                            f"<code>{attempts}</code>\n"
+                            f"✅ Найдено: "
+                            f"<code>{len(found)}"
+                            f"/{count}</code>\n"
+                            f"🟢 Живых: "
+                            f"{ps['active']}")
+                        await asyncio.sleep(3)
+                        continue
+
+                    # 9+ skip — переходим в fallback
+                    if skip_streak > 8:
+                        fallback = True
+                        skip_streak = 0
+                        errors = 0
                         await edit_msg(msg,
                             f"⚠️ <b>{mode_name}</b>\n\n"
-                            f"⏳ Все сессии заняты — поиск будет дольше обычного...\n\n"
-                            f"📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>")
-                        errors=0
-                    await asyncio.sleep(2); continue  # ═ МЕДЛЕННЕЕ ═
-                errors=0
-                if r=="maybe_free":
-                    final=await pool.strong_check(u,uid)
-                    if final=="taken": await asyncio.sleep(0.5); continue  # ═ чуть медленнее ═
-                    if final=="skip": await asyncio.sleep(2); continue  # ═ МЕДЛЕННЕЕ ═
-                    if final=="free":
-                        fr=await check_fragment(u)
-                        if fr!="fragment":
-                            found.append({"username":u,"fragment":fr})
-                            save_history(uid,u,mode_name,len(u))
-                    await asyncio.sleep(0.8)  # ═ чуть медленнее ═
+                            f"Сессии недоступны — "
+                            f"переключаюсь на Bot API\n\n"
+                            f"🔢 Попыток: "
+                            f"<code>{attempts}</code>\n"
+                            f"✅ Найдено: "
+                            f"<code>{len(found)}"
+                            f"/{count}</code>")
+                        await asyncio.sleep(2)
+                        continue
 
-            now=time.time()
-            if now-last_update>2.0:
-                last_update=now; el=int(now-start)
+                    await asyncio.sleep(2)
+                    continue
+
+                # Если дошли сюда — сессия работает
+                errors = 0
+                skip_streak = 0
+                warned_slow = False
+
+                if r == "maybe_free":
+                    final = await pool.strong_check(
+                        u, uid)
+                    if final == "taken":
+                        await asyncio.sleep(0.5)
+                        continue
+                    if final == "skip":
+                        skip_streak += 1
+                        await asyncio.sleep(1.5)
+                        continue
+                    if final == "free":
+                        fr = await check_fragment(u)
+                        if fr != "fragment":
+                            found.append({
+                                "username": u,
+                                "fragment": fr
+                            })
+                            save_history(
+                                uid, u,
+                                mode_name, len(u))
+                        await asyncio.sleep(0.8)
+
+            # Обновление статуса
+            now = time.time()
+            if now - last_update > 2.0:
+                last_update = now
+                el = int(now - start)
+                ps = pool.stats()
+
                 if fallback:
-                    sl="⚠️ Сессии заняты"
+                    sl = "⚠️ Bot API режим"
                 else:
-                    ps=pool.stats()
-                    sl=f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
-                slow_txt = "\n⏳ Поиск дольше обычного..." if (warned_slow or fallback) else ""
-                await edit_msg(msg,f"🔎 <b>{mode_name}</b>\n\n📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>\n🔄 {sl}\n⏱ {el}с{slow_txt}")
-        return found, {"attempts":attempts,"elapsed":int(time.time()-start)}
+                    sl = (
+                        f"🟢{ps['active']-ps.get('warming',0)} "
+                        f"🟡{ps.get('warming',0)} "
+                        f"🟠{ps.get('cooldown',0)} "
+                        f"🔴{ps.get('dead',0)}"
+                    )
+
+                await edit_msg(msg,
+                    f"🔍 <b>{mode_name}</b>\n\n"
+                    f"🔢 Проверено: "
+                    f"<code>{attempts}</code>\n"
+                    f"✅ Найдено: "
+                    f"<code>{len(found)}"
+                    f"/{count}</code>\n"
+                    f"🔑 {sl}\n"
+                    f"⏱ {el}с")
+
+        return found, {
+            "attempts": attempts,
+            "elapsed": int(time.time() - start)
+        }
+
     finally:
         pool.remove_user(uid)
-
+        
 async def do_template_search(template, count, msg, uid):
     found=[]; attempts=0; start=time.time(); last_update=0; checked=set()
     try:
@@ -2024,28 +2149,81 @@ def exchange_create(uid, offer):
 
 def exchange_accept(eid, partner_uid, partner_offer):
     conn = sqlite3.connect(DB); c = conn.cursor()
-    deadline = (datetime.now() + timedelta(hours=MARKET_ESCROW_HOURS)).strftime("%Y-%m-%d %H:%M")
-    c.execute("UPDATE exchanges SET partner_uid=?,partner_offer=?,status='escrow',escrow_deadline=? WHERE id=? AND status='open' AND initiator_uid!=?",
-              (partner_uid, partner_offer, deadline, eid, partner_uid))
-    changed = c.rowcount; conn.commit(); conn.close(); return changed > 0
+    deadline = (datetime.now() + 
+                timedelta(hours=MARKET_ESCROW_HOURS)
+                ).strftime("%Y-%m-%d %H:%M")
+    c.execute("""UPDATE exchanges SET 
+                 partner_uid=?, partner_offer=?,
+                 status='escrow', escrow_deadline=?
+                 WHERE id=? AND status='open' 
+                 AND initiator_uid!=?""",
+             (partner_uid, partner_offer, deadline, 
+              eid, partner_uid))
+    changed = c.rowcount; conn.commit()
+    
+    if changed > 0:
+        # Получаем данные для уведомлений
+        c.execute("""SELECT initiator_uid, initiator_offer 
+                     FROM exchanges WHERE id=?""", (eid,))
+        row = c.fetchone()
+        conn.close()
+        
+        if row:
+            return True, {
+                "initiator_uid": row[0],
+                "initiator_offer": row[1],
+                "partner_offer": partner_offer
+            }
+    
+    conn.close()
+    return False, None
 
 def exchange_confirm(eid, uid):
     conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("SELECT initiator_uid,partner_uid FROM exchanges WHERE id=?", (eid,))
+    c.execute("""SELECT initiator_uid, partner_uid, status,
+                 initiator_confirmed, partner_confirmed,
+                 initiator_offer, partner_offer
+                 FROM exchanges WHERE id=?""", (eid,))
     row = c.fetchone()
-    if not row: conn.close(); return False
-    if uid == row[0]: c.execute("UPDATE exchanges SET initiator_confirmed=1 WHERE id=?", (eid,))
-    elif uid == row[1]: c.execute("UPDATE exchanges SET partner_confirmed=1 WHERE id=?", (eid,))
-    else: conn.close(); return False
-    conn.commit(); conn.close()
-    conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("SELECT initiator_confirmed,partner_confirmed FROM exchanges WHERE id=?", (eid,))
+    if not row: conn.close(); return False, None
+    
+    init_uid, part_uid, status, init_conf, part_conf, init_offer, part_offer = row
+    
+    if status not in ('escrow', 'open'):
+        conn.close(); return False, None
+    
+    if uid == init_uid:
+        c.execute("UPDATE exchanges SET initiator_confirmed=1 WHERE id=?", (eid,))
+    elif uid == part_uid:
+        c.execute("UPDATE exchanges SET partner_confirmed=1 WHERE id=?", (eid,))
+    else:
+        conn.close(); return False, None
+    
+    conn.commit()
+    
+    # Проверяем оба подтверждения
+    c.execute("""SELECT initiator_confirmed, partner_confirmed,
+                 initiator_uid, partner_uid,
+                 initiator_offer, partner_offer
+                 FROM exchanges WHERE id=?""", (eid,))
     r = c.fetchone()
+    
     if r and r[0] and r[1]:
-        c.execute("UPDATE exchanges SET status='completed',completed_at=? WHERE id=?",
-                  (datetime.now().strftime("%Y-%m-%d %H:%M"), eid))
-        conn.commit(); conn.close(); return True
-    conn.close(); return False
+        c.execute("""UPDATE exchanges SET 
+                     status='completed', completed_at=? 
+                     WHERE id=?""",
+                 (datetime.now().strftime("%Y-%m-%d %H:%M"), eid))
+        conn.commit()
+        conn.close()
+        return True, {
+            "initiator_uid": r[2],
+            "partner_uid": r[3],
+            "initiator_offer": r[4],  # что отдаёт инициатор
+            "partner_offer": r[5]     # что отдаёт партнёр
+        }
+    
+    conn.close()
+    return False, None
 
 def exchange_get_open(limit=20):
     conn = sqlite3.connect(DB); c = conn.cursor()
@@ -2357,9 +2535,6 @@ async def cmd_balance(msg: Message):
     kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
     await msg.answer(f"💰 <b>Баланс:</b> <code>{bal:.1f}</code> ⭐", reply_markup=kb.as_markup(), parse_mode="HTML")
 
-from aiogram.types import Message
-from aiogram.filters import Command
-
 @dp.message(Command("getdb"))
 async def send_db(message: Message):
     # Проверка ID
@@ -2593,18 +2768,6 @@ async def cb_utils(cb: CallbackQuery):
     kb.button(text="🗑 Удалить по шаблону", callback_data="util_delete_pattern")
     kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(2)
     await edit_msg(cb.message, "🔧 <b>Утилиты</b>", kb.as_markup())
-
-@dp.callback_query(F.data == "util_check")
-async def cb_uc(cb: CallbackQuery):
-    await answer_cb(cb); user_states[cb.from_user.id] = {"action":"quick_check"}
-    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_utils")
-    await edit_msg(cb.message, "🔍 <b>Юзернейм:</b>", kb.as_markup())
-
-@dp.callback_query(F.data == "util_mass")
-async def cb_um(cb: CallbackQuery):
-    await answer_cb(cb); user_states[cb.from_user.id] = {"action":"mass_check"}
-    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_utils")
-    await edit_msg(cb.message, "📋 <b>По строке (макс 20):</b>", kb.as_markup())
 
 @dp.callback_query(F.data == "util_hist")
 async def cb_uh(cb: CallbackQuery):
@@ -3155,27 +3318,116 @@ async def cb_exview(cb: CallbackQuery):
     kb.button(text="🔙", callback_data="market_exchange")
     await edit_msg(cb.message, text, kb.as_markup())
 
+# Обновляем cb_exaccept и cb_exview
 @dp.callback_query(F.data.startswith("exaccept_"))
 async def cb_exaccept(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     eid = int(cb.data[9:])
-    user_states[uid] = {"action":"exchange_counter","eid":eid}
-    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data=f"exview_{eid}")
-    await edit_msg(cb.message, "🔄 <b>Что предлагаете взамен?</b>", kb.as_markup())
+    user_states[uid] = {"action": "exchange_counter", "eid": eid}
+    
+    ex = exchange_get(eid)
+    if not ex:
+        await edit_msg(cb.message, "❌ Обмен не найден")
+        return
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Отмена", callback_data=f"exview_{eid}")
+    
+    await edit_msg(cb.message,
+        f"🔄 <b>Принять обмен #{eid}</b>\n\n"
+        f"📥 Тебе предлагают: <code>@{ex['initiator_offer']}</code>\n\n"
+        f"📤 Что предложишь взамен?\n"
+        f"Введи свой юзернейм (без @):",
+        kb.as_markup())
 
 @dp.callback_query(F.data.startswith("exconfirm_"))
 async def cb_exconfirm(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     eid = int(cb.data[10:])
-    completed = exchange_confirm(eid, uid)
-    if completed:
-        ex = exchange_get(eid)
-        await edit_msg(cb.message, f"✅ <b>Обмен #{eid} завершён!</b>")
-        other = ex["partner_uid"] if uid == ex["initiator_uid"] else ex["initiator_uid"]
-        try: await bot.send_message(other, f"✅ Обмен #{eid} завершён!", parse_mode="HTML")
+    
+    completed, ex_data = exchange_confirm(eid, uid)
+    
+    if completed and ex_data:
+        init_uid = ex_data["initiator_uid"]
+        part_uid = ex_data["partner_uid"]
+        init_offer = ex_data["initiator_offer"]  # юз инициатора
+        part_offer = ex_data["partner_offer"]    # юз партнёра
+        
+        # Определяем кто что получает
+        # Инициатор ПОЛУЧАЕТ юз партнёра
+        # Партнёр ПОЛУЧАЕТ юз инициатора
+        
+        if uid == init_uid:
+            # Инициатор подтвердил последним
+            i_get = part_offer   # инициатор получает юз партнёра
+            p_get = init_offer   # партнёр получает юз инициатора
+        else:
+            # Партнёр подтвердил последним
+            i_get = part_offer
+            p_get = init_offer
+        
+        # Сообщение тому кто нажал (видит сразу)
+        you_get = i_get if uid == init_uid else p_get
+        you_gave = init_offer if uid == init_uid else part_offer
+        
+        await edit_msg(cb.message,
+            f"✅ <b>Обмен #{eid} завершён!</b>\n\n"
+            f"📤 Ты отдал: <code>@{you_gave}</code>\n"
+            f"📥 Ты получил: <code>@{you_get}</code>\n\n"
+            f"🔗 <a href='https://t.me/{you_get}'>Открыть в Telegram</a>\n"
+            f"💎 <a href='https://fragment.com/username/{you_get}'>Проверить на Fragment</a>\n\n"
+            f"⚠️ Не забудь — юзернейм нужно "
+            f"<b>успеть забрать</b> до того как его займут!")
+        
+        # Уведомляем второго участника
+        other_uid = part_uid if uid == init_uid else init_uid
+        other_get = i_get if other_uid == init_uid else p_get
+        other_gave = init_offer if other_uid == init_uid else part_offer
+        
+        try:
+            await bot.send_message(other_uid,
+                f"✅ <b>Обмен #{eid} завершён!</b>\n\n"
+                f"📤 Ты отдал: <code>@{other_gave}</code>\n"
+                f"📥 Ты получил: <code>@{other_get}</code>\n\n"
+                f"🔗 <a href='https://t.me/{other_get}'>Открыть в Telegram</a>\n"
+                f"💎 <a href='https://fragment.com/username/{other_get}'>Проверить на Fragment</a>\n\n"
+                f"⚠️ Не забудь — юзернейм нужно "
+                f"<b>успеть забрать</b> до того как его займут!",
+                parse_mode="HTML",
+                disable_web_page_preview=True)
         except: pass
+        
+        # Логируем
+        log_action(uid, "exchange_complete",
+                  f"#{eid} {init_offer}↔{part_offer}")
+        
     else:
-        await edit_msg(cb.message, "✅ Подтверждено! Ждём другую сторону")
+        # Ждём второго
+        ex = exchange_get(eid)
+        if not ex:
+            await edit_msg(cb.message, "❌ Обмен не найден")
+            return
+            
+        # Показываем что предложил другой
+        if uid == ex.get("initiator_uid"):
+            you_offer = ex.get("initiator_offer", "?")
+            they_offer = ex.get("partner_offer", "?")
+        else:
+            you_offer = ex.get("partner_offer", "?")
+            they_offer = ex.get("initiator_offer", "?")
+        
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🏪 Обменник", callback_data="market_exchange")
+        kb.adjust(1)
+        
+        await edit_msg(cb.message,
+            f"✅ <b>Ты подтвердил получение!</b>\n\n"
+            f"📤 Ты отдаёшь: <code>@{you_offer}</code>\n"
+            f"📥 Ты получишь: <code>@{they_offer}</code>\n\n"
+            f"⏳ Ждём подтверждения второй стороны...\n\n"
+            f"💡 Как только они нажмут подтвердить — "
+            f"вы оба получите юзернеймы автоматически",
+            kb.as_markup())
 
 
 # ═══════════════════════ CALLBACKS: Мониторинг ═══════════════════════
@@ -4332,22 +4584,56 @@ async def handle_text(msg: Message):
         log_action(uid,"exchange",str(eid))
         await msg.answer(f"✅ <b>Обмен #{eid}!</b>\n📦 {msg.text.strip()}\n⏳ Ждите", parse_mode="HTML"); return
 
-    if action=="exchange_counter":
-        user_states.pop(uid,None); eid=state["eid"]
-        if len(msg.text.strip())<3: await msg.answer("❌ Минимум 3 символа"); return
-        ok=exchange_accept(eid,uid,msg.text.strip())
-        if not ok: await msg.answer("❌ Обмен закрыт"); return
-        ex=exchange_get(eid)
-        name=f"@{msg.from_user.username}" if msg.from_user.username else f"ID:{uid}"
-        ikb=InlineKeyboardBuilder()
-        ikb.button(text="✅ Подтвердить", callback_data=f"exconfirm_{eid}")
-        ikb.adjust(1)
-        try: await bot.send_message(ex["initiator_uid"],
-            f"🔄 Предложение обмена!\n👤 {name}: <b>{msg.text.strip()}</b>\nЗа: <b>{ex['initiator_offer']}</b>",
-            reply_markup=ikb.as_markup(), parse_mode="HTML")
-        except: pass
-        await msg.answer("✅ Отправлено!\n⏳ Ждём"); return
+    if action == "exchange_counter":
+        user_states.pop(uid, None)
+        eid = state["eid"]
     
+        offer = msg.text.strip().replace("@", "").lower()
+    
+        # Валидация юзернейма
+        if not validate_username(offer):
+            await msg.answer("❌ Некорректный юзернейм (5-32 символа, латиница)")
+            return
+    
+        ok, data = exchange_accept(eid, uid, offer)
+    
+        if not ok:
+            await msg.answer("❌ Обмен уже закрыт или недоступен")
+            return
+    
+        ex = exchange_get(eid)
+        init_uid = ex["initiator_uid"]
+    
+    # Кнопки подтверждения для ОБОИХ
+        confirm_kb = InlineKeyboardBuilder()
+        confirm_kb.button(
+            text="✅ Я готов отдать юз", 
+            callback_data=f"exconfirm_{eid}"
+        )
+        confirm_kb.adjust(1)
+    
+        # Уведомляем инициатора
+        try:
+            await bot.send_message(init_uid,
+                f"🤝 <b>Обмен #{eid} принят!</b>\n\n"
+                f"📤 Ты отдаёшь: <code>@{ex['initiator_offer']}</code>\n"
+                f"📥 Ты получишь: <code>@{offer}</code>\n\n"
+                f"⏰ Дедлайн: {MARKET_ESCROW_HOURS} часов\n\n"
+                f"Нажми кнопку когда будешь готов передать юзернейм:",
+                reply_markup=confirm_kb.as_markup(),
+                parse_mode="HTML")
+        except: pass
+    
+        # Сообщение партнёру
+        await msg.answer(
+            f"✅ <b>Обмен #{eid} создан!</b>\n\n"
+            f"📥 Ты получишь: <code>@{ex['initiator_offer']}</code>\n"
+            f"📤 Ты отдаёшь: <code>@{offer}</code>\n\n"
+            f"⏰ Дедлайн: {MARKET_ESCROW_HOURS} часов\n\n"
+            f"Нажми кнопку когда будешь готов передать юзернейм:",
+            reply_markup=confirm_kb.as_markup(),
+            parse_mode="HTML"
+        
     if action=="template_search":
         user_states.pop(uid,None); template=msg.text.strip().lower()
         if len(template)<3 or ("*" not in template and "?" not in template):
@@ -4684,43 +4970,213 @@ async def cb_admin(cb: CallbackQuery):
     if cb.from_user.id not in ADMIN_IDS: return
     await answer_cb(cb)
     s = get_stats(); ps = pool.stats()
-    sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
-    text = (
-        f"👑 <b>v25.0</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"👥 <code>{s['users']}</code> | 💎 <code>{s['subs']}</code> | 🚫 <code>{s['banned']}</code>\n"
-        f"🔍 <code>{s['searches']}</code> | 📅 👤<code>{s['today_users']}</code> 🔍<code>{s['today_searches']}</code>\n\n"
-        f"🔄 {sl}\n📊 <code>{ps['checks']}</code> | 🛡 <code>{ps['botapi_saves']+ps.get('recheck_saves',0)}</code>\n\n"
-        f"👁 <code>{s['monitors']}</code> | ⛔ <code>{s['blacklist']}</code> | 📱 <code>{s['tasks']}</code> | 💸 <code>{s['withdrawals']}</code>")
-    kb = InlineKeyboardBuilder()
-    kb.button(text="👤 Юзер", callback_data="a_user")
-    kb.button(text="💎 Premium", callback_data="a_plist")
-    kb.button(text="📩 Выдать", callback_data="a_give")
-    kb.button(text="🔑 Ключ", callback_data="a_keys")
-    kb.button(text="🚫 Бан", callback_data="a_ban")
-    kb.button(text="✅ Разбан", callback_data="a_unban")
-    kb.button(text="👥 Рефералы", callback_data="a_refs")
-    kb.button(text="📢 Акции", callback_data="a_promos")
-    kb.button(text="⛔ Чёрный список", callback_data="a_blacklist")
-    kb.button(text="🎁 Розыгрыш", callback_data="a_raffle")
-    kb.button(text=f"📱 TT ({s['tasks']})", callback_data="a_tt")
-    kb.button(text=f"💸 Выводы ({s['withdrawals']})", callback_data="a_wd")
-    kb.button(text="📤 Рассылка", callback_data="a_bcast")
-    kb.button(text="📊 Экспорт", callback_data="a_export")
-    kb.button(text=f"🔄 Сессии ({ps['active']}/{ps['total']})", callback_data="a_sessions")
-    kb.button(text="📋 Лог", callback_data="a_log")
-    kb.button(text="⚙️ Управление", callback_data="a_control")
-    kb.button(text="📥 Обновить код", callback_data="a_update")
-    kb.button(text="🔄 Перезапуск", callback_data="a_restart")
-    kb.button(text="📋 Логи", callback_data="a_logs")
-    kb.button(text="💻 Сервер", callback_data="a_server")
     pending_m = len(market_get_pending())
     disputes_m = len(market_get_disputes())
-    kb.button(text=f"📦 Маркет ({pending_m})", callback_data="a_mmod")
-    kb.button(text=f"⚠️ Споры ({disputes_m})", callback_data="a_mdisputes")
-    kb.button(text="🏷 Промокоды", callback_data="a_promocodes")
+    
+    sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
+    
+    text = (
+        f"👑 <b>Админ-панель v26.0</b>\n{'='*20}\n\n"
+        f"👥 <code>{s['users']}</code> юзеров | 💎 <code>{s['subs']}</code> Premium\n"
+        f"🔢 <code>{s['searches']}</code> поисков | 🆕 +<code>{s['today_users']}</code> сегодня\n"
+        f"🔑 Сессии: {sl}\n"
+        f"🏪 Маркет: <code>{pending_m}</code> модерация | ⚠️ <code>{disputes_m}</code> споров")
+    
+    kb = InlineKeyboardBuilder()
+    kb.button(text="👤 Юзеры", callback_data="adm_users")
+    kb.button(text="💎 Подписки", callback_data="adm_subs")
+    kb.button(text="🏪 Маркет", callback_data="adm_market")
+    kb.button(text="🔑 Сессии", callback_data="adm_sessions")
+    kb.button(text="📢 Рассылка", callback_data="adm_broadcast")
+    kb.button(text="⚙️ Настройки", callback_data="a_control")
+    kb.button(text="🖥 Сервер", callback_data="adm_server")
     kb.button(text="🔙 Меню", callback_data="cmd_menu")
     kb.adjust(2)
     await edit_msg(cb.message, text, kb.as_markup())
+
+# === ЮЗЕРЫ ===
+@dp.callback_query(F.data == "adm_users")
+async def cb_adm_users(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    s = get_stats()
+    text = f"👤 <b>Юзеры</b>\n\nВсего: <code>{s['users']}</code>\nБан: <code>{s['banned']}</code>"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🔍 Найти", callback_data="a_user")
+    kb.button(text="🚫 Бан", callback_data="a_ban")
+    kb.button(text="✅ Разбан", callback_data="a_unban")
+    kb.button(text="📤 Экспорт", callback_data="a_export")
+    kb.button(text="👥 Рефералы", callback_data="a_refs")
+    kb.button(text="⚫ Чёрный список", callback_data="a_blacklist")
+    kb.button(text="📋 Лог", callback_data="a_log")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin")
+    kb.adjust(2)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+# === ПОДПИСКИ ===
+@dp.callback_query(F.data == "adm_subs")
+async def cb_adm_subs(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    s = get_stats()
+    text = f"💎 <b>Подписки</b>\n\nАктивных: <code>{s['subs']}</code>"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="💎 Список Premium", callback_data="a_plist")
+    kb.button(text="🎁 Выдать", callback_data="a_give")
+    kb.button(text="🔑 Ключи", callback_data="a_keys")
+    kb.button(text="🎰 Розыгрыш", callback_data="a_raffle")
+    kb.button(text="🎪 Акции", callback_data="a_promos")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin")
+    kb.adjust(2)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+# === МАРКЕТ ===
+@dp.callback_query(F.data == "adm_market")
+async def cb_adm_market(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    pending_m = len(market_get_pending())
+    disputes_m = len(market_get_disputes())
+    s = get_stats()
+    text = (f"🏪 <b>Маркет</b>\n\n"
+            f"📋 Модерация: <code>{pending_m}</code>\n"
+            f"⚠️ Споры: <code>{disputes_m}</code>\n"
+            f"💸 Выводы: <code>{s['withdrawals']}</code>")
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"📋 Модерация ({pending_m})", callback_data="a_mmod")
+    kb.button(text=f"⚠️ Споры ({disputes_m})", callback_data="a_mdisputes")
+    kb.button(text="🏷️ Промокоды", callback_data="a_promocodes")
+    kb.button(text=f"💸 Выводы ({s['withdrawals']})", callback_data="a_wd")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin")
+    kb.adjust(2)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+# === СЕССИИ ===
+@dp.callback_query(F.data == "adm_sessions")
+async def cb_adm_sessions(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    ps = pool.stats(); detail = pool.detailed_status()
+    saved = load_saved_sessions()
+    text = (f"🔑 <b>Сессии</b>\n\n"
+            f"🟢 Активных: {ps['active']-ps.get('warming',0)}\n"
+            f"🟡 Прогрев: {ps.get('warming',0)}\n"
+            f"🟠 Кулдаун: {ps.get('cooldown',0)}\n"
+            f"🔴 Мёртвых: {ps.get('dead',0)}\n"
+            f"🔢 Проверок: {ps['checks']}\n\n"
+            f"<pre>{detail}</pre>\n\n"
+            f"💾 Сохранённых: <code>{len(saved)}</code>")
+    kb = InlineKeyboardBuilder()
+    for i in range(len(pool.clients)):
+        st = pool.status.get(i, 'dead')
+        em = {'healthy':'🟢','warming':'🟡','cooldown':'🟠','dead':'🔴'}.get(st,'❓')
+        if st == 'dead':
+            kb.button(text=f"🔄 #{i+1}", callback_data=f"a_revive_{i}")
+        else:
+            kb.button(text=f"{em} #{i+1}", callback_data=f"a_kill_{i}")
+    kb.button(text="➕ Добавить", callback_data="a_add_session")
+    kb.button(text="💾 Все аккаунты", callback_data="adm_all_accounts")
+    kb.button(text="⚡ Reconnect all", callback_data="a_reconnect_all")
+    kb.button(text="🔄 Обновить", callback_data="adm_sessions")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin")
+    kb.adjust(2)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+# === ВСЕ АККАУНТЫ ===
+@dp.callback_query(F.data == "adm_all_accounts")
+async def cb_all_accounts(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    saved = load_saved_sessions()
+    if not saved:
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="adm_sessions")
+        await edit_msg(cb.message, "💾 <b>Нет сохранённых аккаунтов</b>", kb.as_markup())
+        return
+    text = f"💾 <b>Все аккаунты ({len(saved)})</b>\n{'='*20}\n\n"
+    for i, s in enumerate(saved):
+        st_em = "🟢" if s.get("status") == "active" else "🔴"
+        phone = s.get("phone", "?")
+        hidden = phone[:4] + "****" + phone[-3:] if len(phone) > 7 else phone
+        text += (f"{st_em} <b>#{i+1}</b> {hidden}\n"
+                f"   api_id: <code>{s.get('api_id','?')}</code>\n"
+                f"   hash: <code>{str(s.get('api_hash','?'))[:8]}...</code>\n\n")
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📤 Скачать JSON", callback_data="adm_export_sessions")
+    kb.button(text="➕ Добавить", callback_data="a_add_session")
+    kb.button(text="🔙 Сессии", callback_data="adm_sessions")
+    kb.adjust(1)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "adm_export_sessions")
+async def cb_export_sessions(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    saved = load_saved_sessions()
+    content = json.dumps(saved, indent=2, ensure_ascii=False)
+    await bot.send_document(cb.from_user.id,
+        BufferedInputFile(content.encode(), filename=f"sessions_{datetime.now().strftime('%Y%m%d_%H%M')}.json"),
+        caption=f"💾 {len(saved)} аккаунтов")
+
+# === РАССЫЛКА ===
+@dp.callback_query(F.data == "adm_broadcast")
+async def cb_adm_broadcast(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    s = get_stats()
+    text = f"📢 <b>Рассылка и экспорт</b>"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="📢 Рассылка", callback_data="a_bcast")
+    kb.button(text="📊 Экспорт юзеров", callback_data="a_export")
+    kb.button(text=f"🎬 TikTok ({s['tasks']})", callback_data="a_tt")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin")
+    kb.adjust(2)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+# === СЕРВЕР ===
+@dp.callback_query(F.data == "adm_server")
+async def cb_adm_server_menu(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    text = f"🖥 <b>Сервер и код</b>"
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🖥 Состояние", callback_data="a_server")
+    kb.button(text="📋 Логи", callback_data="a_logs")
+    kb.button(text="🔄 Обновить код", callback_data="a_update")
+    kb.button(text="🔄 Перезапуск", callback_data="a_restart")
+    kb.button(text="📥 Скачать bot.py", callback_data="adm_download_code")
+    kb.button(text="📥 Скачать БД", callback_data="adm_download_db")
+    kb.button(text="🔙 Админ", callback_data="cmd_admin")
+    kb.adjust(2)
+    await edit_msg(cb.message, text, kb.as_markup())
+
+# === СКАЧАТЬ КОД И БД ===
+@dp.callback_query(F.data == "adm_download_code")
+async def cb_download_code(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    try:
+        fn = "bot.py"
+        if not os.path.exists(fn):
+            # Пробуем найти текущий файл
+            fn = os.path.abspath(__file__)
+        with open(fn, "rb") as f:
+            await bot.send_document(cb.from_user.id,
+                BufferedInputFile(f.read(), filename=f"bot_{datetime.now().strftime('%Y%m%d_%H%M')}.py"),
+                caption="📥 Текущий код бота")
+    except Exception as e:
+        await cb.message.answer(f"❌ {e}")
+
+@dp.callback_query(F.data == "adm_download_db")
+async def cb_download_db(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS: return
+    await answer_cb(cb)
+    try:
+        with open(DB, "rb") as f:
+            await bot.send_document(cb.from_user.id,
+                BufferedInputFile(f.read(), filename=f"hunter_{datetime.now().strftime('%Y%m%d_%H%M')}.db"),
+                caption="📥 База данных")
+    except Exception as e:
+        await cb.message.answer(f"❌ {e}")
 
 @dp.callback_query(F.data == "a_user")
 async def cb_a_user(cb: CallbackQuery):
