@@ -4333,41 +4333,41 @@ async def handle_text(msg: Message):
     # ═══ НОВОЕ: Поиск по слову (Premium режимы: telegram, mat, meaningful) ═══
     
     # ═══ НОВОЕ: Тематический поиск ═══
-if action=="thematic_search":
-    user_states.pop(uid,None); word=msg.text.strip().lower().replace("@","")
-    if len(word)<2 or len(word)>20:
-        await msg.answer("❌ Слово от 2 до 20 символов"); return
-    if not re.match(r'^[a-zA-Z0-9_]+$', word):
-        await msg.answer("❌ Только латиница, цифры, _"); return
-    if not has_subscription(uid) and uid not in ADMIN_IDS:
-        await msg.answer("🔒 Нужен Premium!"); return
-    if not can_search(uid):
-        await msg.answer("⛔️ Поиски закончились!"); return
-    if uid not in ADMIN_IDS:
-        if uid in searching_users:
-            await msg.answer("⏳ Уже идёт поиск!"); return
-        cd = user_search_cooldown.get(uid,0); rem = SEARCH_COOLDOWN-(time.time()-cd)
-        if rem>0: await msg.answer(f"⏳ {int(rem)} сек."); return
-    searching_users.add(uid)
-    try:
-        log_action(uid,"word_search",word); use_search(uid)
-        wm=await msg.answer(f"🎯 <b>По слову: {word}</b>\n\n⏳ Ищу комбинации...")
-        count = get_search_count(uid)
-        found, stats = await do_word_search(word, count, wm, uid)
-        # Итоговое сообщение
-        kb = InlineKeyboardBuilder()
-        if found:
-            text = (f"✅ <b>Готово!</b>\n\n"
-                    f"🔤 Слово: <code>{word}</code>\n"
-                    f"✅ Найдено: <code>{len(found)}</code>\n"
-                    f"📊 Проверено: <code>{stats['attempts']}</code>\n"
-                    f"⏱ {stats['elapsed']}с")
-        else:
-            text = (f"😔 <b>Ничего не найдено</b>\n\n"
-                    f"🔤 Слово: <code>{word}</code>\n"
-                    f"📊 Проверено: <code>{stats['attempts']}</code>\n"
-                    f"⏱ {stats['elapsed']}с\n\n"
-                    f"Попробуйте другое слово!")
+    if action=="thematic_search":
+        user_states.pop(uid,None); word=msg.text.strip().lower().replace("@","")
+        if len(word)<2 or len(word)>20:
+            await msg.answer("❌ Слово от 2 до 20 символов"); return
+        if not re.match(r'^[a-zA-Z0-9_]+$', word):
+            await msg.answer("❌ Только латиница, цифры, _"); return
+        if not has_subscription(uid) and uid not in ADMIN_IDS:
+            await msg.answer("🔒 Нужен Premium!"); return
+        if not can_search(uid):
+            await msg.answer("⛔️ Поиски закончились!"); return
+        if uid not in ADMIN_IDS:
+            if uid in searching_users:
+                await msg.answer("⏳ Уже идёт поиск!"); return
+            cd = user_search_cooldown.get(uid,0); rem = SEARCH_COOLDOWN-(time.time()-cd)
+            if rem>0: await msg.answer(f"⏳ {int(rem)} сек."); return
+        searching_users.add(uid)
+        try:
+            log_action(uid,"word_search",word); use_search(uid)
+            wm=await msg.answer(f"🎯 <b>По слову: {word}</b>\n\n⏳ Ищу комбинации...")
+            count = get_search_count(uid)
+            found, stats = await do_word_search(word, count, wm, uid)
+            # Итоговое сообщение
+            kb = InlineKeyboardBuilder()
+            if found:
+                text = (f"✅ <b>Готово!</b>\n\n"
+                        f"🔤 Слово: <code>{word}</code>\n"
+                        f"✅ Найдено: <code>{len(found)}</code>\n"
+                        f"📊 Проверено: <code>{stats['attempts']}</code>\n"
+                        f"⏱ {stats['elapsed']}с")
+            else:
+                text = (f"😔 <b>Ничего не найдено</b>\n\n"
+                        f"🔤 Слово: <code>{word}</code>\n"
+                        f"📊 Проверено: <code>{stats['attempts']}</code>\n"
+                        f"⏱ {stats['elapsed']}с\n\n"
+                        f"Попробуйте другое слово!")
         if can_search(uid): kb.button(text="🔄 Ещё слово", callback_data="cmd_thematic")
         kb.button(text="🔍 Режимы", callback_data="cmd_search")
         kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
