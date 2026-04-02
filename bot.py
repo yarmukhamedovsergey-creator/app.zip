@@ -2392,16 +2392,12 @@ async def redirect_payment(uid, title, stars, rub=None, back_cb="cmd_shop"):
     kb.button(text=f"💳 Написать @{PAY_CONTACT}", url=f"https://t.me/{PAY_CONTACT}")
     kb.button(text="🔙 Назад", callback_data=back_cb)
     kb.adjust(1)
-    try:
-        await bot.send_message(uid,
-            f"💰 <b>{title}</b>\n\n"
-            f"💵 Цена: <code>{stars}⭐</code> / <code>{rub}₽</code>\n\n"
-            f"📩 Для оплаты напишите @{PAY_CONTACT}\n"
-            f"Укажите что хотите купить ☝️\n\n"
-            f"После оплаты админ активирует покупку ✅",
-            reply_markup=kb.as_markup(), parse_mode="HTML")
-    except Exception as e:
-        logger.error(f"redirect_payment error: {e}")
+    await bot.send_message(uid,
+        f"💰 <b>{title}</b>\n\n"
+        f"💵 Цена: <code>{stars}⭐</code> / <code>{rub}₽</code>\n\n"
+        f"📩 Для оплаты напишите @{PAY_CONTACT}\n"
+        f"После оплаты админ активирует покупку ✅",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
         
 # ═══════════════════════ КОМАНДЫ ═══════════════════════
 
