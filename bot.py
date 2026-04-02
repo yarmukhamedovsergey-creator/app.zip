@@ -1091,6 +1091,19 @@ async def do_search(count, gen_func, msg, mode_name, uid):
     finally:
         pool.remove_user(uid)
         
+def estimate_username_stars(username):
+    """Оценка юзернейма в звёздах"""
+    ln = len(username)
+    if ln <= 4: base = 80
+    elif ln <= 5: base = 60
+    elif ln <= 6: base = 45
+    elif ln <= 7: base = 30
+    elif ln <= 8: base = 20
+    else: base = 12
+    if username.isalpha(): base += 10
+    if "_" not in username: base += 5
+    base += random.randint(-5, 8)
+    return max(5, base)
 
 # ═══ НОВОЕ: Тематический поиск (VIP) ═══
 async def do_word_search(word, count, msg, uid):
