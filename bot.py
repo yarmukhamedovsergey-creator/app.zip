@@ -4332,7 +4332,7 @@ async def handle_text(msg: Message):
 
     # ═══ НОВОЕ: Поиск по слову (Premium режимы: telegram, mat, meaningful) ═══
     
-    # ═══ НОВОЕ: Тематический поиск ═══
+    # ═ НОВОЕ: Тематический поиск ═
     if action=="thematic_search":
         user_states.pop(uid,None); word=msg.text.strip().lower().replace("@","")
         if len(word)<2 or len(word)>20:
@@ -4368,14 +4368,14 @@ async def handle_text(msg: Message):
                         f"📊 Проверено: <code>{stats['attempts']}</code>\n"
                         f"⏱ {stats['elapsed']}с\n\n"
                         f"Попробуйте другое слово!")
-        if can_search(uid): kb.button(text="🔄 Ещё слово", callback_data="cmd_thematic")
-        kb.button(text="🔍 Режимы", callback_data="cmd_search")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(wm, text, kb.as_markup())
-    finally:
-        searching_users.discard(uid)
-        if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
-    return
+            if can_search(uid): kb.button(text="🔄 Ещё слово", callback_data="cmd_thematic")
+            kb.button(text="🔍 Режимы", callback_data="cmd_search")
+            kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
+            await edit_msg(wm, text, kb.as_markup())
+        finally:
+            searching_users.discard(uid)
+            if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
+        return
 
     # ═══ МАРКЕТПЛЕЙС ТЕКСТОВЫЕ ХЕНДЛЕРЫ ═══
     if action=="msell_title":
