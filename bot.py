@@ -747,188 +747,111 @@ def gen_telegram():
     return r
 
 # ═══ НОВОЕ: ТЕМАТИЧЕСКИЙ ГЕНЕРАТОР (VIP) ═══
-def gen_thematic_variations(word):
-    """Чисто алгоритмические вариации — никаких словарей"""
-    word = word.lower().replace("@","").replace(" ","")
-    if len(word) < 2: return []
-    results = set()
-    
-    # 1. Leetspeak (все комбинации по одной замене)
-    leet = {"a":"4","e":"3","i":"1","o":"0","s":"5","t":"7","b":"8","g":"9"}
-    for orig, rep in leet.items():
-        if orig in word:
-            # заменить первое вхождение
-            results.add(word.replace(orig, rep, 1))
-            # заменить все
-            full = word.replace(orig, rep)
-            if full != word: results.add(full)
-    
-    # 2. Удвоение каждой буквы
-    for i in range(len(word)):
-        r = word[:i] + word[i]*2 + word[i+1:]
-        results.add(r)
-    
-    # 3. Удаление каждой буквы
-    for i in range(len(word)):
-        r = word[:i] + word[i+1:]
-        if len(r) >= 4: results.add(r)
-    
-    # 4. Замена каждой буквы на соседнюю по клавиатуре
-    keyboard_neighbors = {
-        'q':'wa','w':'qeas','e':'wrds','r':'etf','t':'ryg','y':'tuh','u':'yij',
-        'i':'uok','o':'ipl','p':'o','a':'qwsz','s':'awedxz','d':'serfcx',
-        'f':'drtgvc','g':'ftyhbv','h':'gyujnb','j':'huiknm','k':'jiol',
-        'l':'kop','z':'asx','x':'zsdc','c':'xdfv','v':'cfgb','b':'vghn',
-        'n':'bhjm','m':'njk'
-    }
-    for i in range(len(word)):
-        if word[i] in keyboard_neighbors:
-            for c in keyboard_neighbors[word[i]]:
-                r = word[:i] + c + word[i+1:]
-                results.add(r)
-    
-    # 5. Свап соседних букв
-    for i in range(len(word)-1):
-        r = word[:i] + word[i+1] + word[i] + word[i+2:]
-        results.add(r)
-    
-    # 6. Вставка подчёркивания
-    for i in range(2, len(word)-1):
-        r = word[:i] + "_" + word[i:]
-        results.add(r)
-    
-    # 7. Вставка буквы/цифры в каждую позицию
-    for i in range(1, len(word)+1):
-        for c in "xzkvwy01234":
-            r = word[:i] + c + word[i:]
-            results.add(r)
-    
-    # 8. Реверс
-    rev = word[::-1]
-    if rev != word and len(rev) >= 5:
-        results.add(rev)
-    
-    # 9. Похожие символы
-    similar = {"c":"k","k":"c","f":"ph","ph":"f","s":"z","z":"s",
-               "v":"w","w":"v","i":"y","y":"i","x":"ks","ks":"x",
-               "ck":"k","ee":"i","oo":"u","ss":"s"}
-    for orig, rep in similar.items():
-        if orig in word:
-            results.add(word.replace(orig, rep, 1))
-    
-    # 10. Цифры в конце
-    for n in range(10):
-        results.add(word + str(n))
-    for n in [11,13,23,42,69,77,99,100,228,666,777]:
-        results.add(word + str(n))
-    
-    # 11. Буква/цифра в начале (только если валидно)
-    for c in "xzkvwymr":
-        results.add(c + word)
-    
-    # 12. Обрезка + символ
-    for n in range(3, len(word)):
-        part = word[:n]
-        for c in "xzo0123456789":
-            results.add(part + c)
-        results.add(part)
-    
-    # 13. Задняя обрезка + символ
-    for n in range(3, len(word)):
-        part = word[-n:]
-        if part[0].isalpha():
-            for c in "x1o0":
-                results.add(part + c)
-            results.add(part)
-    
-    # 14. Слово + слово (первые 3 + последние 3)
-    if len(word) >= 6:
-        results.add(word[:3] + word[-3:])
-        results.add(word[-3:] + word[:3])
-    
-    # 15. Удаление гласных
-    no_v = word[0] + "".join(c for c in word[1:] if c not in "aeiou")
-    if len(no_v) >= 4 and no_v != word:
-        results.add(no_v)
-        for c in "xo0123":
-            results.add(no_v + c)
-    
-    # 16. Удаление согласных (оставляем скелет)
-    only_v = "".join(c for c in word if c in "aeiou")
-    if len(only_v) >= 3:
-        # обрамить согласными
-        results.add(word[0] + only_v)
-    
-    # 17. Удвоение всего слова (если короткое)
-    if len(word) <= 5:
-        results.add(word + word)
-        results.add(word + word[::-1])
-    
-    # 18. Капитализация через _ (разбивка)
-    if len(word) >= 6:
-        for i in range(3, len(word)-2):
-            results.add(word[:i] + "_" + word[i:])
-    
-    # 19. Первые буквы + цифры для длинных
-    if len(word) >= 4:
-        for rep in ["er","or","ar","ix","ox","ax","us","is"]:
-            r = word[:-2] + rep
-            if r != word: results.add(r)
-    
-    # 20. Замена окончания
-    if len(word) >= 4:
-        for rep in ["o","i","a","y","x"]:
-            r = word[:-1] + rep
-            if r != word: results.add(r)
-    
-    # Фильтр валидных
-    valid = []
-    seen = set()
-    for r in results:
-        r = r.replace("__","_").strip("_")
-        if (r not in seen and r != word and 
-            re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', r) and 
-            5 <= len(r) <= 15):
-            valid.append(r)
-            seen.add(r)
-    
-    random.shuffle(valid)
-    return valid
+def gen_word_combinations(word):
+    """Комбинирует слово с реальными словами → осмысленные юзернеймы"""
+    word = word.lower().strip().replace("@", "")
 
-def gen_from_template(template):
-    result = ""
-    for ch in template:
-        if ch == "*": result += ''.join(random.choice(_C+_V) for _ in range(random.randint(2,4)))
-        elif ch == "?": result += random.choice(_C+_V)
-        else: result += ch
-    if len(result)<5: result+=''.join(random.choice(_C+_V) for _ in range(5-len(result)))
-    if len(result)>15: result=result[:15]
-    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', result): return None
-    return result
+    w3 = [
+        "car","box","lab","hub","man","boy","god","pro","dev","art","web","net",
+        "app","bot","fan","run","fly","win","pay","buy","dog","cat","fox","owl",
+        "key","pin","tag","tip","spy","doc","gem","ink","map","log","job","war",
+        "cup","bar","van","jet","ace","bag","bat","bed","bee","bug","bus","cab",
+        "cam","cap","dew","dim","elf","era","eve","fig","fin","fit","fog","fur",
+        "gig","gin","gun","gym","ham","hat","hen","hop","hut","ivy","jam","jar",
+        "joy","jug","kit","lap","law","leg","lid","lip","lot","mad","mob","mod",
+        "mop","mud","mug","nap","nod","nut","oak","oil","orb","ore","pad","pal",
+        "pan","pat","paw","pea","peg","pen","pet","pie","pig","pit","pod","pot",
+        "pub","pug","rag","ram","rap","rat","ray","rib","rig","rim","rip","rod",
+        "row","rub","rug","rum","saw","sax","sir","ski","sob","son","spa","sub",
+        "sum","tab","tan","tap","tar","tax","tie","tin","toe","ton","toy","tub",
+        "tug","urn","vat","vet","vim","vow","wad","wig","wit","woe","wok","yak",
+        "yam","yen","yew","zip","zoo","max","mix","fix","pop","raw","day","one",
+        "bit","dot","top","hot","big","old","new","red","ice","zen","sun","sky",
+        "air","sea","try","set","get","way","eye","tea",
+    ]
 
-def gen_similar(base):
-    base=base.lower().replace("@",""); muts=[]
-    for i in range(len(base)):
-        m=base[:i]+base[i+1:]
-        if len(m)>=5: muts.append(m)
-    for i in range(len(base)):
-        muts.append(base[:i]+random.choice(_C+_V)+base[i+1:])
-    for i in range(len(base)+1):
-        m=base[:i]+random.choice(_C+_V)+base[i:]
-        if len(m)<=15: muts.append(m)
-    for i in range(len(base)):
-        m=base[:i]+base[i]+base[i:]
-        if len(m)<=15: muts.append(m)
-    for i in range(1,len(base)):
-        m=base[:i]+"_"+base[i:]
-        if len(m)<=15: muts.append(m)
-    for sf in ["_x","_1","_go","_pro","x","1","o","i","_tg","_bot"]:
-        m=base+sf
-        if len(m)<=15: muts.append(m)
-    valid=[]; seen=set()
-    for m in muts:
-        if m not in seen and m!=base and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$',m) and len(m)>=5:
-            valid.append(m); seen.add(m)
+    w4 = [
+        "cook","shop","club","gang","crew","team","band","camp","city","town",
+        "land","park","road","path","lake","moon","rain","wind","snow","gold",
+        "iron","rock","wood","dust","sand","wave","coin","cash","bank","card",
+        "gift","show","play","game","song","film","book","wall","door","roof",
+        "lamp","bell","ring","ball","bowl","drum","fish","bird","bear","wolf",
+        "deer","lion","bull","duck","frog","crab","worm","seed","leaf","root",
+        "vine","rose","lily","tree","food","meal","cake","milk","rice","meat",
+        "soup","wine","beer","salt","mint","sage","chef","king","duke","earl",
+        "work","task","plan","goal","idea","mind","soul","life","love","hope",
+        "fear","rage","calm","cool","warm","cold","dark","deep","fast","slow",
+        "hard","soft","wild","bold","wise","kind","pure","true","real","good",
+        "best","mega","boss","lord","star","fire","face","hand","head","bone",
+        "fist","tail","wing","claw","horn","fury","glow","haze","mist","void",
+        "flux","grid","mesh","core","code","node","link","base","site","zone",
+        "mode","byte","chip","data","hack","loop","scan","sync","tech","volt",
+        "beam","gear","tool","fuel","pump","tank","helm","cape","mask","robe",
+        "vest","boot","belt","whip","pill","dose","dope","hemp","kush","haze",
+        "acid","weed","hash","flex","drip","swag","trap","vibe","mood","flow",
+        "grim","nuke","bomb","doom","fury","riot","punk","goth","rave","bass",
+    ]
+
+    w5 = [
+        "craft","world","storm","flame","frost","steel","blade","night","light",
+        "dream","ghost","devil","angel","power","force","magic","chaos","order",
+        "peace","death","blood","heart","brain","nerve","pulse","flash","spark",
+        "blaze","smoke","steam","stone","earth","ocean","river","cloud","shade",
+        "ninja","titan","demon","beast","snake","eagle","raven","shark","tiger",
+        "viper","cobra","money","price","trade","store","tower","house","guard",
+        "watch","quest","point","score","level","arena","field","track","rider",
+        "racer","pilot","chief","cyber","pixel","sonic","turbo","ultra","super",
+        "hyper","alpha","omega","delta","sigma","prime","elite","royal","mafia",
+        "cartel","crack","speed",
+    ]
+
+    pre_short = ["my","mr","el","la","de","go","no","hi","ok","up","on","in","dj","dr","mc"]
+    pre_long = ["big","top","hot","old","new","red","ice","pro","neo","zen","raw",
+                "the","its","not","sir","don","von","max","all","any","bad","mad","sad"]
+
+    results = []
+    all_suf = w3 + w4 + w5
+    all_pre = pre_short + pre_long + w3 + w4
+
+    # word + суффикс  (mef + cook = mefcook)
+    for s in all_suf:
+        u = word + s
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # префикс + word  (big + mef = bigmef)
+    for p in all_pre:
+        u = p + word
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # суффикс + word  (cook + mef = cookmef)
+    for s in w3 + w4:
+        u = s + word
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # word_суффикс
+    for s in w3 + w4[:60]:
+        u = word + "_" + s
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # префикс_word
+    for p in pre_short + pre_long:
+        u = p + "_" + word
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # word + цифра
+    for n in [1,2,3,5,7,9,11,13,23,42,69,77,99,228]:
+        u = word + str(n)
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # Фильтр
+    valid = []; seen = set()
+    for u in results:
+        ul = u.lower()
+        if (ul not in seen and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', ul)
+                and 5 <= len(ul) <= 15 and "__" not in ul
+                and not ul.startswith("_") and not ul.endswith("_")):
+            valid.append(ul); seen.add(ul)
+
     random.shuffle(valid)
     return valid
 
@@ -1168,63 +1091,19 @@ async def do_search(count, gen_func, msg, mode_name, uid):
     finally:
         pool.remove_user(uid)
         
-async def do_template_search(template, count, msg, uid):
-    found=[]; attempts=0; start=time.time(); last_update=0; checked=set()
-    try:
-        while len(found)<count and attempts<500:
-            u=gen_from_template(template)
-            if u is None or u.lower() in checked or not is_valid_username(u): attempts+=1; continue
-            checked.add(u.lower()); attempts+=1
-            r=await pool.check(u.lower(),uid)
-            if r=="maybe_free":
-                d=await pool.strong_check(u.lower(),uid)
-                if d=="free":
-                    fr=await check_fragment(u.lower())
-                    if fr!="fragment":
-                        found.append({"username":u.lower(),"fragment":fr})
-                        save_history(uid,u.lower(),"Шаблон",len(u))
-            await asyncio.sleep(1)
-            now=time.time()
-            if now-last_update>3:
-                last_update=now
-                await edit_msg(msg,f"🎯 <b>{template}</b>\n\n📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>\n⏱ {int(now-start)}с")
-        return found, {"attempts":attempts,"elapsed":int(time.time()-start)}
-    finally: pass
-
-async def do_similar_search(base, count, msg, uid):
-    muts=gen_similar(base); found=[]; attempts=0; start=time.time(); last_update=0
-    try:
-        for u in muts:
-            if len(found)>=count or attempts>=200: break
-            attempts+=1
-            r=await pool.check(u,uid)
-            if r=="maybe_free":
-                d=await pool.strong_check(u,uid)
-                if d=="free":
-                    fr=await check_fragment(u)
-                    if fr!="fragment":
-                        found.append({"username":u,"fragment":fr})
-                        save_history(uid,u,"Похожие",len(u))
-            await asyncio.sleep(1)
-            now=time.time()
-            if now-last_update>3:
-                last_update=now
-                await edit_msg(msg,f"🔄 <b>@{base}</b>\n\n📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>\n⏱ {int(now-start)}с")
-        return found, {"attempts":attempts,"elapsed":int(time.time()-start)}
-    finally: pass
 
 # ═══ НОВОЕ: Тематический поиск (VIP) ═══
-async def do_thematic_search(word, count, msg, uid):
-    """Поиск по слову — генерирует вариации и проверяет"""
-    variations = gen_thematic_variations(word)
+async def do_word_search(word, count, msg, uid):
+    """Поиск по слову — карточки"""
+    combinations = gen_word_combinations(word)
     found = []; attempts = 0; start = time.time(); last_update = 0
-    
+
     try:
-        for u in variations:
-            if len(found) >= count or attempts >= 300: break
+        for u in combinations:
+            if len(found) >= count or attempts >= 500: break
             if not is_valid_username(u): attempts += 1; continue
             attempts += 1
-            
+
             r = await pool.check(u, uid)
             if r == "maybe_free":
                 d = await pool.strong_check(u, uid)
@@ -1233,17 +1112,36 @@ async def do_thematic_search(word, count, msg, uid):
                     if fr != "fragment":
                         found.append({"username": u, "fragment": fr})
                         save_history(uid, u, f"По слову: {word}", len(u))
+
+                        # Отправляем карточку СРАЗУ
+                        stars = estimate_username_stars(u)
+                        card = (
+                            f"✅ <b>НИК НАЙДЕН!</b>\n\n"
+                            f"┌ <code>@{u}</code>\n"
+                            f"├ {len(u)} букв\n"
+                            f"├ ⭐ {stars}⭐\n"
+                            f"└ ✅ Свободен\n\n"
+                            f"🔗 https://t.me/{u}\n\n"
+                            f"🔤 Слово: {word}"
+                        )
+                        try:
+                            await bot.send_message(uid, card,
+                                parse_mode="HTML", disable_web_page_preview=True)
+                        except: pass
+
             await asyncio.sleep(1)
-            
             now = time.time()
             if now - last_update > 3:
                 last_update = now
-                await edit_msg(msg, f"🎯 <b>По слову: {word}</b>\n\n📊 <code>{attempts}</code>\n✅ <code>{len(found)}/{count}</code>\n⏱ {int(now-start)}с")
-        
+                await edit_msg(msg,
+                    f"🎯 <b>По слову: {word}</b>\n\n"
+                    f"📊 Проверено: <code>{attempts}</code>\n"
+                    f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                    f"⏱ {int(now-start)}с")
+
         return found, {"attempts": attempts, "elapsed": int(time.time()-start)}
     finally:
         pool.remove_user(uid)
-
 # ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
 
 def init_db():
@@ -2484,7 +2382,27 @@ def format_results(found, stats, mode_name, config=None):
     
     return text
 
+# ═══════════════════════ ПЕРЕНАПРАВЛЕНИЕ ОПЛАТЫ ═══════════════════════
 
+async def redirect_payment(uid, title, stars, rub=None, back_cb="cmd_shop"):
+    """Перенаправляет на @SoveqK для оплаты"""
+    if rub is None:
+        rub = int(stars * STAR_TO_RUB)
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"💳 Написать @{PAY_CONTACT}", url=f"https://t.me/{PAY_CONTACT}")
+    kb.button(text="🔙 Назад", callback_data=back_cb)
+    kb.adjust(1)
+    try:
+        await bot.send_message(uid,
+            f"💰 <b>{title}</b>\n\n"
+            f"💵 Цена: <code>{stars}⭐</code> / <code>{rub}₽</code>\n\n"
+            f"📩 Для оплаты напишите @{PAY_CONTACT}\n"
+            f"Укажите что хотите купить ☝️\n\n"
+            f"После оплаты админ активирует покупку ✅",
+            reply_markup=kb.as_markup(), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"redirect_payment error: {e}")
+        
 # ═══════════════════════ КОМАНДЫ ═══════════════════════
 
 @dp.message(Command("start"))
@@ -2640,16 +2558,17 @@ async def cb_search(cb: CallbackQuery):
     config = load_bot_config()
     ok,reason = rate_limiter.check_search(uid)
     if not ok:
-        await edit_msg(cb.message, f"🚫 Блокировка {TEMP_BAN_MINUTES} мин." if reason=="ban" else "⚠️ Подождите."); return
+        await edit_msg(cb.message, f"🚫 Блокировка {TEMP_BAN_MINUTES} мин." if reason=="ban" else "⚠️ Подождите.")
+        return
     if not can_search(uid):
         kb = InlineKeyboardBuilder()
         kb.button(text="🏪 Магазин", callback_data="cmd_shop")
         kb.button(text="👥 Рефералы", callback_data="cmd_referral")
         kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(cb.message, "⛔️ <b>Поиски закончились!</b>", kb.as_markup()); return
+        await edit_msg(cb.message, "⛔️ <b>Поиски закончились!</b>", kb.as_markup())
+        return
 
     is_prem = uid in ADMIN_IDS or has_subscription(uid)
-    is_vip_user = has_vip(uid)
     cnt = get_search_count(uid); mx = get_max_searches(uid)
     fl = "♾" if uid in ADMIN_IDS else str(mx)
 
@@ -2662,23 +2581,18 @@ async def cb_search(cb: CallbackQuery):
             kb.button(text=f"{m['emoji']} {m['name']}", callback_data=f"go_{key}"); lk="✅"
         mt += f"{lk} <b>{m['emoji']} {m['name']}</b> — {m['desc']}\n"
 
-        # Тематический поиск — VIP
-    if is_vip_user:
-        kb.button(text="🎯 По слову (VIP)", callback_data="cmd_thematic")
-        mt += "✅ <b>🎯 По слову</b> — VIP тематический поиск\n"
-    else:
-        kb.button(text="🔒🌟 По слову (VIP)", callback_data="need_vip")
-        mt += "🔒 <b>🎯 По слову</b> — нужен VIP\n"
-
+    # Поиск по слову — Premium
     if is_prem:
-        kb.button(text="🎯 По шаблону", callback_data="cmd_template")
-        kb.button(text="🔄 Похожие", callback_data="cmd_similar_cb")
-        mt += "✅ <b>🎯 По шаблону</b>\n✅ <b>🔄 Похожие</b>\n"
+        kb.button(text="🎯 По слову", callback_data="cmd_thematic")
+        mt += "✅ <b>🎯 По слову</b> — комбинации с реальными словами\n"
     else:
-        kb.button(text="🔒 🎯 Шаблон", callback_data="need_prem")
-        kb.button(text="🔒 🔄 Похожие", callback_data="need_prem")
+        kb.button(text="🔒 🎯 По слову", callback_data="need_prem")
+        mt += "🔒 <b>🎯 По слову</b> — нужен Premium\n"
+
     kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(2)
-    await edit_msg(cb.message, f"🔍 <b>Режим:</b>\n\n{mt}\n🎯 <code>{cnt}</code> юзов | Осталось: <b>{fl}</b>", kb.as_markup())
+    await edit_msg(cb.message,
+        f"🔍 <b>Режим:</b>\n\n{mt}\n🎯 <code>{cnt}</code> юзов | Осталось: <b>{fl}</b>",
+        kb.as_markup())
 
 @dp.callback_query(F.data == "need_prem")
 async def cb_np(cb: CallbackQuery): await answer_cb(cb, "🔒 Нужен Premium!", show_alert=True)
@@ -2730,43 +2644,25 @@ async def cb_go(cb: CallbackQuery):
 @dp.callback_query(F.data == "cmd_thematic")
 async def cb_thematic(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
-    if not has_vip(uid) and uid not in ADMIN_IDS:
-        kb = InlineKeyboardBuilder(); kb.button(text="🏪", callback_data="cmd_shop"); kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(cb.message, "🌟 <b>Нужен VIP!</b>\n\nТематический поиск доступен с VIP подпиской.", kb.as_markup()); return
+    if not has_subscription(uid) and uid not in ADMIN_IDS:
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🏪 Магазин", callback_data="cmd_shop")
+        kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
+        await edit_msg(cb.message,
+            "🔒 <b>Нужен Premium!</b>\n\n"
+            "Поиск по слову доступен с Premium подпиской.", kb.as_markup())
+        return
     user_states[uid] = {"action":"thematic_search"}
     kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_search")
     await edit_msg(cb.message,
-        "🎯 <b>Тематический поиск (VIP)</b>\n\n"
-        "Введите любое слово или никнейм:\n\n"
+        "🎯 <b>Поиск по слову</b>\n\n"
+        "Введите любое слово:\n\n"
         "Примеры:\n"
-        "• <code>fluger</code> — вариации на fluger\n"
-        "• <code>vortex</code> — vortex_x, voortex, xvortex...\n"
-        "• <code>ninja</code> — mr_ninja, ninjax, n1nja...\n"
-        "• <code>shadow</code> — sh4dow, shadow_go, shadw...\n\n"
-        "💡 Бот создаст 100+ вариаций и проверит свободные!", kb.as_markup())
-
-@dp.callback_query(F.data == "cmd_template")
-async def cb_template(cb: CallbackQuery):
-    uid = cb.from_user.id; await answer_cb(cb)
-    if not has_subscription(uid) and uid not in ADMIN_IDS:
-        u = get_user(uid)
-        if u.get("template_uses",0)<=0:
-            kb = InlineKeyboardBuilder(); kb.button(text="🏪", callback_data="cmd_shop"); kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-            await edit_msg(cb.message, "🔒 Нужен Premium или купите в магазине", kb.as_markup()); return
-    user_states[uid] = {"action":"template_search"}
-    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_search")
-    await edit_msg(cb.message, "🎯 <b>Шаблон</b>\n\n<code>*</code> = 2-4 символа\n<code>?</code> = 1 символ\n\nПример: <code>max_*</code>, <code>*_dev</code>", kb.as_markup())
-
-@dp.callback_query(F.data == "cmd_similar_cb")
-async def cb_similar_cb(cb: CallbackQuery):
-    uid = cb.from_user.id; await answer_cb(cb)
-    if not has_subscription(uid) and uid not in ADMIN_IDS:
-        kb = InlineKeyboardBuilder(); kb.button(text="🏪", callback_data="cmd_shop"); kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(cb.message, "🔒 Нужен Premium", kb.as_markup()); return
-    user_states[uid] = {"action":"similar_search"}
-    kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_search")
-    await edit_msg(cb.message, "🔄 <b>Введите юзернейм:</b>", kb.as_markup())
-
+        "• <code>mef</code> → mefcook, mefbox, meflab...\n"
+        "• <code>wast</code> → wastcar, wastfire, bigwast...\n"
+        "• <code>shadow</code> → shadowking, darkshadow...\n"
+        "• <code>crypto</code> → cryptoking, mycrypto...\n\n"
+        "💡 Бот скомбинирует слово с реальными словами!", kb.as_markup())
 
 # ═══════════════════════ CALLBACKS: Оценка / Утилиты ═══════════════════════
 
@@ -3097,14 +2993,7 @@ async def cb_mpromo(cb: CallbackQuery):
 async def cb_mpromote(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     lot_id = int(cb.data[9:])
-    lot = market_get_lot(lot_id)
-    if not lot or lot["seller_uid"] != uid: return
-    await bot.send_invoice(uid,
-        title=f"🔥 Продвижение лота #{lot_id}",
-        description=f"Лот будет наверху списка 24 часа",
-        payload=f"promote_{lot_id}_{uid}",
-        provider_token="", currency="XTR",
-        prices=[LabeledPrice(label="Продвижение 24ч", amount=MARKET_PROMOTE_PRICE)])
+    await redirect_payment(uid, f"🔥 Продвижение лота #{lot_id}", MARKET_PROMOTE_PRICE, None, f"mlot_{lot_id}")
 
 @dp.callback_query(F.data.startswith("mcancel_"))
 async def cb_mcancel(cb: CallbackQuery):
@@ -3192,12 +3081,7 @@ async def cb_msell_type(cb: CallbackQuery):
 @dp.callback_query(F.data == "market_buy_slot")
 async def cb_buy_slot(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
-    await bot.send_invoice(uid,
-        title="📦 +1 слот маркета",
-        description="Дополнительный слот для размещения",
-        payload=f"mslot_{uid}",
-        provider_token="", currency="XTR",
-        prices=[LabeledPrice(label="+1 слот", amount=MARKET_EXTRA_SLOT_PRICE)])
+    await redirect_payment(uid, "📦 +1 слот маркета", MARKET_EXTRA_SLOT_PRICE, None, "market_sell")
 
 @dp.callback_query(F.data == "market_my")
 async def cb_market_my(cb: CallbackQuery):
@@ -3292,12 +3176,7 @@ async def cb_wheel_free(cb: CallbackQuery):
 @dp.callback_query(F.data == "wheel_spin_paid")
 async def cb_wheel_paid(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
-    await bot.send_invoice(uid,
-        title="🎡 Колесо фортуны",
-        description="Крутка колеса — выиграй звёзды и Premium!",
-        payload=f"wheel_{uid}",
-        provider_token="", currency="XTR",
-        prices=[LabeledPrice(label="Крутка", amount=WHEEL_EXTRA_PRICE)])
+    await redirect_payment(uid, "🎡 Крутка колеса", WHEEL_EXTRA_PRICE, None, "market_wheel")
 
 # ═══ ЛУТБОКС ═══
 
@@ -3325,12 +3204,7 @@ async def cb_lootbox_open(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     if not lootbox_can_open(uid):
         await answer_cb(cb, "⏰ Подождите!", show_alert=True); return
-    await bot.send_invoice(uid,
-        title="📦 Лутбокс",
-        description="Случайный приз: Premium, VIP, звёзды...",
-        payload=f"lootbox_{uid}",
-        provider_token="", currency="XTR",
-        prices=[LabeledPrice(label="Лутбокс", amount=LOOTBOX_PRICE)])
+    await redirect_payment(uid, "📦 Лутбокс", LOOTBOX_PRICE, None, "market_lootbox")
 
 # ═══ ОБМЕННИК ═══
 
@@ -3693,13 +3567,8 @@ async def cb_paybal_searches(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("paystars_searches_"))
 async def cb_paystars_searches(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
-    count = int(cb.data[18:])
-    total = count * SEARCH_PRICE_STARS
-    await bot.send_invoice(uid, title=f"🔍 +{count} поисков",
-        description=f"{count} поисков",
-        payload=f"searches_{count}_{uid}",
-        provider_token="", currency="XTR",
-        prices=[LabeledPrice(label=f"+{count}", amount=total)])
+    count = int(cb.data[18:]); total = count * SEARCH_PRICE_STARS
+    await redirect_payment(uid, f"🔍 +{count} поисков", total, None, "cmd_shop")
 
 # ═══ ВЫБОР ОПЛАТЫ: PREMIUM ═══
 
@@ -3746,11 +3615,7 @@ async def cb_paystars_prem(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     k = cb.data[14:]; p = PRICES.get(k)
     if not p: return
-    await bot.send_invoice(uid, title=f"💎 {p['label']}",
-        description=f"Premium {p['label']}",
-        payload=f"sub_{k}_{uid}",
-        provider_token="", currency="XTR",
-        prices=[LabeledPrice(label=p["label"], amount=p["stars"])])
+    await redirect_payment(uid, f"💎 Premium {p['label']}", p["stars"], p["rub"], "shop_premium")
 
 # ═══ ВЫБОР ОПЛАТЫ: VIP ═══
 
@@ -3799,11 +3664,8 @@ async def cb_paystars_vip(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     k = cb.data[13:]; vp = VIP_PRICES.get(k)
     if not vp: return
-    await bot.send_invoice(uid, title=f"🌟 {vp['label']}",
-        description=f"VIP {vp['label']}",
-        payload=f"vip_{k}_{uid}",
-        provider_token="", currency="XTR",
-        prices=[LabeledPrice(label=vp["label"], amount=vp["stars"])])
+    rub = int(vp['stars'] * STAR_TO_RUB)
+    await redirect_payment(uid, f"🌟 VIP {vp['label']}", vp["stars"], rub, "shop_vip")
 
 # ═══ ВЫБОР ОПЛАТЫ: БАНДЛ ═══
 
@@ -3851,11 +3713,8 @@ async def cb_paystars_bundle(cb: CallbackQuery):
     uid = cb.from_user.id; await answer_cb(cb)
     k = cb.data[16:]; bp = BUNDLE_PRICES.get(k)
     if not bp: return
-    await bot.send_invoice(uid, title=f"📦 {bp['label']}",
-        description=f"Premium+VIP {bp['label']}",
-        payload=f"bundle_{k}_{uid}",
-        provider_token="", currency="XTR",
-        prices=[LabeledPrice(label=bp["label"], amount=bp["stars"])])
+    rub = int(bp['stars'] * STAR_TO_RUB)
+    await redirect_payment(uid, f"📦 Бандл {bp['label']}", bp["stars"], rub, "shop_bundle")
 
 
 # ═══════════════════════ CALLBACKS: Профиль ═══════════════════════
@@ -4025,10 +3884,7 @@ async def cb_support(cb: CallbackQuery):
 @dp.callback_query(F.data.startswith("don_"))
 async def cb_don(cb: CallbackQuery):
     amt = int(cb.data[4:]); await answer_cb(cb)
-    await bot.send_invoice(cb.from_user.id, title=f"🤖 {amt}⭐", description="Донат",
-        payload=f"donate_{amt}_{cb.from_user.id}", provider_token="", currency="XTR",
-        prices=[LabeledPrice(label=f"{amt}⭐", amount=amt)])
-
+    await redirect_payment(cb.from_user.id, f"🤖 Донат {amt}⭐", amt, None, "cmd_support")
 
 # ═══════════════════════ CALLBACKS: Акции ═══════════════════════
 
@@ -4479,74 +4335,51 @@ async def handle_text(msg: Message):
         await msg.answer(text,reply_markup=kb.as_markup(),parse_mode="HTML",disable_web_page_preview=True); return
 
     # ═══ НОВОЕ: Поиск по слову (Premium режимы: telegram, mat, meaningful) ═══
-    if action=="word_search":
-        user_states.pop(uid,None)
-        word=msg.text.strip().lower().replace("@","")
-        mode=state.get("mode","meaningful")
-        mi=SEARCH_MODES.get(mode,{})
-        if len(word)<2 or len(word)>20:
-            await msg.answer("❌ Слово от 2 до 20 символов"); return
-        if not re.match(r'^[a-zA-Z0-9_]+$', word):
-            await msg.answer("❌ Только латиница, цифры, _"); return
-        if not can_search(uid):
-            await msg.answer("⛔️ Поиски закончились!"); return
-        if uid not in ADMIN_IDS:
-            if uid in searching_users:
-                await msg.answer("⏳ Уже идёт поиск!"); return
-            cd = user_search_cooldown.get(uid,0); rem = SEARCH_COOLDOWN-(time.time()-cd)
-            if rem>0: await msg.answer(f"⏳ {int(rem)} сек."); return
-        searching_users.add(uid)
-        try:
-            mode_name = mi.get("name", mode)
-            log_action(uid,"word_search",f"{mode}:{word}"); use_search(uid)
-            wm=await msg.answer(f"{mi.get('emoji','🎯')} <b>{mode_name}: {word}</b>\n\n⏳ Генерирую вариации...")
-            count = get_search_count(uid)
-            found, stats = await do_thematic_search(word, count, wm, uid)
-            config = load_bot_config()
-            kb = InlineKeyboardBuilder()
-            text = format_results(found, stats, f"{mode_name}: {word}", config)
-            if can_search(uid): kb.button(text="🔄 Ещё", callback_data=f"go_{mode}")
-            kb.button(text="🔍 Режимы", callback_data="cmd_search")
-            kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
-            await edit_msg(wm, text, kb.as_markup())
-        finally:
-            searching_users.discard(uid)
-            if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
-        return
     
     # ═══ НОВОЕ: Тематический поиск ═══
-    if action=="thematic_search":
-        user_states.pop(uid,None); word=msg.text.strip().lower().replace("@","")
-        if len(word)<2 or len(word)>20:
-            await msg.answer("❌ Слово от 2 до 20 символов"); return
-        if not re.match(r'^[a-zA-Z0-9_]+$', word):
-            await msg.answer("❌ Только латиница, цифры, _"); return
-        if not has_vip(uid) and uid not in ADMIN_IDS:
-            await msg.answer("🌟 Нужен VIP!"); return
-        if not can_search(uid):
-            await msg.answer("⛔️ Поиски закончились!"); return
-        if uid not in ADMIN_IDS:
-            if uid in searching_users:
-                await msg.answer("⏳ Уже идёт поиск!"); return
-            cd = user_search_cooldown.get(uid,0); rem = SEARCH_COOLDOWN-(time.time()-cd)
-            if rem>0: await msg.answer(f"⏳ {int(rem)} сек."); return
-        searching_users.add(uid)
-        try:
-            log_action(uid,"thematic",word); use_search(uid)
-            wm=await msg.answer(f"🎯 <b>По слову: {word}</b>\n\n⏳ Генерирую вариации...")
-            count = get_search_count(uid)
-            found, stats = await do_thematic_search(word, count, wm, uid)
-            config = load_bot_config()
-            kb = InlineKeyboardBuilder()
-            text = format_results(found, stats, f"По слову: {word}", config)
-            if can_search(uid): kb.button(text="🔄 Ещё", callback_data="cmd_thematic")
-            kb.button(text="🔍 Режимы", callback_data="cmd_search")
-            kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
-            await edit_msg(wm, text, kb.as_markup())
-        finally:
-            searching_users.discard(uid)
-            if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
-        return
+if action=="thematic_search":
+    user_states.pop(uid,None); word=msg.text.strip().lower().replace("@","")
+    if len(word)<2 or len(word)>20:
+        await msg.answer("❌ Слово от 2 до 20 символов"); return
+    if not re.match(r'^[a-zA-Z0-9_]+$', word):
+        await msg.answer("❌ Только латиница, цифры, _"); return
+    if not has_subscription(uid) and uid not in ADMIN_IDS:
+        await msg.answer("🔒 Нужен Premium!"); return
+    if not can_search(uid):
+        await msg.answer("⛔️ Поиски закончились!"); return
+    if uid not in ADMIN_IDS:
+        if uid in searching_users:
+            await msg.answer("⏳ Уже идёт поиск!"); return
+        cd = user_search_cooldown.get(uid,0); rem = SEARCH_COOLDOWN-(time.time()-cd)
+        if rem>0: await msg.answer(f"⏳ {int(rem)} сек."); return
+    searching_users.add(uid)
+    try:
+        log_action(uid,"word_search",word); use_search(uid)
+        wm=await msg.answer(f"🎯 <b>По слову: {word}</b>\n\n⏳ Ищу комбинации...")
+        count = get_search_count(uid)
+        found, stats = await do_word_search(word, count, wm, uid)
+        # Итоговое сообщение
+        kb = InlineKeyboardBuilder()
+        if found:
+            text = (f"✅ <b>Готово!</b>\n\n"
+                    f"🔤 Слово: <code>{word}</code>\n"
+                    f"✅ Найдено: <code>{len(found)}</code>\n"
+                    f"📊 Проверено: <code>{stats['attempts']}</code>\n"
+                    f"⏱ {stats['elapsed']}с")
+        else:
+            text = (f"😔 <b>Ничего не найдено</b>\n\n"
+                    f"🔤 Слово: <code>{word}</code>\n"
+                    f"📊 Проверено: <code>{stats['attempts']}</code>\n"
+                    f"⏱ {stats['elapsed']}с\n\n"
+                    f"Попробуйте другое слово!")
+        if can_search(uid): kb.button(text="🔄 Ещё слово", callback_data="cmd_thematic")
+        kb.button(text="🔍 Режимы", callback_data="cmd_search")
+        kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
+        await edit_msg(wm, text, kb.as_markup())
+    finally:
+        searching_users.discard(uid)
+        if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
+    return
 
     # ═══ МАРКЕТПЛЕЙС ТЕКСТОВЫЕ ХЕНДЛЕРЫ ═══
     if action=="msell_title":
@@ -4616,12 +4449,8 @@ async def handle_text(msg: Message):
         user_states.pop(uid,None)
         lot_id=market_create_lot(uid,"nft",state["title"],state["desc"],price,is_nft=1,fragment_url=state["url"])
         log_action(uid,"nft_create",str(lot_id))
-        await bot.send_invoice(uid,
-            title=f"💎 Размещение NFT #{lot_id}",
-            description=f"NFT @{state['title']} — {price}⭐",
-            payload=f"listing_{lot_id}_{uid}",
-            provider_token="",currency="XTR",
-            prices=[LabeledPrice(label="NFT размещение", amount=MARKET_NFT_LISTING_FEE)]); return
+        await redirect_payment(uid, f"💎 Размещение NFT #{lot_id}", MARKET_NFT_LISTING_FEE, None, "market_nft")
+        return
 
     if action=="market_enter_promo":
         user_states.pop(uid,None)
@@ -4704,34 +4533,6 @@ async def handle_text(msg: Message):
             parse_mode="HTML"
         )
         return
-    if action=="template_search":
-        user_states.pop(uid,None); template=msg.text.strip().lower()
-        if len(template)<3 or ("*" not in template and "?" not in template):
-            await msg.answer("❌ Нужен * или ?"); return
-        u=get_user(uid)
-        if uid not in ADMIN_IDS and not has_subscription(uid):
-            if u.get("template_uses",0)<=0:
-                await msg.answer("❌ Нет использований"); return
-            conn=sqlite3.connect(DB); c=conn.cursor()
-            c.execute("UPDATE users SET template_uses=template_uses-1 WHERE uid=?",(uid,)); conn.commit(); conn.close()
-        log_action(uid,"template",template)
-        wm=await msg.answer(f"🎯 <code>{template}</code>...",parse_mode="HTML")
-        found,stats=await do_template_search(template,3,wm,uid)
-        kb=InlineKeyboardBuilder()
-        text = format_results(found, stats, f"Шаблон: {template}")
-        kb.button(text="🎯 Ещё",callback_data="cmd_template"); kb.button(text="🔙",callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(wm,text,kb.as_markup()); return
-
-    if action=="similar_search":
-        user_states.pop(uid,None); base=msg.text.strip().replace("@","").lower()
-        if not validate_username(base): await msg.answer("❌"); return
-        log_action(uid,"similar",base)
-        wm=await msg.answer(f"🔄 @{base}...")
-        found,stats=await do_similar_search(base,5,wm,uid)
-        kb=InlineKeyboardBuilder()
-        text = format_results(found, stats, f"Похожие на @{base}")
-        kb.button(text="🔄 Ещё",callback_data="cmd_similar_cb"); kb.button(text="🔙",callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(wm,text,kb.as_markup()); return
 
     if action=="monitor_add":
         user_states.pop(uid,None); un=msg.text.strip().replace("@","").lower()
@@ -4770,9 +4571,8 @@ async def handle_text(msg: Message):
         if not tuid: await msg.answer("❌ Не найден"); return
         plan=state.get("plan"); p=PRICES.get(plan)
         if not p: return
-        await bot.send_invoice(uid,title=f"🎁 {p['label']} для @{tu}",description=f"Premium для @{tu}",
-            payload=f"gift_{plan}_{tuid}_{uid}",provider_token="",currency="XTR",
-            prices=[LabeledPrice(label=p["label"],amount=p["stars"])]); return
+        await redirect_payment(uid, f"🎁 {p['label']} для @{tu}", p["stars"], p["rub"], "gift_prem")
+        return
 
     if action=="shop_custom_amount":
         user_states.pop(uid,None)
