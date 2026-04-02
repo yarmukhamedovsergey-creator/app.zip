@@ -1107,7 +1107,6 @@ def estimate_username_stars(username):
 
 # ═══ НОВОЕ: Тематический поиск (VIP) ═══
 async def do_word_search(word, count, msg, uid):
-    """Поиск по слову — карточки"""
     combinations = gen_word_combinations(word)
     found = []; attempts = 0; start = time.time(); last_update = 0
 
@@ -1125,22 +1124,6 @@ async def do_word_search(word, count, msg, uid):
                     if fr != "fragment":
                         found.append({"username": u, "fragment": fr})
                         save_history(uid, u, f"По слову: {word}", len(u))
-
-                        # Отправляем карточку СРАЗУ
-                        stars = estimate_username_stars(u)
-                        card = (
-                            f"✅ <b>НИК НАЙДЕН!</b>\n\n"
-                            f"┌ <code>@{u}</code>\n"
-                            f"├ {len(u)} букв\n"
-                            f"├ ⭐ {stars}⭐\n"
-                            f"└ ✅ Свободен\n\n"
-                            f"🔗 https://t.me/{u}\n\n"
-                            f"🔤 Слово: {word}"
-                        )
-                        try:
-                            await bot.send_message(uid, card,
-                                parse_mode="HTML", disable_web_page_preview=True)
-                        except: pass
 
             await asyncio.sleep(1)
             now = time.time()
@@ -2371,7 +2354,6 @@ async def show_user_panel(msg_or_cb, target_uid):
 
 # ═══ НОВОЕ: формат результатов со ссылками ═══
 def format_results(found, stats, mode_name, config=None):
-    """Формирует текст результатов со ссылками в одном сообщении"""
     config = config or load_bot_config()
     
     if found:
@@ -2380,11 +2362,12 @@ def format_results(found, stats, mode_name, config=None):
         text += f"✅ <b>{mode_name} — найдено {len(found)}:</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
         for i, item in enumerate(found, 1):
             ev = evaluate_username(item["username"])
+            stars = estimate_username_stars(item["username"])
             fri = ""
             if item.get("fragment") == "fragment": fri = " 💎"
             elif item.get("fragment") == "sold": fri = " 🏷"
             
-            text += (f"{i}. <code>@{item['username']}</code> — {ev['rarity']}{fri}\n"
+            text += (f"{i}. <code>@{item['username']}</code> ⭐{stars} — {ev['rarity']}{fri}\n"
                      f"   📱 <a href='https://t.me/{item['username']}'>Telegram</a>"
                      f" · 💎 <a href='https://fragment.com/username/{item['username']}'>Fragment</a>\n\n")
         text += f"📊 <code>{stats['attempts']}</code> проверок ⏱ <code>{stats['elapsed']}с</code>"
