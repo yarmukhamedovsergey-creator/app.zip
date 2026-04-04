@@ -164,7 +164,7 @@ DEFAULT_CONFIG = {
     "free_searches": 3, "free_count": 1, "premium_count": 3, "vip_count": 5,
     "premium_searches_limit": 7, "vip_searches_limit": 15,
     "ref_bonus": 2, "search_cooldown": 10,
-    "search_price_stars": 5, "min_withdraw": 50, "pay_contact": "Soveqk",
+    "search_price_stars": 5, "min_withdraw": 50, "pay_contact": "SoveqK",
     "required_channels": ["SwordUsers"],
     "text_welcome": "", "text_found": "", "text_empty": "",
     "text_profile_header": "", "text_shop_header": "",
@@ -177,6 +177,7 @@ DEFAULT_CONFIG = {
     "mode_mat_premium": True, "mode_telegram_premium": True,
     "prices": {}, "daily_report": True, "daily_report_hour": 23,
     "notify_purchases": True, "notify_milestones": True,
+    "checker_mode": "sessions",
 }
 
 def load_bot_config():
@@ -196,7 +197,8 @@ def apply_config(config):
     global FREE_SEARCHES, FREE_COUNT, PREMIUM_COUNT, VIP_COUNT
     global PREMIUM_SEARCHES_LIMIT, VIP_SEARCHES_LIMIT
     global REF_BONUS, SEARCH_COOLDOWN, SEARCH_PRICE_STARS, MIN_WITHDRAW
-    global PAY_CONTACT, REQUIRED_CHANNELS
+    global PAY_CONTACT, REQUIRED_CHANNELS, CHECKER_MODE
+
     FREE_SEARCHES = config.get("free_searches", 3)
     FREE_COUNT = config.get("free_count", 1)
     PREMIUM_COUNT = config.get("premium_count", 3)
@@ -207,14 +209,21 @@ def apply_config(config):
     SEARCH_COOLDOWN = config.get("search_cooldown", 10)
     SEARCH_PRICE_STARS = config.get("search_price_stars", 5)
     MIN_WITHDRAW = config.get("min_withdraw", 50)
-    PAY_CONTACT = config.get("pay_contact", "Soveqk")
+    PAY_CONTACT = config.get("pay_contact", "SoveqK")
     REQUIRED_CHANNELS = config.get("required_channels", ["SwordUsers"])
+    CHECKER_MODE = config.get("checker_mode", "sessions")
+
     for key in SEARCH_MODES:
-        SEARCH_MODES[key]["premium"] = config.get(f"mode_{key}_premium", SEARCH_MODES[key].get("_default_premium", False))
+        SEARCH_MODES[key]["premium"] = config.get(
+            f"mode_{key}_premium",
+            SEARCH_MODES[key].get("_default_premium", False)
+        )
         SEARCH_MODES[key]["disabled"] = not config.get(f"mode_{key}", True)
+
     if "prices" in config:
         for k, v in config["prices"].items():
-            if k in PRICES: PRICES[k]["stars"] = v
+            if k in PRICES:
+                PRICES[k]["stars"] = v
 
 def load_saved_sessions():
     """Загружает список всех аккаунтов (из конфига + добавленных)"""
@@ -245,6 +254,12 @@ def load_saved_sessions():
 
 def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
+
+def get_checker_mode():
+    return globals().get("CHECKER_MODE", "sessions")
+
+def is_sessions_checker():
+    return get_checker_mode() == "sessions"
 
 # ═══════════════════════ RATE LIMITER (ОТКЛЮЧЁН) ═══════════════════════
 
@@ -878,7 +893,18 @@ def is_valid_username(u):
 
 # ═══════════════════════ ЧЕКЕРЫ ═══════════════════════
 
-async def check_username(u): return await pool.strong_check(u)
+async def fast_check_username(u):
+    """Быстрая проверка без сессий: только занят/свободен"""
+    try:
+        r = await pool._botapi(u)
+        return "taken" if r == "taken" else "free"
+    except:
+        return "error"
+
+async def check_username(u):
+    if not is_sessions_checker():
+        return await fast_check_username(u)
+    return await pool.strong_check(u)
 
 async def check_fragment(u):
     now=time.time(); cached=_fragment_cache.get(u)
@@ -935,153 +961,88 @@ def evaluate_username(u):
 # ═══════════════════════ ПОИСК v5 ═══════════════════════
 
 async def do_search(count, gen_func, msg, mode_name, uid):
-    found = []; attempts = 0; start = time.time()
-    last_update = 0; checked = set()
-    errors = 0; fallback = not pool.has_sessions()
-    warned_slow = False; skip_streak = 0
+    found = []
+    attempts = 0
+    start = time.time()
+    last_update = 0
+    checked = set()
 
-    if fallback:
-        await edit_msg(msg,
-            f"⚠️ <b>{mode_name}</b>\n\n"
-            f"Сессии недоступны — Bot API режим\n"
-            f"(медленнее обычного)")
+    use_sessions = is_sessions_checker() and pool.has_sessions()
 
     try:
         while len(found) < count and attempts < 2000:
             u = None
             for _ in range(30):
                 c = gen_func()
-                if (len(c) >= 5
-                        and re.match(
-                            r'^[a-zA-Z][a-zA-Z0-9_]*$', c)
-                        and c.lower() not in checked
-                        and is_valid_username(c)):
-                    u = c.lower(); break
+                if (
+                    len(c) >= 5
+                    and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', c)
+                    and c.lower() not in checked
+                    and is_valid_username(c)
+                ):
+                    u = c.lower()
+                    break
 
-            if not u: attempts += 1; continue
-            checked.add(u); attempts += 1
+            if not u:
+                attempts += 1
+                continue
 
-            if fallback:
-                b = await pool._botapi(u)
-                if b != "taken":
-                    fr = await check_fragment(u)
-                    found.append({
-                        "username": u,
-                        "fragment": fr
-                    })
-                    save_history(
-                        uid, u, mode_name, len(u))
-                await asyncio.sleep(1.5)
+            checked.add(u)
+            attempts += 1
 
-            else:
+            if use_sessions:
                 r = await pool.check(u, uid)
 
                 if r == "taken":
-                    errors = 0
-                    skip_streak = 0
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.15)
                     continue
-
-                if r == "skip":
-                    errors += 1
-                    skip_streak += 1
-
-                    # Первые 3 skip — просто ждём
-                    if skip_streak <= 3:
-                        await asyncio.sleep(2)
-                        continue
-
-                    # 4-8 skip подряд — предупреждаем
-                    if skip_streak <= 8 and not warned_slow:
-                        warned_slow = True
-                        ps = pool.stats()
-                        await edit_msg(msg,
-                            f"⏳ <b>{mode_name}</b>\n\n"
-                            f"🔄 Сессии перегружены, "
-                            f"жду...\n\n"
-                            f"🔢 Попыток: "
-                            f"<code>{attempts}</code>\n"
-                            f"✅ Найдено: "
-                            f"<code>{len(found)}"
-                            f"/{count}</code>\n"
-                            f"🟢 Живых: "
-                            f"{ps['active']}")
-                        await asyncio.sleep(3)
-                        continue
-
-                    # 9+ skip — переходим в fallback
-                    if skip_streak > 8:
-                        fallback = True
-                        skip_streak = 0
-                        errors = 0
-                        await edit_msg(msg,
-                            f"⚠️ <b>{mode_name}</b>\n\n"
-                            f"Сессии недоступны — "
-                            f"переключаюсь на Bot API\n\n"
-                            f"🔢 Попыток: "
-                            f"<code>{attempts}</code>\n"
-                            f"✅ Найдено: "
-                            f"<code>{len(found)}"
-                            f"/{count}</code>")
-                        await asyncio.sleep(2)
-                        continue
-
-                    await asyncio.sleep(2)
-                    continue
-
-                # Если дошли сюда — сессия работает
-                errors = 0
-                skip_streak = 0
-                warned_slow = False
 
                 if r == "maybe_free":
-                    final = await pool.strong_check(
-                        u, uid)
-                    if final == "taken":
-                        await asyncio.sleep(0.5)
-                        continue
-                    if final == "skip":
-                        skip_streak += 1
-                        await asyncio.sleep(1.5)
-                        continue
+                    final = await pool.strong_check(u, uid)
                     if final == "free":
-                        fr = await check_fragment(u)
-                        if fr != "fragment":
-                            found.append({
-                                "username": u,
-                                "fragment": fr
-                            })
-                            save_history(
-                                uid, u,
-                                mode_name, len(u))
-                        await asyncio.sleep(0.8)
+                        found.append({"username": u, "fragment": "unavailable"})
+                        save_history(uid, u, mode_name, len(u))
+                    await asyncio.sleep(0.25)
+                else:
+                    await asyncio.sleep(0.15)
 
-            # Обновление статуса
+            else:
+                r = await fast_check_username(u)
+                if r == "free":
+                    found.append({"username": u, "fragment": "unavailable"})
+                    save_history(uid, u, mode_name, len(u))
+                await asyncio.sleep(0.05)
+
             now = time.time()
             if now - last_update > 2.0:
                 last_update = now
                 el = int(now - start)
-                ps = pool.stats()
 
-                if fallback:
-                    sl = "⚠️ Bot API режим"
-                else:
+                if use_sessions:
+                    ps = pool.stats()
                     sl = (
                         f"🟢{ps['active']-ps.get('warming',0)} "
                         f"🟡{ps.get('warming',0)} "
                         f"🟠{ps.get('cooldown',0)} "
                         f"🔴{ps.get('dead',0)}"
                     )
+                    text = (
+                        f"🔍 <b>{mode_name}</b>\n\n"
+                        f"🔢 Проверено: <code>{attempts}</code>\n"
+                        f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                        f"🔑 {sl}\n"
+                        f"⏱ {el}с"
+                    )
+                else:
+                    text = (
+                        f"🔍 <b>{mode_name}</b>\n\n"
+                        f"🔢 Проверено: <code>{attempts}</code>\n"
+                        f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                        f"⚡ Быстрый режим без сессий\n"
+                        f"⏱ {el}с"
+                    )
 
-                await edit_msg(msg,
-                    f"🔍 <b>{mode_name}</b>\n\n"
-                    f"🔢 Проверено: "
-                    f"<code>{attempts}</code>\n"
-                    f"✅ Найдено: "
-                    f"<code>{len(found)}"
-                    f"/{count}</code>\n"
-                    f"🔑 {sl}\n"
-                    f"⏱ {el}с")
+                await edit_msg(msg, text)
 
         return found, {
             "attempts": attempts,
@@ -1108,34 +1069,83 @@ def estimate_username_stars(username):
 # ═══ НОВОЕ: Тематический поиск (VIP) ═══
 async def do_word_search(word, count, msg, uid):
     combinations = gen_word_combinations(word)
-    found = []; attempts = 0; start = time.time(); last_update = 0
+    found = []
+    attempts = 0
+    start = time.time()
+    last_update = 0
+    checked = set()
+
+    use_sessions = is_sessions_checker() and pool.has_sessions()
 
     try:
         for u in combinations:
-            if len(found) >= count or attempts >= 500: break
-            if not is_valid_username(u): attempts += 1; continue
+            if len(found) >= count or attempts >= 500:
+                break
+
+            if u in checked:
+                continue
+            checked.add(u)
+
+            if not is_valid_username(u):
+                attempts += 1
+                continue
+
             attempts += 1
 
-            r = await pool.check(u, uid)
-            if r == "maybe_free":
-                d = await pool.strong_check(u, uid)
-                if d == "free":
-                    fr = await check_fragment(u)
-                    if fr != "fragment":
-                        found.append({"username": u, "fragment": fr})
+            if use_sessions:
+                r = await pool.check(u, uid)
+
+                if r == "taken":
+                    await asyncio.sleep(0.15)
+                    continue
+
+                if r == "maybe_free":
+                    d = await pool.strong_check(u, uid)
+                    if d == "free":
+                        found.append({"username": u, "fragment": "unavailable"})
                         save_history(uid, u, f"По слову: {word}", len(u))
+                    await asyncio.sleep(0.25)
+                else:
+                    await asyncio.sleep(0.15)
 
-            await asyncio.sleep(1)
+            else:
+                r = await fast_check_username(u)
+                if r == "free":
+                    found.append({"username": u, "fragment": "unavailable"})
+                    save_history(uid, u, f"По слову: {word}", len(u))
+                await asyncio.sleep(0.05)
+
             now = time.time()
-            if now - last_update > 3:
+            if now - last_update > 2.5:
                 last_update = now
-                await edit_msg(msg,
-                    f"🎯 <b>По слову: {word}</b>\n\n"
-                    f"📊 Проверено: <code>{attempts}</code>\n"
-                    f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
-                    f"⏱ {int(now-start)}с")
 
-        return found, {"attempts": attempts, "elapsed": int(time.time()-start)}
+                if use_sessions:
+                    ps = pool.stats()
+                    status_line = (
+                        f"🟢{ps['active']-ps.get('warming',0)} "
+                        f"🟡{ps.get('warming',0)} "
+                        f"🟠{ps.get('cooldown',0)} "
+                        f"🔴{ps.get('dead',0)}"
+                    )
+                    text = (
+                        f"🎯 <b>По слову: {word}</b>\n\n"
+                        f"📊 Проверено: <code>{attempts}</code>\n"
+                        f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                        f"🔑 {status_line}\n"
+                        f"⏱ {int(now-start)}с"
+                    )
+                else:
+                    text = (
+                        f"🎯 <b>По слову: {word}</b>\n\n"
+                        f"📊 Проверено: <code>{attempts}</code>\n"
+                        f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                        f"⚡ Быстрый режим без сессий\n"
+                        f"⏱ {int(now-start)}с"
+                    )
+
+                await edit_msg(msg, text)
+
+        return found, {"attempts": attempts, "elapsed": int(time.time() - start)}
     finally:
         pool.remove_user(uid)
 # ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
@@ -2239,62 +2249,89 @@ def build_sub_kb(channels):
 
 # ═ ИЗМЕНЕНО: build_menu показывает VIP ═
 def build_menu(uid):
-    u = get_user(uid); ps = pool.stats()
-    is_prem = has_subscription(uid); is_admin = uid in ADMIN_IDS
+    u = get_user(uid)
+    ps = pool.stats()
+    is_prem = has_subscription(uid)
+    is_admin = uid in ADMIN_IDS
     is_vip_user = has_vip(uid)
     config = load_bot_config()
-    
-    if is_admin: si,st,sub_info = "👑","ADMIN","♾"
+
+    if is_admin:
+        si, st, sub_info = "👑", "ADMIN", "♾"
     elif is_vip_user:
-        si,st = "🌟","VIP"
+        si, st = "🌟", "VIP"
         sub_info = f"до {u.get('vip_end','?')}"
     elif is_prem:
-        si,st = "💎","PREMIUM"
+        si, st = "💎", "PREMIUM"
         sub_info = f"до {u.get('sub_end','?')}"
     else:
-        total_free = u.get("free",0)+u.get("extra_searches",0)
+        total_free = u.get("free",0) + u.get("extra_searches",0)
         if total_free > 0:
-            si,st = "🆓","FREE"
+            si, st = "🆓", "FREE"
             sub_info = f"{total_free} поисков"
-        else: si,st,sub_info = "⛔️","ЛИМИТ","закончились"
-    
-    cnt = get_search_count(uid); mx = get_max_searches(uid)
-    bal = u.get("balance",0.0); promos = get_active_promotions()
+        else:
+            si, st, sub_info = "⛔️", "ЛИМИТ", "закончились"
+
+    cnt = get_search_count(uid)
+    bal = u.get("balance",0.0)
+    promos = get_active_promotions()
     sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
-    
+
     custom_welcome = config.get("text_welcome","")
-    
-    text = (f"🔍 <b>USERNAME HUNTER</b> {si}\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"📌 <b>{st}</b> | 🎯 <code>{cnt}</code> юзов/поиск\n"
-            f"📊 {sub_info}")
-    
+
+    text = (
+        f"🔍 <b>USERNAME HUNTER</b> {si}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"📌 <b>{st}</b> | 🎯 <code>{cnt}</code> юзов/поиск\n"
+        f"📊 {sub_info}"
+    )
+
     if is_prem and not is_admin:
         used = u.get("daily_searches_used",0)
         limit = VIP_SEARCHES_LIMIT if is_vip_user else PREMIUM_SEARCHES_LIMIT
         text += f" | Сегодня: <code>{used}/{limit}</code>"
-    
-    text += (f"\n🔢 Всего поисков: <code>{u.get('searches',0)}</code>\n"
-             f"🔄 Сессии: {sl}\n💰 Баланс: <code>{bal:.1f}</code> ⭐\n")
-    
-    if custom_welcome: text += f"\n{custom_welcome}\n"
+
+    if is_sessions_checker():
+        text += (
+            f"\n🔢 Всего поисков: <code>{u.get('searches',0)}</code>\n"
+            f"🔄 Сессии: {sl}\n"
+            f"💰 Баланс: <code>{bal:.1f}</code> ⭐\n"
+        )
+    else:
+        text += (
+            f"\n🔢 Всего поисков: <code>{u.get('searches',0)}</code>\n"
+            f"⚡ Проверка: <b>быстрый режим</b>\n"
+            f"💰 Баланс: <code>{bal:.1f}</code> ⭐\n"
+        )
+
+    if custom_welcome:
+        text += f"\n{custom_welcome}\n"
+
     if promos:
         text += "\n🎉 <b>Акции:</b>\n"
-        for pr in promos: text += f"  • {pr['name']}\n"
+        for pr in promos:
+            text += f"  • {pr['name']}\n"
+
     text += "\n━━━━━━━━━━━━━━━━━━━━━━━"
-    
+
     kb = InlineKeyboardBuilder()
     kb.button(text="🔍 Поиск", callback_data="cmd_search")
     kb.button(text="📊 Оценка", callback_data="cmd_evaluate")
     kb.button(text="🔧 Утилиты", callback_data="cmd_utils")
     kb.button(text="👤 Профиль", callback_data="cmd_profile")
-    if is_button_enabled("shop"): kb.button(text="🏪 Магазин", callback_data="cmd_shop")
-    if is_button_enabled("referral"): kb.button(text="👥 Рефералы", callback_data="cmd_referral")
+    if is_button_enabled("shop"):
+        kb.button(text="🏪 Магазин", callback_data="cmd_shop")
+    if is_button_enabled("referral"):
+        kb.button(text="👥 Рефералы", callback_data="cmd_referral")
     kb.button(text="🏪 Маркет", callback_data="cmd_market")
-    if is_button_enabled("tiktok"): kb.button(text="🎁 TikTok", callback_data="cmd_tiktok")
+    if is_button_enabled("tiktok"):
+        kb.button(text="🎁 TikTok", callback_data="cmd_tiktok")
     for pr in promos:
         kb.button(text=pr.get("button_text") or pr["name"], callback_data=f"pv_{pr['id']}")
-    if is_button_enabled("support"): kb.button(text="🤖 Поддержать", callback_data="cmd_support")
-    if is_admin: kb.button(text="👑 Админ", callback_data="cmd_admin")
+    if is_button_enabled("support"):
+        kb.button(text="🤖 Поддержать", callback_data="cmd_support")
+    if is_admin:
+        kb.button(text="👑 Админ", callback_data="cmd_admin")
     kb.adjust(2)
     return text, kb.as_markup()
 
@@ -2353,29 +2390,59 @@ async def show_user_panel(msg_or_cb, target_uid):
         await msg_or_cb.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
 # ═══ НОВОЕ: формат результатов со ссылками ═══
+def estimate_username_stars(username):
+    ln = len(username)
+    if ln <= 4:
+        base = 80
+    elif ln <= 5:
+        base = 60
+    elif ln <= 6:
+        base = 45
+    elif ln <= 7:
+        base = 30
+    elif ln <= 8:
+        base = 20
+    else:
+        base = 12
+
+    if username.isalpha():
+        base += 10
+    if "_" not in username:
+        base += 5
+
+    base += random.randint(-5, 8)
+    return max(5, base)
+
 def format_results(found, stats, mode_name, config=None):
     config = config or load_bot_config()
-    
+
     if found:
-        custom_found = config.get("text_found","")
+        custom_found = config.get("text_found", "")
         text = custom_found + "\n\n" if custom_found else ""
         text += f"✅ <b>{mode_name} — найдено {len(found)}:</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
         for i, item in enumerate(found, 1):
             ev = evaluate_username(item["username"])
             stars = estimate_username_stars(item["username"])
+
             fri = ""
-            if item.get("fragment") == "fragment": fri = " 💎"
-            elif item.get("fragment") == "sold": fri = " 🏷"
-            
-            text += (f"{i}. <code>@{item['username']}</code> ⭐{stars} — {ev['rarity']}{fri}\n"
-                     f"   📱 <a href='https://t.me/{item['username']}'>Telegram</a>"
-                     f" · 💎 <a href='https://fragment.com/username/{item['username']}'>Fragment</a>\n\n")
+            if item.get("fragment") == "fragment":
+                fri = " 💎"
+            elif item.get("fragment") == "sold":
+                fri = " 🏷"
+
+            text += (
+                f"{i}. <code>@{item['username']}</code> ⭐{stars} — {ev['rarity']}{fri}\n"
+                f"   📱 <a href='https://t.me/{item['username']}'>Telegram</a>"
+                f" · 💎 <a href='https://fragment.com/username/{item['username']}'>Fragment</a>\n\n"
+            )
+
         text += f"📊 <code>{stats['attempts']}</code> проверок ⏱ <code>{stats['elapsed']}с</code>"
     else:
-        custom_empty = config.get("text_empty","")
+        custom_empty = config.get("text_empty", "")
         text = custom_empty if custom_empty else f"😔 <b>Не найдено</b>"
         text += f"\n\n📊 <code>{stats['attempts']}</code> ⏱ <code>{stats['elapsed']}с</code>"
-    
+
     return text
 
 # ═══════════════════════ ПЕРЕНАПРАВЛЕНИЕ ОПЛАТЫ ═══════════════════════
@@ -2594,43 +2661,80 @@ async def cb_nv(cb: CallbackQuery): await answer_cb(cb, "🌟 Нужен VIP! К
 
 @dp.callback_query(F.data.startswith("go_"))
 async def cb_go(cb: CallbackQuery):
-    uid = cb.from_user.id; await answer_cb(cb)
-    if is_banned(uid): return
+    uid = cb.from_user.id
+    await answer_cb(cb)
+    if is_banned(uid):
+        return
+
     ok,reason = rate_limiter.check_search(uid)
-    if not ok: await edit_msg(cb.message, "⚠️ Подождите."); return
+    if not ok:
+        await edit_msg(cb.message, "⚠️ Подождите.")
+        return
+
     if not can_search(uid):
-        kb = InlineKeyboardBuilder(); kb.button(text="🏪", callback_data="cmd_shop"); kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(cb.message, "⛔️ <b>Закончились!</b>", kb.as_markup()); return
-    mode = cb.data[3:]; mi = SEARCH_MODES.get(mode)
-    if not mi or mi.get("disabled"): return
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🏪", callback_data="cmd_shop")
+        kb.button(text="🔙", callback_data="cmd_menu")
+        kb.adjust(1)
+        await edit_msg(cb.message, "⛔️ <b>Закончились!</b>", kb.as_markup())
+        return
+
+    mode = cb.data[3:]
+    mi = SEARCH_MODES.get(mode)
+    if not mi or mi.get("disabled"):
+        return
+
     is_prem = uid in ADMIN_IDS or has_subscription(uid)
-    if mi["premium"] and not is_prem: return
+    if mi["premium"] and not is_prem:
+        return
+
     if uid not in ADMIN_IDS:
         if uid in searching_users:
-            try: await bot.send_message(uid, "⏳ Уже идёт поиск!")
-            except: pass; return
-        cd = user_search_cooldown.get(uid,0); rem = SEARCH_COOLDOWN-(time.time()-cd)
+            try:
+                await bot.send_message(uid, "⏳ Уже идёт поиск!")
+            except:
+                pass
+            return
+
+        cd = user_search_cooldown.get(uid,0)
+        rem = SEARCH_COOLDOWN-(time.time()-cd)
         if rem>0:
-            try: await bot.send_message(uid, f"⏳ {int(rem)} сек.")
-            except: pass; return
+            try:
+                await bot.send_message(uid, f"⏳ {int(rem)} сек.")
+            except:
+                pass
+            return
+
     searching_users.add(uid)
     try:
-        ps = pool.stats()
-        sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
-        await edit_msg(cb.message, f"🚀 <b>{mi['emoji']} {mi['name']}</b>\n\n🔄 {sl}\n⏳ Ищу...")
-        use_search(uid); log_action(uid,"search",mode)
+        if is_sessions_checker() and pool.has_sessions():
+            ps = pool.stats()
+            sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
+            await edit_msg(cb.message, f"🚀 <b>{mi['emoji']} {mi['name']}</b>\n\n🔄 {sl}\n⏳ Ищу...")
+        else:
+            await edit_msg(cb.message, f"🚀 <b>{mi['emoji']} {mi['name']}</b>\n\n⚡ Быстрый режим без сессий\n⏳ Ищу...")
+
+        use_search(uid)
+        log_action(uid,"search",mode)
+
         count = get_search_count(uid)
         found, stats = await do_search(count, mi["func"], cb.message, mi["name"], uid)
+
         config = load_bot_config()
         kb = InlineKeyboardBuilder()
         text = format_results(found, stats, mi["name"], config)
-        if can_search(uid): kb.button(text="🔄 Ещё", callback_data=cb.data)
+
+        if can_search(uid):
+            kb.button(text="🔄 Ещё", callback_data=cb.data)
         kb.button(text="🔍 Режимы", callback_data="cmd_search")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
+        kb.button(text="🔙 Меню", callback_data="cmd_menu")
+        kb.adjust(1)
+
         await edit_msg(cb.message, text, kb.as_markup())
     finally:
         searching_users.discard(uid)
-        if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
+        if uid not in ADMIN_IDS:
+            user_search_cooldown[uid] = time.time()
 
 # ═══ НОВОЕ: Тематический поиск (VIP) ═══
 @dp.callback_query(F.data == "cmd_thematic")
@@ -4327,7 +4431,6 @@ async def handle_text(msg: Message):
         await msg.answer(text,reply_markup=kb.as_markup(),parse_mode="HTML",disable_web_page_preview=True); return
 
     # ═══ НОВОЕ: Поиск по слову (Premium режимы: telegram, mat, meaningful) ═══
-    
     # ═ НОВОЕ: Тематический поиск ═
     if action=="thematic_search":
         user_states.pop(uid,None); word=msg.text.strip().lower().replace("@","")
@@ -4343,36 +4446,38 @@ async def handle_text(msg: Message):
             if uid in searching_users:
                 await msg.answer("⏳ Уже идёт поиск!"); return
             cd = user_search_cooldown.get(uid,0); rem = SEARCH_COOLDOWN-(time.time()-cd)
-            if rem>0: await msg.answer(f"⏳ {int(rem)} сек."); return
+            if rem>0:
+                await msg.answer(f"⏳ {int(rem)} сек."); return
+
         searching_users.add(uid)
         try:
             log_action(uid,"word_search",word); use_search(uid)
-            wm=await msg.answer(f"🎯 <b>По слову: {word}</b>\n\n⏳ Ищу комбинации...")
+
+            if is_sessions_checker() and pool.has_sessions():
+                wm = await msg.answer(f"🎯 <b>По слову: {word}</b>\n\n⏳ Ищу комбинации...")
+            else:
+                wm = await msg.answer(f"🎯 <b>По слову: {word}</b>\n\n⚡ Быстрый режим без сессий\n⏳ Ищу комбинации...")
+
             count = get_search_count(uid)
             found, stats = await do_word_search(word, count, wm, uid)
-            # Итоговое сообщение
+
+            config = load_bot_config()
             kb = InlineKeyboardBuilder()
-            if found:
-                text = (f"✅ <b>Готово!</b>\n\n"
-                        f"🔤 Слово: <code>{word}</code>\n"
-                        f"✅ Найдено: <code>{len(found)}</code>\n"
-                        f"📊 Проверено: <code>{stats['attempts']}</code>\n"
-                        f"⏱ {stats['elapsed']}с")
-            else:
-                text = (f"😔 <b>Ничего не найдено</b>\n\n"
-                        f"🔤 Слово: <code>{word}</code>\n"
-                        f"📊 Проверено: <code>{stats['attempts']}</code>\n"
-                        f"⏱ {stats['elapsed']}с\n\n"
-                        f"Попробуйте другое слово!")
-            if can_search(uid): kb.button(text="🔄 Ещё слово", callback_data="cmd_thematic")
+            text = format_results(found, stats, f"По слову: {word}", config)
+
+            if can_search(uid):
+                kb.button(text="🔄 Ещё слово", callback_data="cmd_thematic")
             kb.button(text="🔍 Режимы", callback_data="cmd_search")
-            kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
+            kb.button(text="🔙 Меню", callback_data="cmd_menu")
+            kb.adjust(1)
+
             await edit_msg(wm, text, kb.as_markup())
         finally:
             searching_users.discard(uid)
-            if uid not in ADMIN_IDS: user_search_cooldown[uid]=time.time()
+            if uid not in ADMIN_IDS:
+                user_search_cooldown[uid]=time.time()
         return
-
+        
     # ═══ МАРКЕТПЛЕЙС ТЕКСТОВЫЕ ХЕНДЛЕРЫ ═══
     if action=="msell_title":
         title=msg.text.strip()
@@ -4916,18 +5021,27 @@ async def cb_adm_market(cb: CallbackQuery):
 # === СЕССИИ ===
 @dp.callback_query(F.data == "adm_sessions")
 async def cb_adm_sessions(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS: return
+    if cb.from_user.id not in ADMIN_IDS:
+        return
     await answer_cb(cb)
-    ps = pool.stats(); detail = pool.detailed_status()
+
+    ps = pool.stats()
+    detail = pool.detailed_status()
     saved = load_saved_sessions()
-    text = (f"🔑 <b>Сессии</b>\n\n"
-            f"🟢 Активных: {ps['active']-ps.get('warming',0)}\n"
-            f"🟡 Прогрев: {ps.get('warming',0)}\n"
-            f"🟠 Кулдаун: {ps.get('cooldown',0)}\n"
-            f"🔴 Мёртвых: {ps.get('dead',0)}\n"
-            f"🔢 Проверок: {ps['checks']}\n\n"
-            f"<pre>{detail}</pre>\n\n"
-            f"💾 Сохранённых: <code>{len(saved)}</code>")
+    mode_text = "🔑 Сессии" if is_sessions_checker() else "⚡ Без сессий"
+
+    text = (
+        f"🔑 <b>Сессии</b>\n\n"
+        f"⚙️ Режим проверки: {mode_text}\n\n"
+        f"🟢 Активных: {ps['active']-ps.get('warming',0)}\n"
+        f"🟡 Прогрев: {ps.get('warming',0)}\n"
+        f"🟠 Кулдаун: {ps.get('cooldown',0)}\n"
+        f"🔴 Мёртвых: {ps.get('dead',0)}\n"
+        f"🔢 Проверок: {ps['checks']}\n\n"
+        f"<pre>{detail}</pre>\n\n"
+        f"💾 Сохранённых: <code>{len(saved)}</code>"
+    )
+
     kb = InlineKeyboardBuilder()
     for i in range(len(pool.clients)):
         st = pool.status.get(i, 'dead')
@@ -4936,13 +5050,32 @@ async def cb_adm_sessions(cb: CallbackQuery):
             kb.button(text=f"🔄 #{i+1}", callback_data=f"a_revive_{i}")
         else:
             kb.button(text=f"{em} #{i+1}", callback_data=f"a_kill_{i}")
+
     kb.button(text="➕ Добавить", callback_data="a_add_session")
     kb.button(text="💾 Все аккаунты", callback_data="adm_all_accounts")
     kb.button(text="⚡ Reconnect all", callback_data="a_reconnect_all")
+    kb.button(text=f"⚙️ {'Без сессий' if is_sessions_checker() else 'Сессии'}", callback_data="a_toggle_checker")
     kb.button(text="🔄 Обновить", callback_data="adm_sessions")
     kb.button(text="🔙 Админ", callback_data="cmd_admin")
     kb.adjust(2)
+
     await edit_msg(cb.message, text, kb.as_markup())
+
+@dp.callback_query(F.data == "a_toggle_checker")
+async def cb_toggle_checker(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        return
+    await answer_cb(cb)
+
+    config = load_bot_config()
+    current = config.get("checker_mode", "sessions")
+    config["checker_mode"] = "botapi" if current == "sessions" else "sessions"
+
+    save_bot_config(config)
+    apply_config(config)
+    log_action(cb.from_user.id, "checker_mode", config["checker_mode"])
+
+    await cb_adm_sessions(cb)
 
 # === ВСЕ АККАУНТЫ ===
 @dp.callback_query(F.data == "adm_all_accounts")
