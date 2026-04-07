@@ -159,14 +159,6 @@ async def answer_cb(cb, text=None, show_alert=False):
     try: await cb.answer(text, show_alert=show_alert)
     except: pass
 
-def with_main_branding(text):
-    footer = "Сделано в студии webly.su"
-    if not text:
-        return footer
-    if footer in text:
-        return text
-    return f"{text}\n\n{footer}"
-
 def format_results(found, stats, title):
     attempts = int((stats or {}).get("attempts", 0) or 0)
     elapsed = int((stats or {}).get("elapsed", 0) or 0)
