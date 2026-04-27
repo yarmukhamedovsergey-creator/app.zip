@@ -22,7 +22,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     Message, CallbackQuery, BufferedInputFile,
-    LabeledPrice, PreCheckoutQuery
+    LabeledPrice, PreCheckoutQuery, InputMediaPhoto
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
@@ -38,8 +38,8 @@ except ImportError:
 
 # ═══════════════════════ НАСТРОЙКИ ═══════════════════════
 
-MAIN_TOKEN = "8325751391:AAHZo7xC6TO4ldKEEqM--Ik9EXaszULnwWc"
-ADMIN_IDS = [5969266721, 7894051808, 7936571374]
+MAIN_TOKEN = "8325751391:AAFGB3KV34DiOp_Z0HXg5nErgxwOk6XR3C4"
+ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "pdwqb"
 
 ACCOUNTS = [
@@ -149,10 +149,37 @@ user_search_cooldown = {}
 _fragment_cache = {}
 _fragment_cache_ttl = 600
 BOT_CONFIG_FILE = "bot_config.json"
+MENU_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.png")
+
+async def send_menu_photo(chat_id, text, kb=None):
+    try:
+        photo = FSInputFile(MENU_IMAGE)
+        await bot.send_photo(chat_id, photo=photo, caption=text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+
+async def edit_to_photo(msg, text, kb=None):
+    try:
+        photo = FSInputFile(MENU_IMAGE)
+        media = InputMediaPhoto(media=photo, caption=text, parse_mode="HTML")
+        await msg.edit_media(media=media, reply_markup=kb)
+        return
+    except Exception:
+        pass
+    chat_id = msg.chat.id
+    try: await msg.delete()
+    except: pass
+    await send_menu_photo(chat_id, text, kb)
 
 async def edit_msg(msg, text, kb=None):
-    try: await msg.edit_text(text, reply_markup=kb, parse_mode="HTML",
-                             disable_web_page_preview=True)
+    try:
+        if msg.photo:
+            chat_id = msg.chat.id
+            try: await msg.delete()
+            except: pass
+            await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+        else:
+            await msg.edit_text(text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
     except: pass
 
 async def answer_cb(cb, text=None, show_alert=False):
@@ -160,10 +187,11 @@ async def answer_cb(cb, text=None, show_alert=False):
     except: pass
 
 def with_main_branding(text):
-    footer = "Найди себе крутой юз!"
+    footer = "⚡ <b>Сделано в студии</b> <a href='https://webly.su'>webly.su</a>"
+    marker = "webly.su"
     if not text:
         return footer
-    if footer in text:
+    if marker in text:
         return text
     return f"{text}\n\n{footer}"
 
@@ -213,7 +241,7 @@ DEFAULT_CONFIG = {
     "mode_meaningful_premium": True, "mode_telegram_premium": True,
     "prices": {}, "daily_report": True, "daily_report_hour": 23,
     "notify_purchases": True, "notify_milestones": True,
-    "checker_mode": "sessions",
+    "checker_mode": "sessions", "cache_limit": 500,
 }
 
 def load_bot_config():
@@ -634,11 +662,208 @@ def gen_beautiful():
     ]
     return random.choice(patterns)()
 
+_pattern_template = ""
+def gen_pattern():
+    """Генерация по шаблону (a__le -> a + random + random + l + e)"""
+    if not _pattern_template or len(_pattern_template) != 5:
+        return gen_default()
+    result = []
+    for ch in _pattern_template.lower():
+        if ch == "_":
+            result.append(random.choice(_V if random.random() > 0.5 else _C))
+        else:
+            result.append(ch)
+    return "".join(result)
+
+def gen_word_combinations(word):
+    """Комбинирует слово с реальными словами → осмысленные юзернеймы"""
+    word = word.lower().strip().replace("@", "")
+
+    w3 = [
+        "car","box","lab","hub","man","boy","god","pro","dev","art","web","net",
+        "app","bot","fan","run","fly","win","pay","buy","dog","cat","fox","owl",
+        "key","pin","tag","tip","spy","doc","gem","ink","map","log","job","war",
+        "cup","bar","van","jet","ace","bag","bat","bed","bee","bug","bus","cab",
+        "cam","cap","dew","dim","elf","era","eve","fig","fin","fit","fog","fur",
+        "gig","gin","gun","gym","ham","hat","hen","hop","hut","ivy","jam","jar",
+        "joy","jug","kit","lap","law","leg","lid","lip","lot","mad","mob","mod",
+        "mop","mud","mug","nap","nod","nut","oak","oil","orb","ore","pad","pal",
+        "pan","pat","paw","pea","peg","pen","pet","pie","pig","pit","pod","pot",
+        "pub","pug","rag","ram","rap","rat","ray","rib","rig","rim","rip","rod",
+        "row","rub","rug","rum","saw","sax","sir","ski","sob","son","spa","sub",
+        "sum","tab","tan","tap","tar","tax","tie","tin","toe","ton","toy","tub",
+        "tug","urn","vat","vet","vim","vow","wad","wig","wit","woe","wok","yak",
+        "yam","yen","yew","zip","zoo","max","mix","fix","pop","raw","day","one",
+        "bit","dot","top","hot","big","old","new","red","ice","zen","sun","sky",
+        "air","sea","try","set","get","way","eye","tea",
+    ]
+
+    w4 = [
+        "cook","shop","club","gang","crew","team","band","camp","city","town",
+        "land","park","road","path","lake","moon","rain","wind","snow","gold",
+        "iron","rock","wood","dust","sand","wave","coin","cash","bank","card",
+        "gift","show","play","game","song","film","book","wall","door","roof",
+        "lamp","bell","ring","ball","bowl","drum","fish","bird","bear","wolf",
+        "deer","lion","bull","duck","frog","crab","worm","seed","leaf","root",
+        "vine","rose","lily","tree","food","meal","cake","milk","rice","meat",
+        "soup","wine","beer","salt","mint","sage","chef","king","duke","earl",
+        "work","task","plan","goal","idea","mind","soul","life","love","hope",
+        "fear","rage","calm","cool","warm","cold","dark","deep","fast","slow",
+        "hard","soft","wild","bold","wise","kind","pure","true","real","good",
+        "best","mega","boss","lord","star","fire","face","hand","head","bone",
+        "fist","tail","wing","claw","horn","fury","glow","haze","mist","void",
+        "flux","grid","mesh","core","code","node","link","base","site","zone",
+        "mode","byte","chip","data","hack","loop","scan","sync","tech","volt",
+        "beam","gear","tool","fuel","pump","tank","helm","cape","mask","robe",
+        "vest","boot","belt","whip","pill","dose","dope","hemp","kush","haze",
+        "acid","weed","hash","flex","drip","swag","trap","vibe","mood","flow",
+        "grim","nuke","bomb","doom","fury","riot","punk","goth","rave","bass",
+    ]
+
+    w5 = [
+        "craft","world","storm","flame","frost","steel","blade","night","light",
+        "dream","ghost","devil","angel","power","force","magic","chaos","order",
+        "peace","death","blood","heart","brain","nerve","pulse","flash","spark",
+        "blaze","smoke","steam","stone","earth","ocean","river","cloud","shade",
+        "ninja","titan","demon","beast","snake","eagle","raven","shark","tiger",
+        "viper","cobra","money","price","trade","store","tower","house","guard",
+        "watch","quest","point","score","level","arena","field","track","rider",
+        "racer","pilot","chief","cyber","pixel","sonic","turbo","ultra","super",
+        "hyper","alpha","omega","delta","sigma","prime","elite","royal","mafia",
+        "cartel","crack","speed",
+    ]
+
+    pre_short = ["my","mr","el","la","de","go","no","hi","ok","up","on","in","dj","dr","mc"]
+    pre_long = ["big","top","hot","old","new","red","ice","pro","neo","zen","raw",
+                "the","its","not","sir","don","von","max","all","any","bad","mad","sad"]
+
+    results = []
+    all_suf = w3 + w4 + w5
+    all_pre = pre_short + pre_long + w3 + w4
+
+    # word + суффикс  (mef + cook = mefcook)
+    for s in all_suf:
+        u = word + s
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # префикс + word  (big + mef = bigmef)
+    for p in all_pre:
+        u = p + word
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # суффикс + word  (cook + mef = cookmef)
+    for s in w3 + w4:
+        u = s + word
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # word_суффикс
+    for s in w3 + w4[:60]:
+        u = word + "_" + s
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # префикс_word
+    for p in pre_short + pre_long:
+        u = p + "_" + word
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # word + цифра
+    for n in [1,2,3,5,7,9,11,13,23,42,69,77,99,228]:
+        u = word + str(n)
+        if 5 <= len(u) <= 15: results.append(u)
+
+    # Фильтр
+    valid = []; seen = set()
+    for u in results:
+        ul = u.lower()
+        if (ul not in seen and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', ul)
+                and 5 <= len(ul) <= 15 and "__" not in ul
+                and not ul.startswith("_") and not ul.endswith("_")):
+            valid.append(ul); seen.add(ul)
+
+    random.shuffle(valid)
+    return valid
+
+async def do_word_search(word, count, msg, uid):
+    combinations = gen_word_combinations(word)
+    found = []
+    attempts = 0
+    start = time.time()
+    last_update = 0
+    checked = set()
+
+    use_sessions = pool.has_sessions()
+
+    try:
+        for u in combinations:
+            if len(found) >= count or attempts >= 500:
+                break
+
+            if u in checked:
+                continue
+            checked.add(u)
+            if "__" in u or u.startswith("_") or u.endswith("_"):
+                continue
+
+            if not is_valid_username(u):
+                attempts += 1
+                continue
+
+            attempts += 1
+
+            if use_sessions:
+                r = await pool.check(u, uid)
+
+                if r == "taken":
+                    await asyncio.sleep(0.15)
+                    continue
+
+                if r == "maybe_free":
+                    d = await pool.strong_check(u, uid)
+                    if d == "free":
+                        found.append({"username": u, "fragment": "unavailable"})
+                        save_history(uid, u, f"По слову: {word}", len(u))
+                    await asyncio.sleep(0.25)
+                else:
+                    await asyncio.sleep(0.15)
+
+            else:
+                r = await fast_check_username(u)
+                if r == "free":
+                    found.append({"username": u, "fragment": "unavailable"})
+                    save_history(uid, u, f"По слову: {word}", len(u))
+                await asyncio.sleep(0.05)
+
+            now = time.time()
+            if now - last_update > 2.5:
+                last_update = now
+                if use_sessions:
+                    ps = pool.stats()
+                    status_line = (
+                        f"🟢{ps['active']-ps.get('warming',0)} "
+                        f"🟡{ps.get('warming',0)} "
+                        f"🟠{ps.get('cooldown',0)} "
+                        f"🔴{ps.get('dead',0)}"
+                    )
+                    try:
+                        await msg.edit_text(
+                            f"🎯 <b>По слову: {word}</b>\n\n"
+                            f"🔍 Проверено: <code>{attempts}</code>\n"
+                            f"✅ Найдено: <code>{len(found)}</code>\n\n"
+                            f"{status_line}"
+                        )
+                    except: pass
+
+        elapsed = time.time() - start
+        stats = {"attempts": attempts, "elapsed": elapsed}
+        return found, stats
+
+    except Exception as e:
+        logger.error(f"Word search error: {e}")
+        raise
 
 SEARCH_MODES = {
-    "default":    {"name":"Дефолт",   "emoji":"🎲","desc":"5 букв, все доступно",        "_default_premium":False,"premium":False,"func":gen_default,   "disabled":False},
-    "beautiful":  {"name":"Красивые",   "emoji":"💎","desc":"Стильные паттерны",        "_default_premium":True, "premium":True, "func":gen_beautiful, "disabled":False},
-    "dictionary": {"name":"Словарные",  "emoji":"📖","desc":"Слова из словаря",          "_default_premium":True, "premium":True, "func":gen_dictionary,"disabled":False},
+    "default":   {"name":"Дефолт",   "emoji":"🎲","desc":"5 букв, доступен всем", "_default_premium":False,"premium":False,"func":gen_default,   "disabled":False},
+    "beautiful": {"name":"Красивые", "emoji":"💎","desc":"Стильные паттерны",     "_default_premium":True, "premium":True, "func":gen_beautiful, "disabled":False},
 }
 
 INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
@@ -670,38 +895,32 @@ async def fast_check_username(u):
         return "error"
 
 async def check_username(u):
-    """Уровень 1: глубокий анализ HTML t.me/<username>"""
-    ul = u.lower()
     try:
-        async with http_session.get(f"https://t.me/{u}",
+        async with http_session.get(
+            f"https://t.me/{u}",
             timeout=aiohttp.ClientTimeout(total=8),
-            headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}) as resp:
-            html = await resp.text()
+            headers={"User-Agent": "Mozilla/5.0"}
+        ) as resp:
+
             if resp.status != 200:
-                logger.info(f"[t.me] @{u} HTTP {resp.status} → taken")
                 return "taken"
+
+            html = await resp.text()
             hl = html.lower()
 
-            # 1) DOM: tgme_page_title — заголовок профиля
             if "tgme_page_title" in html:
-                logger.info(f"[t.me] @{u} tgme_page_title → taken")
                 return "taken"
 
-            # 2) DOM: tgme_page_extra — подписчики / last seen
             if "tgme_page_extra" in html:
-                logger.info(f"[t.me] @{u} tgme_page_extra → taken")
                 return "taken"
 
-            # 3) DOM: кнопка View in Telegram → tg:resolve
-            if "tgme_action_button_new" in html and f"tg:resolve?domain={ul}" in hl:
-                logger.info(f"[t.me] @{u} action_button → taken")
+            if "tg:resolve?domain=" in hl:
                 return "taken"
 
-            logger.info(f"[t.me] @{u} → free")
             return "free"
-    except Exception as e:
-        logger.info(f"[t.me] @{u} error: {e} → taken")
-        return "taken"
+
+    except:
+        return "unknown"
 
 async def check_fragment(u):
     now=time.time(); cached=_fragment_cache.get(u)
@@ -731,16 +950,30 @@ async def check_fragment(u):
         return "unavailable"
 
 async def is_username_free(u):
-    """Комбинированная проверка: t.me + Fragment"""
-    if not is_valid_username(u): return False
-    tg = await check_username(u)
+    if not is_valid_username(u):
+        return False
+
+    tg = "unknown"
+
+    for _ in range(2):
+        tg = await check_username(u)
+
+        if tg == "free":
+            break
+
+        if tg == "taken":
+            return False
+
+        await asyncio.sleep(0.4)
+
     if tg != "free":
         return False
+
     fr = await check_fragment(u)
+
     if fr != "unavailable":
-        logger.info(f"[check] @{u} t.me=free, fragment={fr} → blocked")
         return False
-    logger.info(f"[check] @{u} t.me=free, fragment=unavailable → FREE ✅")
+
     return True
 
 async def get_rechecked_cached_free(mode, count):
@@ -765,7 +998,9 @@ async def check_subscribed(uid):
         try:
             m=await bot.get_chat_member(f"@{ch}",uid)
             if m.status in ("left","kicked"): bad.append(ch)
-        except: pass
+        except Exception as e:
+            logger.warning(f"check_subscribed @{ch} uid={uid}: {e}")
+            bad.append(ch)  # при ошибке считаем не подписан
     return bad
 
 def validate_username(u):
@@ -824,6 +1059,8 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             attempts += 1
             continue
         checked.add(u)
+        if "__" in u or u.startswith("_") or u.endswith("_"):
+            continue
         attempts += 1
 
         if await is_username_free(u):
@@ -832,15 +1069,20 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             logger.info(f"[search] live ✅ @{u}")
         await asyncio.sleep(0.05)
 
-        # прогресс для юзера
         now = time.time()
         if msg and now - last_update > 2:
             last_update = now
+            pct = min(len(found) / max(count, 1), 1.0)
+            filled = int(pct * 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            spinner = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+            sp = spinner[attempts % len(spinner)]
             text = (
-                f"🚀 <b>{mode_name}</b>\n\n"
-                f"📊 Проверено: <code>{attempts}</code>\n"
+                f"🔍 <b>{mode_name}</b>\n\n"
+                f"{sp} [{bar}] {int(pct*100)}%\n\n"
                 f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
-                f"⏱ {int(now - start)}с"
+                f"📊 Проверено: <code>{attempts}</code>\n"
+                f"⏱ <code>{int(now - start)}</code>с"
             )
             try:
                 await edit_msg(msg, text)
@@ -983,6 +1225,17 @@ def init_db():
         extra_slots INTEGER DEFAULT 0
     )""")
 
+    c.execute("""CREATE TABLE IF NOT EXISTS favorites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid INTEGER, username TEXT,
+        added_at TEXT DEFAULT '',
+        UNIQUE(uid, username)
+    )""")
+
+    for col, default in [("lang","'ru'"),("last_active","''")]:
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} DEFAULT {default}")
+        except: pass
+
     # ALTER для market (старые БД)
     for col, default in [
         ("promoted","0"),("promoted_until","''"),("is_nft","0"),
@@ -1005,12 +1258,35 @@ def get_cached_free(mode, count):
     return usernames
 
 def add_free_cache(usernames, mode):
-    if not usernames: return
+    if not usernames:
+        return
+
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = sqlite3.connect(DB); c = conn.cursor()
+
+    config = load_bot_config()
+    limit = config.get("cache_limit", 500)
+
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
     for u in usernames:
-        c.execute("INSERT OR IGNORE INTO free_cache (username, checked_at, mode) VALUES (?,?,?)", (u, now, mode))
-    conn.commit(); conn.close()
+        c.execute(
+            "INSERT OR IGNORE INTO free_cache (username, checked_at, mode) VALUES (?,?,?)",
+            (u, now, mode)
+        )
+
+    # 🔥 ОГРАНИЧЕНИЕ РАЗМЕРА КЭША
+    c.execute("""
+        DELETE FROM free_cache
+        WHERE username NOT IN (
+            SELECT username FROM free_cache
+            ORDER BY checked_at DESC
+            LIMIT ?
+        )
+    """, (limit,))
+
+    conn.commit()
+    conn.close()
 
 def get_free_cache_count(mode):
     conn = sqlite3.connect(DB); c = conn.cursor()
@@ -1377,6 +1653,31 @@ def get_my_ref_place(uid):
     above = c.fetchone()[0]; conn.close()
     return above+1, my
 
+def add_favorite(uid, username):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    try:
+        c.execute("INSERT INTO favorites (uid, username, added_at) VALUES (?,?,?)",
+                  (uid, username, datetime.now().strftime("%Y-%m-%d %H:%M")))
+        conn.commit()
+    except sqlite3.IntegrityError: pass
+    conn.close()
+
+def get_favorites(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT username, added_at FROM favorites WHERE uid=? ORDER BY added_at DESC", (uid,))
+    rows = c.fetchall(); conn.close()
+    return [{"username":r[0], "added_at":r[1]} for r in rows]
+
+def update_last_active(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE users SET last_active=? WHERE uid=?", (datetime.now().strftime("%Y-%m-%d %H:%M"), uid))
+    conn.commit(); conn.close()
+
+def remove_favorite(uid, username):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("DELETE FROM favorites WHERE uid=? AND username=?", (uid, username))
+    conn.commit(); conn.close()
+
 def get_premium_users():
     conn = sqlite3.connect(DB); c = conn.cursor()
     now_s = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1436,18 +1737,49 @@ def get_stats():
         "promos": c.execute("SELECT COUNT(*) FROM promotions WHERE active=1").fetchone()[0],
         "monitors": c.execute("SELECT COUNT(*) FROM monitors WHERE status='active'").fetchone()[0],
         "blacklist": c.execute("SELECT COUNT(*) FROM blacklist").fetchone()[0],
+        "today_purchases": c.execute("SELECT COUNT(*) FROM users WHERE sub_end >= ? AND sub_end LIKE ?", (now_s, today+"%")).fetchone()[0],
+        "cache_default": c.execute("SELECT COUNT(*) FROM free_cache WHERE mode='default'").fetchone()[0],
+        "cache_beautiful": c.execute("SELECT COUNT(*) FROM free_cache WHERE mode='beautiful'").fetchone()[0],
+        "total_found": c.execute("SELECT COUNT(*) FROM history").fetchone()[0],
     }
     conn.close(); return r
 
 # ═══════════════════════ МАРКЕТПЛЕЙС ФУНКЦИИ ═══════════════════════
 
 def market_create_lot(seller_uid, mtype, title, description, price, is_nft=0, fragment_url=""):
-    conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("""INSERT INTO market (seller_uid,mtype,title,description,price,status,created,is_nft,fragment_url)
-                 VALUES (?,?,?,?,?,'pending',?,?,?)""",
-              (seller_uid, mtype, title, description, price,
-               datetime.now().strftime("%Y-%m-%d %H:%M"), is_nft, fragment_url))
-    lot_id = c.lastrowid; conn.commit(); conn.close(); return lot_id
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    if not state.get("listing_paid"):
+        kb = InlineKeyboardBuilder()
+        kb.button(text="💳 Оплатить с баланса", callback_data="market_pay_balance")
+        kb.button(text="👤 Написать админу", url=f"https://t.me/{PAY_CONTACT}")
+        kb.adjust(1)
+
+    await msg.answer("❌ Для размещения нужно оплатить 5⭐", reply_markup=kb.as_markup())
+    return
+    c.execute("""
+    INSERT INTO market (
+        seller_uid, mtype, title, description, price,
+        status, created, listing_paid, is_nft, fragment_url
+    )
+    VALUES (?,?,?,?,?, 'pending', ?, 1, ?, ?)
+    """, (
+        seller_uid,
+        mtype,
+        title,
+        description,
+        price,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        is_nft,
+        fragment_url
+    ))
+
+    lot_id = c.lastrowid  # 🔥 ВОТ ЭТОГО НЕ ХВАТАЛО
+
+    conn.commit()
+    conn.close()
+
+    return lot_id
 
 def market_approve_lot(lot_id, admin_uid):
     conn = sqlite3.connect(DB); c = conn.cursor()
@@ -2086,6 +2418,21 @@ def _reset_daily_if_needed(uid):
         )
         conn.commit(); conn.close()
 
+def use_search(uid):
+    _reset_daily_if_needed(uid)
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    if uid in ADMIN_IDS:
+        c.execute("UPDATE users SET searches=searches+1 WHERE uid=?", (uid,))
+    elif has_subscription(uid) or has_vip(uid):
+        c.execute("UPDATE users SET searches=searches+1, daily_searches_used=daily_searches_used+1 WHERE uid=?", (uid,))
+    else:
+        u = get_user(uid)
+        if u.get("extra_searches", 0) > 0:
+            c.execute("UPDATE users SET extra_searches=MAX(extra_searches-1,0), searches=searches+1, daily_searches_used=daily_searches_used+1 WHERE uid=?", (uid,))
+        else:
+            c.execute("UPDATE users SET free=MAX(free-1,0), searches=searches+1, daily_searches_used=daily_searches_used+1 WHERE uid=?", (uid,))
+    conn.commit(); conn.close()
+
 def add_extra_searches(uid, count):
     user = get_user(uid)
     new_value = int(user.get("extra_searches", 0) or 0) + int(count)
@@ -2138,6 +2485,20 @@ def get_user(uid):
         d.setdefault(k, v)
     return d
 
+async def redirect_payment(uid, title, stars, rub=None, back_cb="cmd_shop"):
+    if rub is None:
+        rub = int(stars * STAR_TO_RUB)
+    kb = InlineKeyboardBuilder()
+    kb.button(text=f"💳 Написать @{PAY_CONTACT}", url=f"https://t.me/{PAY_CONTACT}")
+    kb.button(text="🔙 Назад", callback_data=back_cb)
+    kb.adjust(1)
+    await bot.send_message(uid,
+        f"💰 <b>{title}</b>\n\n"
+        f"💵 Цена: <code>{stars}⭐</code> / <code>{rub}₽</code>\n\n"
+        f"📩 Для оплаты напишите @{PAY_CONTACT}\n"
+        f"После оплаты админ активирует покупку ✅",
+        reply_markup=kb.as_markup(), parse_mode="HTML")
+
 # ═══════════════════════ КОМАНДЫ ═══════════════════════
 
 async def register_handlers(dp: Dispatcher):
@@ -2146,8 +2507,11 @@ async def register_handlers(dp: Dispatcher):
     @dp.message(Command("start"))
     async def cmd_start(msg: Message, command: CommandObject):
         uid = msg.from_user.id; uname = msg.from_user.username or ""
-        is_new = get_user(uid).get("searches",0)==0
+        conn = sqlite3.connect(DB); c = conn.cursor()
+        c.execute("SELECT uid FROM users WHERE uid=?", (uid,))
+        is_new = c.fetchone() is None; conn.close()
         ensure_user(uid, uname); log_action(uid, "start", command.args or "")
+        update_last_active(uid)
         if is_banned(uid):
             rem = rate_limiter.get_ban_remaining(uid)
             if rem>0: await msg.answer(f"🚫 Блокировка. Подождите {rem} мин.")
@@ -2164,7 +2528,7 @@ async def register_handlers(dp: Dispatcher):
         ns = await check_subscribed(uid)
         if ns: t,k = build_sub_kb(ns)
         else: t,k = build_menu(uid); t = with_main_branding(t)
-        await msg.answer(t, reply_markup=k, parse_mode="HTML", disable_web_page_preview=True)
+        await send_menu_photo(uid, t, k)
     
     @dp.message(Command("help"))
     async def cmd_help(msg: Message):
@@ -2188,22 +2552,16 @@ async def register_handlers(dp: Dispatcher):
         un = (command.args or "").strip().replace("@","").lower()
         if not validate_username(un):
             await msg.answer("❌ <code>/check username</code>", parse_mode="HTML"); return
-        log_action(uid,"check",un)
-        wm = await msg.answer("⏳...")
-        tg = await check_username(un); fr = await check_fragment(un)
-        tgs = {"free":"✅ Свободен","taken":"❌ Занят","error":"⚠️"}.get(tg,"❓")
-        frs = {"fragment":"💎 Fragment","sold":"✅ Продан","unavailable":"—"}.get(fr,"❓")
-        ev = evaluate_username(un)
-        fac = "\n".join("  "+f for f in ev["factors"]) or "  —"
-        kb = InlineKeyboardBuilder()
-        if tg=="free": kb.button(text="👁 Мониторинг", callback_data=f"mon_add_{un}")
-        kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-        text = (f"🔍 <b>@{un}</b>\n\n📱 {tgs}\n💎 {frs}\n\n"
-                f"🏷 <b>{ev['rarity']}</b> | 💰 <b>{ev['price']}</b>\n"
-                f"[{ev['bar']}] <code>{ev['score']}/200</code>\n\n{fac}\n\n"
-                f"📱 <a href='https://t.me/{un}'>Telegram</a> · "
-                f"💎 <a href='https://fragment.com/username/{un}'>Fragment</a>")
-        await edit_msg(wm, text, kb.as_markup())
+
+    @dp.message(Command("fav"))
+    async def cmd_fav(msg: Message, command: CommandObject):
+        uid = msg.from_user.id
+        if is_banned(uid): return
+        un = (command.args or "").strip().replace("@","").lower()
+        if not un or len(un)<3:
+            await msg.answer("❌ <code>/fav username</code>", parse_mode="HTML"); return
+        add_favorite(uid, un)
+        await msg.answer(f"⭐ <code>@{un}</code> в избранном", parse_mode="HTML")
 
     @dp.message(Command("similar"))
     async def cmd_similar_cmd(msg: Message, command: CommandObject):
@@ -2253,6 +2611,23 @@ async def register_handlers(dp: Dispatcher):
             await message.answer_document(document, caption="Ваша база данных")
         except Exception as e:
             await message.answer(f"❌ Ошибка при отправке: {e}")
+
+    @dp.message(Command("set_cache"))
+    async def set_cache(msg: Message, command: CommandObject):
+        if msg.from_user.id not in ADMIN_IDS:
+            return
+
+        try:
+            value = int(command.args)
+        except:
+            await msg.answer("Используй: /set_cache 1000")
+            return
+
+        config = load_bot_config()
+        config["cache_limit"] = value
+        save_bot_config(config)
+
+        await msg.answer(f"✅ Лимит кэша: {value}")
     
     # ═══ CALLBACKS: Базовые ═══
     
@@ -2269,7 +2644,61 @@ async def register_handlers(dp: Dispatcher):
                 try: await bot.send_message(ref_uid, f"🎉 Новый реферал! <b>+{REF_BONUS}</b>", parse_mode="HTML")
                 except: pass
         else: set_captcha_passed(uid)
-        t,k = build_menu(uid); t = with_main_branding(t); await edit_msg(cb.message, t, k)
+        t,k = build_menu(uid); t = with_main_branding(t); await edit_to_photo(cb.message, t, k)
+
+    @dp.callback_query(F.data == "setlang_ru")
+    async def cb_setlang_ru(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        conn = sqlite3.connect(DB); c = conn.cursor()
+        c.execute("UPDATE users SET lang='ru' WHERE uid=?", (uid,))
+        conn.commit(); conn.close()
+        fname = cb.from_user.first_name or "друг"
+        welcome = (
+            f"👋 <b>Привет, {fname}!</b>\n\n"
+            f"С помощью нашего бота ты можешь искать красивые, "
+            f"а самое главное свободные 5-буквенные юзернеймы "
+            f"для себя или продажи ⚡\n\n"
+            f"🔍 <b>Поиск</b> — найди свободный юзернейм\n"
+            f"📊 <b>Утилиты</b> — проверка и оценка\n"
+            f"👁 <b>Мониторинг</b> — следи за юзами\n"
+            f"🏪 <b>Маркет</b> — купи/продай юзернейм\n\n"
+            f"🎁 У тебя <b>{FREE_SEARCHES}</b> бесплатных поиска!")
+        try:
+            photo = FSInputFile(MENU_IMAGE)
+            await bot.send_photo(uid, photo=photo, caption=welcome, parse_mode="HTML")
+        except:
+            await cb.message.answer(welcome, parse_mode="HTML")
+        ns = await check_subscribed(uid)
+        if ns: t,k = build_sub_kb(ns)
+        else: t,k = build_menu(uid); t = with_main_branding(t)
+        await send_menu_photo(uid, t, k)
+
+    @dp.callback_query(F.data == "setlang_en")
+    async def cb_setlang_en(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        conn = sqlite3.connect(DB); c = conn.cursor()
+        c.execute("UPDATE users SET lang='en' WHERE uid=?", (uid,))
+        conn.commit(); conn.close()
+        fname = cb.from_user.first_name or "friend"
+        welcome = (
+            f"👋 <b>Hello, {fname}!</b>\n\n"
+            f"With our bot you can search for beautiful, "
+            f"and most importantly free 5-letter usernames "
+            f"for yourself or for sale ⚡\n\n"
+            f"🔍 <b>Search</b> — find free username\n"
+            f"📊 <b>Utilities</b> — check and evaluate\n"
+            f"👁 <b>Monitoring</b> — track usernames\n"
+            f"🏪 <b>Market</b> — buy/sell username\n\n"
+            f"🎁 You have <b>{FREE_SEARCHES}</b> free searches!")
+        try:
+            photo = FSInputFile(MENU_IMAGE)
+            await bot.send_photo(uid, photo=photo, caption=welcome, parse_mode="HTML")
+        except:
+            await cb.message.answer(welcome, parse_mode="HTML")
+        ns = await check_subscribed(uid)
+        if ns: t,k = build_sub_kb(ns)
+        else: t,k = build_menu(uid); t = with_main_branding(t)
+        await send_menu_photo(uid, t, k)
 
     @dp.callback_query(F.data == "check_sub")
     async def cb_cs(cb: CallbackQuery):
@@ -2277,14 +2706,17 @@ async def register_handlers(dp: Dispatcher):
         ns = await check_subscribed(uid)
         if ns: t,k = build_sub_kb(ns)
         else: t,k = build_menu(uid); t = with_main_branding(t)
-        await edit_msg(cb.message, t, k); return
+        await edit_to_photo(cb.message, t, k); return
 
     @dp.callback_query(F.data == "cmd_menu")
     async def cb_menu(cb: CallbackQuery):
         uid = cb.from_user.id; await answer_cb(cb)
         if is_banned(uid): return
         user_states.pop(uid, None)
-        t,k = build_menu(uid); t = with_main_branding(t); await edit_msg(cb.message, t, k)
+        ns = await check_subscribed(uid)
+        if ns: t,k = build_sub_kb(ns)
+        else: t,k = build_menu(uid); t = with_main_branding(t)
+        await edit_to_photo(cb.message, t, k)
 
     
     # ═══ CALLBACKS: Поиск ═══
@@ -2385,10 +2817,16 @@ async def register_handlers(dp: Dispatcher):
             found, stats = await do_search(count, mi["func"], cb.message, mi["name"], uid, mode)
             text = format_results(found, stats, mi["name"])
             kb = InlineKeyboardBuilder()
+            for item in found[:10]:
+                un = item.get("username", "")
+                kb.button(text=f"⭐ {un}", callback_data=f"addfav_{un}")
             kb.button(text="🔙 Меню", callback_data="cmd_menu")
             kb.button(text="🔄 Повторить", callback_data=f"go_{mode}")
-            kb.adjust(2)
-            await edit_msg(cb.message, text, kb.as_markup())
+            kb.button(text="⚡ webly.su", url="https://webly.su")
+            kb.adjust(3)
+            try: await cb.message.delete()
+            except: pass
+            await send_menu_photo(uid, text, kb.as_markup())
         except Exception as e:
             logger.error(f"Search error {uid}: {e}")
             try:
@@ -2397,6 +2835,7 @@ async def register_handlers(dp: Dispatcher):
                 pass
         finally:
             searching_users.discard(uid)
+        use_search(uid)
         log_action(uid,"search",mode)
 
     # ═══ CALLBACKS: Оценка / Утилиты ═══
@@ -2523,7 +2962,7 @@ async def register_handlers(dp: Dispatcher):
         kb.button(text="📦 Мои лоты", callback_data="market_my")
         kb.button(text="🛒 Мои покупки", callback_data="market_my_purchases")
         kb.button(text="🔄 Обменник", callback_data="market_exchange")
-        kb.button(text="🎡 Колесо", callback_data="market_wheel")
+      # kb.button(text="🎡 Колесо", callback_data="market_wheel")
         kb.button(text="📦 Лутбокс", callback_data="market_lootbox")
         kb.button(text="🔙 Меню", callback_data="cmd_menu")
         kb.adjust(2)
@@ -2873,45 +3312,6 @@ async def register_handlers(dp: Dispatcher):
         kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_market"); kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
 
-    # ═══ КОЛЕСО ═══
-
-    @dp.callback_query(F.data == "market_wheel")
-    async def cb_wheel(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        free_used = wheel_free_spins_today(uid)
-        free_left = max(0, WHEEL_FREE_DAILY - free_used)
-        text = (f"🎡 <b>Колесо фортуны</b>\n\n"
-                f"🎟 Бесплатных: <code>{free_left}</code>\n"
-                f"💰 Доп крутка: <code>{WHEEL_EXTRA_PRICE}⭐</code>\n\n"
-                f"🎁 Призы: звёзды, поиски, Premium, VIP!")
-        kb = InlineKeyboardBuilder()
-        if free_left > 0:
-            kb.button(text="🎡 Крутить бесплатно!", callback_data="wheel_spin_free")
-        kb.button(text=f"🎡 Крутить за {WHEEL_EXTRA_PRICE}⭐", callback_data="wheel_spin_paid")
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "wheel_spin_free")
-    async def cb_wheel_free(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        if wheel_free_spins_today(uid) >= WHEEL_FREE_DAILY:
-            await answer_cb(cb, "❌ Бесплатные кончились!", show_alert=True); return
-        for e in ["🎡","🔍","🎰","🌟","✨","🎯"]:
-            await edit_msg(cb.message, f"{e} Крутим...")
-            await asyncio.sleep(0.3)
-        prize, ptype = wheel_spin(uid)
-        log_action(uid, "wheel_free", prize)
-        kb = InlineKeyboardBuilder()
-        kb.button(text="🎡 Ещё!", callback_data="market_wheel")
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(1)
-        await edit_msg(cb.message, f"🎉 <b>{prize}</b>", kb.as_markup())
-
-    @dp.callback_query(F.data == "wheel_spin_paid")
-    async def cb_wheel_paid(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        await redirect_payment(uid, "🎡 Крутка колеса", WHEEL_EXTRA_PRICE, None, "market_wheel")
 
     # ═══ ЛУТБОКС ═══
 
@@ -3095,7 +3495,30 @@ async def register_handlers(dp: Dispatcher):
                 f"вы оба получите юзернеймы автоматически",
                 kb.as_markup())
 
+    # калбак оплаты новой
+    @dp.callback_query(F.data == "market_pay_balance")
+    async def market_pay_balance(cb: CallbackQuery):
+        uid = cb.from_user.id
+        user = get_user(uid)
 
+        if user["balance"] < MARKET_LISTING_FEE:
+            await cb.answer("❌ Недостаточно средств", show_alert=True)
+            return
+
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
+
+        c.execute(
+            "UPDATE users SET balance = balance - ? WHERE uid=?",
+            (MARKET_LISTING_FEE, uid)
+        )
+
+        conn.commit()
+        conn.close()
+
+        user_states[uid] = {"listing_paid": True}
+
+        await cb.message.edit_text("✅ Оплата прошла. Теперь заново создайте товар")
     # ═══════════════════════ CALLBACKS: Мониторинг ═══════════════════════
 
     @dp.callback_query(F.data == "cmd_monitors")
@@ -3163,6 +3586,8 @@ async def register_handlers(dp: Dispatcher):
         kb.button(text="💎 Premium", callback_data="shop_premium")
         kb.button(text="🌟 VIP", callback_data="shop_vip")
         kb.button(text="📦 Бандл Premium+VIP", callback_data="shop_bundle")
+        kb.button(text="🏷 Промокод", callback_data="shop_promo")
+        kb.button(text="⚡ webly.su", url="https://webly.su")
         kb.button(text="🔙 Меню", callback_data="cmd_menu")
         kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
@@ -3277,6 +3702,15 @@ async def register_handlers(dp: Dispatcher):
         kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
 
+    @dp.callback_query(F.data == "shop_promo")
+    async def cb_shop_promo(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        user_states[uid] = {"action": "shop_activate_promo"}
+        kb = InlineKeyboardBuilder(); kb.button(text="❌ Отмена", callback_data="cmd_shop"); kb.adjust(1)
+        await edit_msg(cb.message,
+            "🏷 <b>Активация промокода</b>\n\n"
+            "Введите промокод:", kb.as_markup())
+
     # ═══ ВЫБОР ОПЛАТЫ: БАЛАНС ═══
 
     @dp.callback_query(F.data.startswith("paybal_searches_"))
@@ -3350,7 +3784,8 @@ async def register_handlers(dp: Dispatcher):
         uid = cb.from_user.id; await answer_cb(cb)
         k = cb.data[14:]; p = PRICES.get(k)
         if not p: return
-        await redirect_payment(uid, f"💎 Premium {p['label']}", p["stars"], p["rub"], "shop_premium")
+        rub = int(p['stars'] * STAR_TO_RUB)
+        await redirect_payment(uid, f"💎 Premium {p['label']}", p["stars"], rub, "shop_premium")
 
     # ═══ ВЫБОР ОПЛАТЫ: VIP ═══
 
@@ -3495,12 +3930,43 @@ async def register_handlers(dp: Dispatcher):
         if ar_on: kb.button(text="🔄 Выкл авто", callback_data="toggle_renew")
         else: kb.button(text="🔄 Вкл авто", callback_data="toggle_renew")
         kb.button(text="📜 История", callback_data="util_hist")
+        kb.button(text="⭐ Избранное", callback_data="cmd_favorites")
         kb.button(text="🔑 Ключ", callback_data="cmd_activate")
         kb.button(text="🎁 Подарить", callback_data="gift_prem")
         if bal>=MIN_WITHDRAW: kb.button(text=f"💸 Вывести ({bal:.1f}⭐)", callback_data="cmd_withdraw")
         if is_prem and is_button_enabled("roulette"): kb.button(text="🎰 Рулетка", callback_data="cmd_roulette")
         kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
+
+    @dp.callback_query(F.data == "cmd_favorites")
+    async def cb_favorites(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        favs = get_favorites(uid)
+        text = f"⭐ <b>Избранное</b> ({len(favs)})\n\n"
+        kb = InlineKeyboardBuilder()
+        for f in favs[:15]:
+            text += f"• <code>@{f['username']}</code> — {f['added_at'][:10]}\n"
+            kb.button(text=f"🗑 {f['username']}", callback_data=f"remfav_{f['username']}")
+        if not favs: text += "<i>Пусто</i>"
+        kb.button(text="🔙 Профиль", callback_data="cmd_profile"); kb.adjust(1)
+        await edit_msg(cb.message, text, kb.as_markup())
+
+    @dp.callback_query(F.data == "cmd_thematic")
+    async def cb_thematic(cb: CallbackQuery):
+        await answer_cb(cb)
+        await edit_msg(cb.message, "❌ Режим 'По слову' удалён.")
+
+    @dp.callback_query(F.data.startswith("remfav_"))
+    async def cb_rem_fav(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        un = cb.data[7:]; remove_favorite(uid, un)
+        await cb_favorites(cb)
+
+    @dp.callback_query(F.data.startswith("addfav_"))
+    async def cb_add_fav(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        un = cb.data[7:]; add_favorite(uid, un)
+        await answer_cb(cb, "⭐ Добавлено в избранное", show_alert=True)
 
     @dp.callback_query(F.data == "toggle_renew")
     async def cb_tr(cb: CallbackQuery):
@@ -3575,11 +4041,18 @@ async def register_handlers(dp: Dispatcher):
         u = get_user(uid); bu = bot_info.username if bot_info else "bot"
         link = f"https://t.me/{bu}?start=ref_{uid}"
         kb = InlineKeyboardBuilder()
+        place, my_refs = get_my_ref_place(uid)
         kb.button(text="📤 Поделиться", url=f"https://t.me/share/url?url={link}&text=🔍 Найди юзернейм!")
         kb.button(text="👥 Мои рефералы", callback_data="my_refs")
+        kb.button(text="🏆 Топ рефералов", callback_data="ref_top")
         kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
         await edit_msg(cb.message,
-            f"👥 <b>Рефералы</b>\n\n👥 <code>{u.get('ref_count',0)}</code>\n💰 <code>{u.get('balance',0):.1f}</code> ⭐ (4%)\n+{REF_BONUS} поиска за друга\n\n🔗 <code>{link}</code>",
+            f"👥 <b>Рефералы</b>\n\n"
+            f"👥 Приглашено: <code>{u.get('ref_count',0)}</code>\n"
+            f"🏆 Место: <b>#{place}</b>\n"
+            f"💰 Баланс: <code>{u.get('balance',0):.1f}</code> ⭐ (4% с покупок)\n"
+            f"+{REF_BONUS} поиска за каждого друга\n\n"
+            f"🔗 <code>{link}</code>",
             kb.as_markup())
 
     @dp.callback_query(F.data == "my_refs")
@@ -3591,6 +4064,23 @@ async def register_handlers(dp: Dispatcher):
             name = f"@{r['uname']}" if r['uname'] else f"ID:{r['uid']}"
             text += f"• {name} — {r['created']}\n"
         if not refs: text += "<i>Пусто</i>"
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_referral"); kb.adjust(1)
+        await edit_msg(cb.message, text, kb.as_markup())
+
+    @dp.callback_query(F.data == "ref_top")
+    async def cb_ref_top(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        top = get_ref_top(15)
+        text = "🏆 <b>Топ рефералов</b>\n\n"
+        medals = {1:"🥇",2:"🥈",3:"🥉"}
+        for i, t in enumerate(top, 1):
+            m = medals.get(i, f"<b>{i}.</b>")
+            name = f"@{t['uname']}" if t["uname"] else f"ID:{t['uid']}"
+            you = " ← <b>ты</b>" if t["uid"] == uid else ""
+            text += f"{m} {name} — <code>{t['ref_count']}</code> 👥{you}\n"
+        if not top: text += "<i>Пока пусто</i>"
+        place, my = get_my_ref_place(uid)
+        text += f"\n\n📍 Ты: <b>#{place}</b> | 👥 <code>{my}</code>"
         kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_referral"); kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
 
@@ -3696,7 +4186,7 @@ async def register_handlers(dp: Dispatcher):
     @dp.callback_query(F.data == "tt_cancel")
     async def cb_tc(cb: CallbackQuery):
         await answer_cb(cb); user_states.pop(cb.from_user.id, None)
-        t,k = build_menu(cb.from_user.id); t = with_main_branding(t); await edit_msg(cb.message, t, k)
+        t,k = build_menu(cb.from_user.id); t = with_main_branding(t); await edit_to_photo(cb.message, t, k)
 
     @dp.callback_query(F.data.startswith("ta_"))
     async def cb_ta(cb: CallbackQuery):
@@ -4002,6 +4492,37 @@ async def register_handlers(dp: Dispatcher):
 
     # ═══════════════════════ ТЕКСТ ═══════════════════════
 
+    async def start_search(message):
+        uid = message.from_user.id
+        if not can_search(uid):
+            await message.answer("❌ Лимит поисков исчерпан. Купите подписку или дождитесь обновления.")
+            return
+        if is_banned(uid):
+            await message.answer("❌ Доступ заблокирован.")
+            return
+        bad = await check_subscribed(uid)
+        if bad:
+            await message.answer(f"❌ Подпишитесь на каналы: {', '.join(['@'+ch for ch in bad])}")
+            return
+        count = get_search_count(uid)
+        msg = await message.answer("🚀 Запускаю поиск...")
+        found, stats = await do_search(count, gen_default, msg, "~Дефолт~", uid, "default")
+        if found:
+            txt = "\n".join(f"@{x['username']}" for x in found)
+            await message.answer(f"✅ Найдено:\n{txt}")
+        else:
+            await message.answer("❌ Ничего не найдено.")
+        use_search(uid)
+
+    @dp.message(Command("search"))
+    async def cmd_search(msg: Message):
+        uid = msg.from_user.id
+        if is_banned(uid): return
+        if not can_search(uid):
+            await msg.answer("❌ Поиски закончились. Купите подписку или дождитесь обновления.")
+            return
+        await start_search(msg)
+
     @dp.message(F.text & ~F.text.startswith("/"))
     async def handle_text(msg: Message):
         uid = msg.from_user.id
@@ -4013,7 +4534,15 @@ async def register_handlers(dp: Dispatcher):
             user_states.pop(uid,None); r=activate_key(uid,msg.text.strip())
             if r: log_action(uid,"key",msg.text.strip()); await msg.answer(f"🎉 {r['days']}дн до {r['end']}", parse_mode="HTML")
             else: await msg.answer("❌ Неверный ключ")
-            t,k=build_menu(uid); t = with_main_branding(t); await msg.answer(t,reply_markup=k,parse_mode="HTML",disable_web_page_preview=True); return
+            t,k=build_menu(uid); t = with_main_branding(t); await send_menu_photo(uid, t, k); return
+
+        if action=="evaluate":
+            user_states.pop(uid,None); un=msg.text.strip().replace("@","").lower()
+            if not validate_username(un): await msg.answer("❌ Мин 5 символов"); return
+
+        if action=="input_pattern":
+            user_states.pop(uid,None)
+            await msg.answer("❌ Режим шаблона недоступен"); return
 
         if action=="evaluate":
             user_states.pop(uid,None); un=msg.text.strip().replace("@","").lower()
@@ -4068,38 +4597,6 @@ async def register_handlers(dp: Dispatcher):
             try: await wm.delete()
             except: pass
             await msg.answer(text,reply_markup=kb.as_markup(),parse_mode="HTML",disable_web_page_preview=True); return
-
-    async def start_search(message):
-        uid = message.from_user.id
-        if not can_search(uid):
-            await message.answer("❌ Лимит поисков исчерпан. Купите подписку или дождитесь обновления.")
-            return
-        if is_banned(uid):
-            await message.answer("❌ Доступ заблокирован.")
-            return
-        bad = await check_subscribed(uid)
-        if bad:
-            await message.answer(f"❌ Подпишитесь на каналы: {', '.join(['@'+ch for ch in bad])}")
-            return
-        count = get_search_count(uid)
-        msg = await message.answer("🚀 Запускаю поиск...")
-        found, stats = await do_search(count, gen_default, msg, "~Дефолт~", uid, "default")
-        if found:
-            txt = "\n".join(f"@{x['username']}" for x in found)
-            await message.answer(f"✅ Найдено:\n{txt}")
-        else:
-            await message.answer("❌ Ничего не найдено.")
-        use_search(uid)
-
-    @dp.message(Command("search"))
-    async def cmd_search(msg: Message):
-        uid = msg.from_user.id
-        if is_banned(uid): return
-        if not can_search(uid):
-            await msg.answer("❌ Поиски закончились. Купите подписку или дождитесь обновления.")
-            return
-        await start_search(msg)
-        return
 
         # ═══ МАРКЕТПЛЕЙС ТЕКСТОВЫЕ ХЕНДЛЕРЫ ═══
         if action=="msell_title":
@@ -4316,6 +4813,28 @@ async def register_handlers(dp: Dispatcher):
             if not target: await msg.answer("❌"); return
             unban_user(target); log_action(uid,"unban",str(target)); await msg.answer("✅ Разбанен"); return
 
+        if action=="shop_activate_promo":
+            user_states.pop(uid,None)
+            code = msg.text.strip().upper()
+            result = check_promocode(code, uid, 0, "shop")
+            if not result["valid"]:
+                await msg.answer(f"❌ {result.get('reason','Промокод недействителен')}"); return
+            discount = result["discount"]
+            use_promocode(code, uid, discount)
+            if discount > 0:
+                add_balance(uid, discount)
+                log_action(uid, "promo_activate", f"{code} +{discount}⭐")
+                await msg.answer(
+                    f"🎉 <b>Промокод активирован!</b>\n\n"
+                    f"🏷 <code>{code}</code>\n"
+                    f"💰 +{discount}⭐ на баланс\n"
+                    f"💰 Баланс: <code>{get_balance(uid):.1f}⭐</code>",
+                    parse_mode="HTML")
+            else:
+                log_action(uid, "promo_activate", code)
+                await msg.answer(f"✅ Промокод <code>{code}</code> активирован!", parse_mode="HTML")
+            return
+
         if action=="admin_blacklist_add":
             user_states.pop(uid,None); un=msg.text.strip().replace("@","").lower()
             if not validate_username(un): await msg.answer("❌"); return
@@ -4362,7 +4881,14 @@ async def register_handlers(dp: Dispatcher):
             try: days=int(msg.text.strip())
             except: await msg.answer("❌"); return
             end=give_subscription(state["target"],days); log_action(uid,"add_days",f"{state['target']}+{days}")
-            await msg.answer(f"✅ +{days}дн до {end}"); return
+            await msg.answer(f"✅ +{days}дн до {end}")
+            try:
+                await bot.send_message(state["target"],
+                    f"🎉 <b>Вам выдан Premium!</b>\n\n"
+                    f"💎 +{days} дней\n📅 До: {end}\n\n"
+                    f"Приятного использования!", parse_mode="HTML")
+            except: pass
+            return
 
         # ═══ НОВОЕ: Админ VIP ═══
         if action=="admin_user_add_vip_days":
@@ -4370,7 +4896,14 @@ async def register_handlers(dp: Dispatcher):
             try: days=int(msg.text.strip())
             except: await msg.answer("❌"); return
             end=give_vip(state["target"],days); log_action(uid,"add_vip",f"{state['target']}+{days}")
-            await msg.answer(f"✅ 🌟 +{days}дн VIP до {end}"); return
+            await msg.answer(f"✅ 🌟 +{days}дн VIP до {end}")
+            try:
+                await bot.send_message(state["target"],
+                    f"🎉 <b>Вам выдан VIP!</b>\n\n"
+                    f"🌟 +{days} дней\n📅 До: {end}\n\n"
+                    f"Приятного использования!", parse_mode="HTML")
+            except: pass
+            return
 
         if action=="admin_user_msg":
             user_states.pop(uid,None)
@@ -4505,7 +5038,7 @@ async def register_handlers(dp: Dispatcher):
         ns=await check_subscribed(uid)
         if ns: t,k=build_sub_kb(ns)
         else: t,k=build_menu(uid); t = with_main_branding(t)
-        await msg.answer(t,reply_markup=k,parse_mode="HTML",disable_web_page_preview=True)
+        await send_menu_photo(uid, t, k)
 
 
     # ═══════════════════════ АДМИНКА ═══════════════════════
@@ -4522,10 +5055,21 @@ async def register_handlers(dp: Dispatcher):
 
         text = (
             f"👑 <b>Админ-панель v26.0</b>\n{'='*20}\n\n"
-            f"👥 <code>{s['users']}</code> юзеров | 💎 <code>{s['subs']}</code> Premium\n"
-            f"🔢 <code>{s['searches']}</code> поисков | 🆕 +<code>{s['today_users']}</code> сегодня\n"
+            f"👥 Всего юзеров: <code>{s['users']}</code> | � Бан: <code>{s['banned']}</code>\n"
+            f"💎 Premium: <code>{s['subs']}</code>\n\n"
+            f"� <b>Сегодня:</b>\n"
+            f"  🆕 Новых: <code>{s['today_users']}</code>\n"
+            f"  🔍 Поисков: <code>{s['today_searches']}</code>\n"
+            f"  💳 Покупок: <code>{s['today_purchases']}</code>\n\n"
+            f"📊 <b>Всего:</b>\n"
+            f"  🔢 Поисков: <code>{s['searches']}</code>\n"
+            f"  🏆 Найдено юзов: <code>{s['total_found']}</code>\n\n"
+            f"💾 <b>Кэш:</b>\n"
+            f"  🎲 Дефолт: <code>{s['cache_default']}</code>\n"
+            f"  💎 Красивые: <code>{s['cache_beautiful']}</code>\n\n"
             f"🔑 Сессии: {sl}\n"
-            f"🏪 Маркет: <code>{pending_m}</code> модерация | ⚠️ <code>{disputes_m}</code> споров")
+            f"🏪 Маркет: <code>{pending_m}</code> модерация | ⚠️ <code>{disputes_m}</code> споров"
+        )
 
         kb = InlineKeyboardBuilder()
         kb.button(text="👤 Юзеры", callback_data="adm_users")
@@ -5352,19 +5896,9 @@ async def register_handlers(dp: Dispatcher):
     @dp.callback_query(F.data == "a_update")
     async def cb_update(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
-        await answer_cb(cb); await edit_msg(cb.message,"📥 Скачиваю...")
-        try:
-            result=subprocess.run(["curl","-s","https://raw.githubusercontent.com/yarmukhamedovsergey-creator/app.zip/main/bot.py","-o","/root/bot.py"],
-                                  capture_output=True,text=True,timeout=60)
-            if result.returncode==0:
-                kb=InlineKeyboardBuilder(); kb.button(text="🔄 Перезапуск",callback_data="a_restart"); kb.button(text="🔙",callback_data="cmd_admin"); kb.adjust(1)
-                await edit_msg(cb.message,"✅ <b>Обновлено!</b>",kb.as_markup())
-            else:
-                kb=InlineKeyboardBuilder(); kb.button(text="🔙",callback_data="cmd_admin")
-                await edit_msg(cb.message,f"❌ {result.stderr[:300]}",kb.as_markup())
-        except Exception as e:
-            kb=InlineKeyboardBuilder(); kb.button(text="🔙",callback_data="cmd_admin")
-            await edit_msg(cb.message,f"❌ {e}",kb.as_markup())
+        await answer_cb(cb)
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_admin")
+        await edit_msg(cb.message, "❌ <b>Автообновление отключено.</b>\nЗаливайте файл вручную.", kb.as_markup())
 
     @dp.callback_query(F.data == "a_restart")
     async def cb_restart(cb: CallbackQuery):
@@ -5549,23 +6083,111 @@ async def reminder_loop():
                     except: pass
         except Exception as e: logger.error(f"Reminder: {e}")
 
+async def auto_renew_loop():
+    await asyncio.sleep(300)
+    while True:
+        try:
+            now = datetime.now()
+            conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row; c = conn.cursor()
+            c.execute("SELECT uid,sub_end,auto_renew,auto_renew_plan,balance FROM users WHERE auto_renew=1 AND auto_renew_plan!='' AND sub_end!=''")
+            users = [dict(r) for r in c.fetchall()]; conn.close()
+            for u in users:
+                try:
+                    sub_end = datetime.strptime(u["sub_end"], "%Y-%m-%d %H:%M:%S")
+                except:
+                    try: sub_end = datetime.strptime(u["sub_end"], "%Y-%m-%d %H:%M")
+                    except: continue
+                if sub_end > now: continue
+                plan = u["auto_renew_plan"]
+                price_info = PRICES.get(plan)
+                if not price_info: continue
+                bal = float(u.get("balance", 0) or 0)
+                if bal >= price_info["stars"]:
+                    set_balance(u["uid"], bal - price_info["stars"])
+                    end = give_subscription(u["uid"], price_info["days"])
+                    log_action(u["uid"], "auto_renew", f"{plan} -{price_info['stars']}⭐")
+                    try:
+                        kb = InlineKeyboardBuilder(); kb.button(text="👤 Профиль", callback_data="cmd_profile")
+                        await bot.send_message(u["uid"],
+                            f"🔄 <b>Авто-продление!</b>\n\n"
+                            f"💎 {price_info['label']} продлено\n"
+                            f"💰 Списано: <code>{price_info['stars']}⭐</code>\n"
+                            f"📅 До: <code>{end}</code>",
+                            reply_markup=kb.as_markup(), parse_mode="HTML")
+                    except: pass
+                else:
+                    try:
+                        kb = InlineKeyboardBuilder()
+                        kb.button(text="💰 Пополнить", callback_data="cmd_shop")
+                        await bot.send_message(u["uid"],
+                            f"⚠️ <b>Не удалось продлить подписку!</b>\n\n"
+                            f"Нужно: <code>{price_info['stars']}⭐</code>\n"
+                            f"Баланс: <code>{bal:.1f}⭐</code>\n\n"
+                            f"Пополните баланс для авто-продления.",
+                            reply_markup=kb.as_markup(), parse_mode="HTML")
+                    except: pass
+        except Exception as e: logger.error(f"AutoRenew: {e}")
+        await asyncio.sleep(3600)
+
+async def return_user_push_loop():
+    await asyncio.sleep(600)
+    while True:
+        try:
+            days_threshold = 7
+            threshold_time = (datetime.now() - timedelta(days=days_threshold)).strftime("%Y-%m-%d %H:%M")
+            conn = sqlite3.connect(DB); c = conn.cursor()
+            c.execute("SELECT uid,uname FROM users WHERE last_active < ? AND last_active != ''", (threshold_time,))
+            users = c.fetchall(); conn.close()
+            for uid, uname in users:
+                try:
+                    kb = InlineKeyboardBuilder()
+                    kb.button(text="🔍 Поиск", callback_data="cmd_search")
+                    kb.button(text="👤 Профиль", callback_data="cmd_profile")
+                    kb.adjust(1)
+                    name = f"@{uname}" if uname else f"ID:{uid}"
+                    await bot.send_message(uid,
+                        f"👋 <b>Привет, {name}!</b>\n\n"
+                        f"Мы скучали! Заходи, проверь новые юзернеймы ⚡",
+                        reply_markup=kb.as_markup(), parse_mode="HTML")
+                    update_last_active(uid)
+                    await asyncio.sleep(60)
+                except: pass
+        except Exception as e: logger.error(f"Return push: {e}")
+        await asyncio.sleep(86400)
+
 async def monitor_loop():
     await asyncio.sleep(60)
     while True:
         try:
             expire_monitors()
-            for mon in get_active_monitors():
+            monitors = get_active_monitors()
+            for mon in monitors:
                 try:
-                    status=await pool.check(mon["username"])
-                    if status in ("free","maybe_free"):
-                        update_monitor_status(mon["id"],"free")
-                        try:
-                            kb=InlineKeyboardBuilder(); kb.button(text="📊",callback_data=f"eval_{mon['username']}")
-                            await bot.send_message(mon["uid"],f"🎉 <b>@{mon['username']} свободен!</b>",reply_markup=kb.as_markup(),parse_mode="HTML")
-                        except: pass
-                    else: update_monitor_status(mon["id"],"taken")
+                    tg = await check_username(mon["username"])
+                    if tg == "free":
+                        fr = await check_fragment(mon["username"])
+                        if fr == "unavailable":
+                            update_monitor_status(mon["id"], "free")
+                            kb = InlineKeyboardBuilder()
+                            kb.button(text="📊 Оценить", callback_data=f"eval_{mon['username']}")
+                            kb.button(text="👁 Мониторинг", callback_data="cmd_monitors")
+                            kb.adjust(1)
+                            try:
+                                await bot.send_message(mon["uid"],
+                                    f"🎉 <b>@{mon['username']} свободен!</b>\n\n"
+                                    f"📱 <a href='https://t.me/{mon['username']}'>Telegram</a> · "
+                                    f"💎 <a href='https://fragment.com/username/{mon['username']}'>Fragment</a>\n\n"
+                                    f"⚡ Скорее забирайте!",
+                                    reply_markup=kb.as_markup(), parse_mode="HTML", disable_web_page_preview=True)
+                            except: pass
+                            logger.info(f"[monitor] @{mon['username']} FREE → notified uid={mon['uid']}")
+                        else:
+                            update_monitor_status(mon["id"], "taken")
+                    else:
+                        update_monitor_status(mon["id"], "taken")
                     await asyncio.sleep(3)
-                except: pass
+                except Exception as e:
+                    logger.error(f"[monitor] @{mon['username']}: {e}")
         except Exception as e: logger.error(f"Monitor: {e}")
         await asyncio.sleep(MONITOR_CHECK_INTERVAL)
 
@@ -5607,7 +6229,6 @@ async def free_cache_warmer_loop():
     targets = {
         "default": 50,
         "beautiful": 40,
-        "dictionary": 40,
     }
     await asyncio.sleep(5)
     while True:
@@ -5636,6 +6257,8 @@ async def free_cache_warmer_loop():
                     if not u:
                         continue
                     checked.add(u)
+                    if "__" in u or u.startswith("_") or u.endswith("_"):
+                        continue
                     try:
                         if await is_username_free(u):
                             add_free_cache([u], mode_key)
@@ -5687,6 +6310,8 @@ async def main():
         logger.warning("Поиск работает без user sessions (Telethon). Точность проверки username ограничена.")
     logger.info("━"*30)
     asyncio.create_task(reminder_loop())
+    asyncio.create_task(auto_renew_loop())
+    asyncio.create_task(return_user_push_loop())
     asyncio.create_task(session_watchdog())
     asyncio.create_task(monitor_loop())
     asyncio.create_task(daily_report_loop())
