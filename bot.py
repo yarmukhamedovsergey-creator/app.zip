@@ -1755,7 +1755,7 @@ def market_create_lot(seller_uid, mtype, title, description, price, is_nft=0, fr
         kb.button(text="👤 Написать админу", url=f"https://t.me/{PAY_CONTACT}")
         kb.adjust(1)
 
-    await msg.answer("❌ Для размещения нужно оплатить 5⭐", reply_markup=kb.as_markup())
+        await msg.answer("❌ Для размещения нужно оплатить 5⭐", reply_markup=kb.as_markup())
     return
     c.execute("""
     INSERT INTO market (
