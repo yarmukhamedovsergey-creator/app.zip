@@ -36,6 +36,10 @@ try:
 except ImportError:
     HAS_TELETHON = False
 
+pool = None
+http_session = None
+bot_info = None
+
 # ═══════════════════════ НАСТРОЙКИ ═══════════════════════
 
 MAIN_TOKEN = "8325751391:AAFGB3KV34DiOp_Z0HXg5nErgxwOk6XR3C4"
@@ -334,7 +338,30 @@ class RateLimiter:
         self.check_times = {}
         self.warnings = {}
         self.temp_bans = {}
-
+        self.status = {}
+        self.cooldown_until = {}
+        self.last_used = {}
+        self.error_streak = {}
+        self.total_errors = {}
+        self.req_count = {}
+        self.window_start = {}
+        self.flood_times = {}
+        self.adaptive_delay = {}
+        self.active_users = {}
+        self.total_checks = 0
+        self.caught_by_botapi = 0
+        self.caught_by_recheck = 0
+        self.reconnect_count = 0
+        self.max_users_per_account = 3
+        self.BASE_DELAY = 2.0
+        self.MAX_DELAY = 20.0
+        self.BUDGET_PER_MIN = 12
+        self.MAX_ERROR_STREAK = 3
+        self.FLOOD_REST_TIME = 600
+        self.WARMUP_EXTRA_DELAY = 10.0
+    # ================
+        self._health_task = None
+        self._monitor_task = None
     def is_temp_banned(self, uid):
         return False  # 🟢 Никогда не забанен
 
@@ -1749,14 +1776,6 @@ def get_stats():
 def market_create_lot(seller_uid, mtype, title, description, price, is_nft=0, fragment_url=""):
     conn = sqlite3.connect(DB)
     c = conn.cursor()
-    if not state.get("listing_paid"):
-        kb = InlineKeyboardBuilder()
-        kb.button(text="💳 Оплатить с баланса", callback_data="market_pay_balance")
-        kb.button(text="👤 Написать админу", url=f"https://t.me/{PAY_CONTACT}")
-        kb.adjust(1)
-
-        await msg.answer("❌ Для размещения нужно оплатить 5⭐", reply_markup=kb.as_markup())
-    return
     c.execute("""
     INSERT INTO market (
         seller_uid, mtype, title, description, price,
@@ -1764,21 +1783,13 @@ def market_create_lot(seller_uid, mtype, title, description, price, is_nft=0, fr
     )
     VALUES (?,?,?,?,?, 'pending', ?, 1, ?, ?)
     """, (
-        seller_uid,
-        mtype,
-        title,
-        description,
-        price,
+        seller_uid, mtype, title, description, price,
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        is_nft,
-        fragment_url
+        is_nft, fragment_url
     ))
-
-    lot_id = c.lastrowid  # 🔥 ВОТ ЭТОГО НЕ ХВАТАЛО
-
+    lot_id = c.lastrowid
     conn.commit()
     conn.close()
-
     return lot_id
 
 def market_approve_lot(lot_id, admin_uid):
