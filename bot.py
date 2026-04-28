@@ -947,6 +947,45 @@ async def check_fragment(u):
         logger.info(f"[fragment] @{u} error: {e} → unavailable")
         return "unavailable"
 
+async def check_username_tme(u: str) -> str:
+    """
+    Проверка через GET https://t.me/username
+    Возвращает: 'free' | 'taken'
+    """
+    url = f"https://t.me/{u}"
+    try:
+        async with http_session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=8),
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                              "AppleWebKit/537.36 (KHTML, like Gecko) "
+                              "Chrome/120.0.0.0 Safari/537.36",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            allow_redirects=True,
+            ssl=False,
+        ) as resp:
+            if resp.status != 200:
+                # При любой ошибке — считаем занятым
+                return "taken"
+            
+            text = await resp.text()
+            
+            # Если есть tgme_page_title — ник занят
+            if 'tgme_page_title' in text:
+                return "taken"
+            
+            # Страница пустая/заглушка — ник свободен
+            return "free"
+            
+    except asyncio.TimeoutError:
+        logger.debug(f"[tme_check] timeout @{u}")
+        return "taken"  # При таймауте — считаем занятым
+    except Exception as e:
+        logger.debug(f"[tme_check] error @{u}: {e}")
+        return "taken"  # При любой ошибке — считаем занятым
+    
 async def is_username_free(u: str) -> bool:
     """
     Проверка свободен ли юзернейм.
