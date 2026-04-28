@@ -888,34 +888,6 @@ async def do_word_search(word, count, msg, uid):
         logger.error(f"Word search error: {e}")
         raise
 
-SEARCH_MODES = {
-    "default": {
-        "name": "Дефолт",
-        "emoji": "🎲",
-        "desc": "6 букв, доступен всем",
-        "_default_premium": False,
-        "premium": False,
-        "func": gen_default,
-        "validate": is_valid_username_default,
-        "disabled": False
-    },
-    "beautiful": {
-        "name": "Красивые",
-        "emoji": "💎",
-        "desc": "5 букв, стильные паттерны",
-        "_default_premium": True,
-        "premium": True,
-        "func": gen_beautiful,
-        "validate": is_valid_username_beautiful,
-        "disabled": False
-    },
-}
-
-INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
-                 "service","security","account","login","password","verify",
-                 "moderator","system","null","undefined","root","user","about","contact",
-                 "info","news","updates","support","status","api","dev","beta","alpha"]
-
 def is_valid_username_default(u):
     """Валидация для дефолт режима (6 букв)"""
     if len(u) != 6 or not u.isalpha():
@@ -952,6 +924,34 @@ def is_valid_username(u):
         return False
     return True
 
+SEARCH_MODES = {
+    "default": {
+        "name": "Дефолт",
+        "emoji": "🎲",
+        "desc": "6 букв, доступен всем",
+        "_default_premium": False,
+        "premium": False,
+        "func": gen_default,
+        "validate": is_valid_username_default,
+        "disabled": False
+    },
+    "beautiful": {
+        "name": "Красивые",
+        "emoji": "💎",
+        "desc": "5 букв, стильные паттерны",
+        "_default_premium": True,
+        "premium": True,
+        "func": gen_beautiful,
+        "validate": is_valid_username_beautiful,
+        "disabled": False
+    },
+}
+
+INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
+                 "service","security","account","login","password","verify",
+                 "moderator","system","null","undefined","root","user","about","contact",
+                 "info","news","updates","support","status","api","dev","beta","alpha"]
+    
 # ═══════════════════════ ЧЕКЕРЫ ═══════════════════════
 
 async def fast_check_username(u: str) -> str:
