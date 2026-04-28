@@ -245,7 +245,7 @@ DEFAULT_CONFIG = {
     "mode_meaningful_premium": True, "mode_telegram_premium": True,
     "prices": {}, "daily_report": True, "daily_report_hour": 23,
     "notify_purchases": True, "notify_milestones": True,
-    "checker_mode": "sessions", "cache_limit": 500,
+    "checker_mode": "sessions", "cache_limit": 5000,
 }
 
 def load_bot_config():
@@ -579,11 +579,11 @@ class AccountPool:
         except: self._err(i); return "error",i
 
     async def _botapi(self, u):
-        try:
-            await bot.get_chat(f"@{u}"); return "taken"
-        except TelegramBadRequest as e:
-            return "taken" if "not found" not in str(e).lower() else "not_found"
-        except: return "not_found"
+        """Проверка через t.me GET запрос"""
+        result = await check_username_tme(u)
+        if result == "free":
+            return "not_found"
+        return "taken"
 
     async def check(self, u, uid=None):
         if not self.has_sessions():
@@ -908,35 +908,17 @@ def is_valid_username(u):
 
 # ═══════════════════════ ЧЕКЕРЫ ═══════════════════════
 
-async def fast_check_username(u):
-    """Быстрая проверка без сессий: только занят/свободен"""
-    try:
-        r = await pool._botapi(u)
-        if r in ("free", "not_found"):
-            return "free"
-        if r == "taken":
-            return "taken"
-        return "error"
-    except Exception as e:
-        logger.warning(f"fast_check_username failed for @{u}: {e}")
-        return "error"
+async def fast_check_username(u: str) -> str:
+    """Быстрая проверка через t.me"""
+    return await check_username_tme(u)
 
-async def check_username(u):
-    try:
-        res = await bot.get_chat(f"@{u}")
-        # если чат найден → ник занят
-        return "taken"
-    except Exception as e:
-        err = str(e).lower()
-
-        if "username not found" in err or "chat not found" in err:
-            return "free"
-
-        if "flood" in err:
-            await asyncio.sleep(1)
-            return "unknown"
-
-        return "unknown"
+async def check_username(u: str) -> str:
+    """
+    Проверка через GET https://t.me/username
+    Возвращает: 'free' | 'taken' | 'unknown'
+    """
+    result = await check_username_tme(u)
+    return result
         
 async def check_fragment(u):
     now=time.time(); cached=_fragment_cache.get(u)
@@ -965,42 +947,31 @@ async def check_fragment(u):
         logger.info(f"[fragment] @{u} error: {e} → unavailable")
         return "unavailable"
 
-async def is_username_free(u):
+async def is_username_free(u: str) -> bool:
+    """
+    Проверка свободен ли юзернейм.
+    1. Базовая валидация
+    2. GET https://t.me/username → парсинг tgme_page_title
+    3. Двойная проверка для надёжности
+    """
+    # Базовая валидация
     if not is_valid_username(u):
         return False
 
-    # фильтр мусора
     if "__" in u or u.startswith("_") or u.endswith("_"):
         return False
 
-    # Telegram проверка
-    tg = "unknown"
-
-    for _ in range(3):
-        tg = await check_username(u)
-
-        if tg == "free":
-            break
-
-        if tg == "taken":
-            return False
-
-        await asyncio.sleep(0.3)
-
-    if tg != "free":
+    # Первая проверка
+    result = await check_username_tme(u)
+    if result == "taken":
         return False
 
-    # Fragment проверка
-    try:
-        fr = await check_fragment(u)
-        if fr != "unavailable":
-            return False
-    except:
-        return False
+    # Небольшая пауза перед повторной проверкой
+    await asyncio.sleep(0.5)
 
-    # 🔁 ПОВТОРНАЯ ПРОВЕРКА (анти-фейк)
-    tg2 = await check_username(u)
-    if tg2 != "free":
+    # Двойная проверка (анти-фейк)
+    result2 = await check_username_tme(u)
+    if result2 == "taken":
         return False
 
     return True
@@ -3155,6 +3126,84 @@ async def register_handlers(dp: Dispatcher):
             f"👤 Покупатель: {display}\n"
             f"👤 Продавец: <code>{lot['seller_uid']}</code>")
 
+
+    @dp.callback_query(F.data.startswith("paybal_listing_"))
+    async def cb_paybal_listing(cb: CallbackQuery):
+        uid = cb.from_user.id
+        await answer_cb(cb)
+    
+        lot_id = int(cb.data[15:])
+        lot = market_get_lot(lot_id)
+    
+        if not lot:
+            await answer_cb(cb, "❌ Лот не найден!", show_alert=True)
+            return
+    
+        if lot["seller_uid"] != uid:
+            await answer_cb(cb, "❌ Это не ваш лот!", show_alert=True)
+            return
+    
+        if lot.get("listing_paid"):
+            await answer_cb(cb, "✅ Уже оплачено!", show_alert=True)
+            return
+    
+        bal = get_balance(uid)
+        if bal < MARKET_LISTING_FEE:
+            await answer_cb(
+                cb,
+                f"❌ Нужно {MARKET_LISTING_FEE}⭐, у вас {bal:.1f}⭐",
+                show_alert=True
+            )
+            return
+    
+        # Списываем с баланса
+        set_balance(uid, bal - MARKET_LISTING_FEE)
+    
+        # Помечаем лот как оплаченный
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
+        c.execute("UPDATE market SET listing_paid=1 WHERE id=?", (lot_id,))
+        conn.commit()
+        conn.close()
+    
+        log_action(uid, "listing_paid_bal", f"lot={lot_id} -{MARKET_LISTING_FEE}⭐")
+        display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
+    
+        kb = InlineKeyboardBuilder()
+        kb.button(text="📦 Мои лоты", callback_data="market_my")
+        kb.button(text="🏪 Маркет", callback_data="cmd_market")
+        kb.adjust(1)
+    
+        await edit_msg(cb.message,
+            f"✅ <b>Размещение оплачено!</b>\n\n"
+            f"📦 Лот #{lot_id}\n"
+            f"💰 Списано: <code>{MARKET_LISTING_FEE}⭐</code>\n"
+            f"💰 Остаток: <code>{bal - MARKET_LISTING_FEE:.1f}⭐</code>\n\n"
+            f"⏳ Ожидайте проверки администратором",
+            kb.as_markup()
+        )
+    
+        # Уведомление админу
+        lot = market_get_lot(lot_id)
+        if lot:
+            akb = InlineKeyboardBuilder()
+            akb.button(text="✅ Одобрить", callback_data=f"mmod_ok_{lot_id}")
+            akb.button(text="❌ Отклонить", callback_data=f"mmod_no_{lot_id}")
+            akb.adjust(2)
+        
+            nft = "💎 NFT " if lot.get("is_nft") else ""
+        
+            await notify_admins(
+                f"📦 <b>НОВЫЙ ЛОТ (оплата с баланса)</b>\n\n"
+                f"{nft}#{lot_id}\n"
+                f"📌 {lot['title']}\n"
+                f"📝 {lot.get('description', '')}\n"
+                f"💰 {lot['price']}⭐\n"
+                f"👤 {display}\n"
+                f"💳 Размещение: {MARKET_LISTING_FEE}⭐ с баланса ✅",
+                kb=akb.as_markup()
+            )
+            
     @dp.callback_query(F.data.startswith("paystars_lot_"))
     async def cb_paystars_lot(cb: CallbackQuery):
         uid = cb.from_user.id; await answer_cb(cb)
@@ -4627,19 +4676,42 @@ async def register_handlers(dp: Dispatcher):
             user_states[uid]={"action":"msell_price","mtype":state["mtype"],"title":state["title"],"desc":desc}
             await msg.answer(f"💰 <b>Цена (⭐):</b>\n{MARKET_MIN_PRICE} до {MARKET_MAX_PRICE}", parse_mode="HTML"); return
 
-        if action=="msell_price":
-            try: price=int(msg.text.strip()); assert MARKET_MIN_PRICE<=price<=MARKET_MAX_PRICE
-            except: await msg.answer(f"❌ {MARKET_MIN_PRICE}-{MARKET_MAX_PRICE}"); return
-            user_states.pop(uid,None)
-            lot_id=market_create_lot(uid,state["mtype"],state["title"],state["desc"],price)
-            commission=int(price*MARKET_COMMISSION)
-            log_action(uid,"market_create",str(lot_id))
-            await bot.send_invoice(uid,
-                title=f"📦 Размещение лота #{lot_id}",
-                description=f"{state['title']} — {price}⭐ (получите {price-commission}⭐)",
-                payload=f"listing_{lot_id}_{uid}",
-                provider_token="",currency="XTR",
-                prices=[LabeledPrice(label="Размещение", amount=MARKET_LISTING_FEE)]); return
+    if action=="msell_price":
+        try: price=int(msg.text.strip()); assert MARKET_MIN_PRICE<=price<=MARKET_MAX_PRICE
+        except: await msg.answer(f"❌ {MARKET_MIN_PRICE}-{MARKET_MAX_PRICE}"); return
+        user_states.pop(uid,None)
+        lot_id = market_create_lot(uid, state["mtype"], state["title"], state["desc"], price)
+        commission = int(price * MARKET_COMMISSION)
+        log_action(uid, "market_create", str(lot_id))
+    
+        bal = get_balance(uid)
+        rub = int(MARKET_LISTING_FEE * STAR_TO_RUB)
+    
+        kb = InlineKeyboardBuilder()
+        if bal >= MARKET_LISTING_FEE:
+            kb.button(
+                text=f"💰 С баланса ({MARKET_LISTING_FEE}⭐)",
+                callback_data=f"paybal_listing_{lot_id}"
+            )
+        kb.button(
+            text=f"✍️ Написать @{PAY_CONTACT}",
+            url=f"https://t.me/{PAY_CONTACT}"
+        )
+        kb.button(text="❌ Отмена", callback_data="market_sell")
+        kb.adjust(1)
+    
+        await msg.answer(
+            f"📦 <b>Лот #{lot_id} создан!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🏷 {state['title']}\n"
+            f"💰 Цена: <code>{price}⭐</code>\n"
+            f"📊 Вы получите: <code>{price - commission}⭐</code>\n\n"
+            f"<b>Оплата размещения: {MARKET_LISTING_FEE}⭐ ({rub}₽)</b>\n\n"
+            f"Выберите способ оплаты:",
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML"
+        )
+        return
 
         if action=="market_enter_promo":
             user_states.pop(uid,None)
@@ -6244,8 +6316,8 @@ async def daily_report_loop():
 
 async def free_cache_warmer_loop():
     targets = {
-        "default": 50,
-        "beautiful": 40,
+        "default": 5000,
+        "beautiful": 4000,
     }
     await asyncio.sleep(5)
     while True:
@@ -6262,7 +6334,7 @@ async def free_cache_warmer_loop():
                 gen_func = mode["func"]
                 batch_found = []
                 checked = set()
-                for _ in range(300):
+                for _ in range(2000):
                     if current + len(batch_found) >= target:
                         break
                     u = None
