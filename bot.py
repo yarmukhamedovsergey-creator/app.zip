@@ -1066,7 +1066,7 @@ async def is_username_free(u: str) -> bool:
     Проверка свободен ли юзернейм
     1. Базовая валидация
     2. Проверка t.me
-    3. Проверка Fragment — ТОЛЬКО если продан или на аукционе
+    3. Проверка Fragment — отсеиваем ВСЁ кроме unavailable
     """
     if not is_valid_username(u):
         return False
@@ -1086,17 +1086,17 @@ async def is_username_free(u: str) -> bool:
     if result2 == "taken":
         return False
 
-    # Проверка Fragment — отсеиваем ТОЛЬКО проданные и аукцион
+    # Проверка Fragment — отсеиваем ВСЁ кроме unavailable
     try:
         fr = await check_fragment(u)
-        # Если продан или на аукционе — занят
-        if fr in ("sold", "in auction"):
-            logger.info(f"[check] @{u} Fragment: {fr} → taken")
+        if fr != "unavailable":
+            logger.info(f"[check] @{u} Fragment: {fr} → skip (есть на Fragment)")
             return False
-        # available, reserved, unavailable — считаем свободным
+        # Только unavailable проходит
     except Exception as e:
         logger.debug(f"[check] Fragment error @{u}: {e}")
-        # При ошибке Fragment не блокируем
+        # При ошибке Fragment считаем занятым (безопасно)
+        return False
 
     return True
     
