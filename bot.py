@@ -6555,6 +6555,10 @@ async def free_cache_warmer_loop():
 
                     await asyncio.sleep(0.05)
 
+        except Exception as e:
+            logger.error(f"Cache warmer: {e}")
+        await asyncio.sleep(5)
+
 # ═══════════════════════ SYSTEMD ═══════════════════════
 
 def setup_systemd():
