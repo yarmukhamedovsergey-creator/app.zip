@@ -4758,39 +4758,39 @@ async def register_handlers(dp: Dispatcher):
             user_states[uid]={"action":"msell_price","mtype":state["mtype"],"title":state["title"],"desc":desc}
             await msg.answer(f"💰 <b>Цена (⭐):</b>\n{MARKET_MIN_PRICE} до {MARKET_MAX_PRICE}", parse_mode="HTML"); return
 
-    if action=="msell_price":
-        try: price=int(msg.text.strip()); assert MARKET_MIN_PRICE<=price<=MARKET_MAX_PRICE
-        except: await msg.answer(f"❌ {MARKET_MIN_PRICE}-{MARKET_MAX_PRICE}"); return
-        user_states.pop(uid,None)
-        lot_id = market_create_lot(uid, state["mtype"], state["title"], state["desc"], price)
-        commission = int(price * MARKET_COMMISSION)
-        log_action(uid, "market_create", str(lot_id))
-        bal = get_balance(uid)
-        rub = int(MARKET_LISTING_FEE * STAR_TO_RUB)
-        kb = InlineKeyboardBuilder()
-        if bal >= MARKET_LISTING_FEE:
+        if action=="msell_price":
+            try: price=int(msg.text.strip()); assert MARKET_MIN_PRICE<=price<=MARKET_MAX_PRICE
+            except: await msg.answer(f"❌ {MARKET_MIN_PRICE}-{MARKET_MAX_PRICE}"); return
+            user_states.pop(uid,None)
+            lot_id = market_create_lot(uid, state["mtype"], state["title"], state["desc"], price)
+            commission = int(price * MARKET_COMMISSION)
+            log_action(uid, "market_create", str(lot_id))
+            bal = get_balance(uid)
+            rub = int(MARKET_LISTING_FEE * STAR_TO_RUB)
+            kb = InlineKeyboardBuilder()
+            if bal >= MARKET_LISTING_FEE:
+                kb.button(
+                    text=f"💰 С баланса ({MARKET_LISTING_FEE}⭐)",
+                    callback_data=f"paybal_listing_{lot_id}"
+                )
             kb.button(
-                text=f"💰 С баланса ({MARKET_LISTING_FEE}⭐)",
-                callback_data=f"paybal_listing_{lot_id}"
+                text=f"✍️ Написать @{PAY_CONTACT}",
+                url=f"https://t.me/{PAY_CONTACT}"
             )
-        kb.button(
-            text=f"✍️ Написать @{PAY_CONTACT}",
-            url=f"https://t.me/{PAY_CONTACT}"
-        )
-        kb.button(text="❌ Отмена", callback_data="market_sell")
-        kb.adjust(1)
-        await msg.answer(
-            f"📦 <b>Лот #{lot_id} создан!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🏷 {state['title']}\n"
-            f"💰 Цена: <code>{price}⭐</code>\n"
-            f"📊 Вы получите: <code>{price - commission}⭐</code>\n\n"
-            f"<b>Оплата размещения: {MARKET_LISTING_FEE}⭐ ({rub}₽)</b>\n\n"
-            f"Выберите способ оплаты:",
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML"
-        )
-        return
+            kb.button(text="❌ Отмена", callback_data="market_sell")
+            kb.adjust(1)
+            await msg.answer(
+                f"📦 <b>Лот #{lot_id} создан!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"🏷 {state['title']}\n"
+                f"💰 Цена: <code>{price}⭐</code>\n"
+                f"📊 Вы получите: <code>{price - commission}⭐</code>\n\n"
+                f"<b>Оплата размещения: {MARKET_LISTING_FEE}⭐ ({rub}₽)</b>\n\n"
+                f"Выберите способ оплаты:",
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML"
+            )
+            return
 
         if action=="market_enter_promo":
             user_states.pop(uid,None)
