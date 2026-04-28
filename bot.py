@@ -663,8 +663,8 @@ def _pronounceable(n):
     return "".join(w)
 
 def gen_default():
-    """5-буквенные, только буквы"""
-    return _pronounceable(5)
+    """6-буквенные, только буквы"""
+    return _pronounceable(6)
 
 def gen_dictionary():
     """5-буквенные слова из словаря"""
@@ -889,8 +889,26 @@ async def do_word_search(word, count, msg, uid):
         raise
 
 SEARCH_MODES = {
-    "default":   {"name":"Дефолт",   "emoji":"🎲","desc":"5 букв, доступен всем", "_default_premium":False,"premium":False,"func":gen_default,   "disabled":False},
-    "beautiful": {"name":"Красивые", "emoji":"💎","desc":"Стильные паттерны",     "_default_premium":True, "premium":True, "func":gen_beautiful, "disabled":False},
+    "default": {
+        "name": "Дефолт",
+        "emoji": "🎲",
+        "desc": "6 букв, доступен всем",
+        "_default_premium": False,
+        "premium": False,
+        "func": gen_default,
+        "validate": is_valid_username_default,
+        "disabled": False
+    },
+    "beautiful": {
+        "name": "Красивые",
+        "emoji": "💎",
+        "desc": "5 букв, стильные паттерны",
+        "_default_premium": True,
+        "premium": True,
+        "func": gen_beautiful,
+        "validate": is_valid_username_beautiful,
+        "disabled": False
+    },
 }
 
 INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
@@ -898,12 +916,40 @@ INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
                  "moderator","system","null","undefined","root","user","about","contact",
                  "info","news","updates","support","status","api","dev","beta","alpha"]
 
-def is_valid_username(u):
-    if len(u) != 5 or not u.isalpha(): return False
-    ul=u.lower()
+def is_valid_username_default(u):
+    """Валидация для дефолт режима (6 букв)"""
+    if len(u) != 6 or not u.isalpha():
+        return False
+    ul = u.lower()
     for w in INVALID_WORDS:
-        if w in ul: return False
-    if is_blacklisted(u): return False
+        if w in ul:
+            return False
+    if is_blacklisted(u):
+        return False
+    return True
+
+def is_valid_username_beautiful(u):
+    """Валидация для красивых (5 букв)"""
+    if len(u) != 5 or not u.isalpha():
+        return False
+    ul = u.lower()
+    for w in INVALID_WORDS:
+        if w in ul:
+            return False
+    if is_blacklisted(u):
+        return False
+    return True
+
+def is_valid_username(u):
+    """Общая валидация (5 или 6 букв)"""
+    if len(u) not in [5, 6] or not u.isalpha():
+        return False
+    ul = u.lower()
+    for w in INVALID_WORDS:
+        if w in ul:
+            return False
+    if is_blacklisted(u):
+        return False
     return True
 
 # ═══════════════════════ ЧЕКЕРЫ ═══════════════════════
@@ -987,13 +1033,6 @@ async def check_username_tme(u: str) -> str:
         return "taken"  # При любой ошибке — считаем занятым
     
 async def is_username_free(u: str) -> bool:
-    """
-    Проверка свободен ли юзернейм.
-    1. Базовая валидация
-    2. GET https://t.me/username → парсинг tgme_page_title
-    3. Двойная проверка для надёжности
-    """
-    # Базовая валидация
     if not is_valid_username(u):
         return False
 
@@ -1005,16 +1044,15 @@ async def is_username_free(u: str) -> bool:
     if result == "taken":
         return False
 
-    # Небольшая пауза перед повторной проверкой
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(0.3)
 
-    # Двойная проверка (анти-фейк)
+    # Двойная проверка анти-фейк
     result2 = await check_username_tme(u)
     if result2 == "taken":
         return False
 
     return True
-
+    
 async def get_rechecked_cached_free(mode, count):
     cached = get_cached_free(mode, max(count * 3, count))
     found = []
@@ -1043,7 +1081,7 @@ async def check_subscribed(uid):
     return bad
 
 def validate_username(u):
-    return bool(u) and len(u)==5 and re.match(r'^[a-zA-Z]{5}$',u)
+    return bool(u) and len(u) in [5, 6] and re.match(r'^[a-zA-Z]{5,6}$', u)
 
 def evaluate_username(u):
     score=0; factors=[]; ul=u.lower(); ln=len(ul)
@@ -1067,12 +1105,15 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     start = time.time()
     last_update = 0
 
-    # --- Шаг 1: берём из готового кэша БД и быстро перепроверяем через t.me ---
+    # Получаем валидатор для режима
+    validate_func = SEARCH_MODES.get(mode_key, {}).get("validate", is_valid_username)
+
+    # Шаг 1: берём из кэша
     cached = get_cached_free(mode_key, count * 4)
     for u in cached:
         if len(found) >= count:
             break
-        tg = await check_username(u)
+        tg = await check_username_tme(u)
         if tg == "free":
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
@@ -1084,28 +1125,30 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     if len(found) >= count:
         return found[:count], {"attempts": 0, "elapsed": int(time.time() - start)}
 
-    # --- Шаг 2: если кэша мало — генерим на лету ---
+    # Шаг 2: генерим на лету
     attempts = 0
     checked = {item["username"] for item in found}
+
     while len(found) < count and attempts < 500:
         u = None
         for _ in range(20):
             c = gen_func()
-            if len(c) >= 5 and c.isalpha() and c.lower() not in checked and is_valid_username(c):
+            if c.isalpha() and c.lower() not in checked and validate_func(c):
                 u = c.lower()
                 break
+
         if not u:
             attempts += 1
             continue
+
         checked.add(u)
-        if "__" in u or u.startswith("_") or u.endswith("_"):
-            continue
         attempts += 1
 
         if await is_username_free(u):
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
             logger.info(f"[search] live ✅ @{u}")
+
         await asyncio.sleep(0.05)
 
         now = time.time()
@@ -4715,42 +4758,39 @@ async def register_handlers(dp: Dispatcher):
             user_states[uid]={"action":"msell_price","mtype":state["mtype"],"title":state["title"],"desc":desc}
             await msg.answer(f"💰 <b>Цена (⭐):</b>\n{MARKET_MIN_PRICE} до {MARKET_MAX_PRICE}", parse_mode="HTML"); return
 
-        if action=="msell_price":
-            try: price=int(msg.text.strip()); assert MARKET_MIN_PRICE<=price<=MARKET_MAX_PRICE
-            except: await msg.answer(f"❌ {MARKET_MIN_PRICE}-{MARKET_MAX_PRICE}"); return
-            user_states.pop(uid,None)
-            lot_id = market_create_lot(uid, state["mtype"], state["title"], state["desc"], price)
-            commission = int(price * MARKET_COMMISSION)
-            log_action(uid, "market_create", str(lot_id))
-    
-            bal = get_balance(uid)
-            rub = int(MARKET_LISTING_FEE * STAR_TO_RUB)
-    
-            kb = InlineKeyboardBuilder()
-            if bal >= MARKET_LISTING_FEE:
-                kb.button(
-                    text=f"💰 С баланса ({MARKET_LISTING_FEE}⭐)",
-                    callback_data=f"paybal_listing_{lot_id}"
-                )
+    if action=="msell_price":
+        try: price=int(msg.text.strip()); assert MARKET_MIN_PRICE<=price<=MARKET_MAX_PRICE
+        except: await msg.answer(f"❌ {MARKET_MIN_PRICE}-{MARKET_MAX_PRICE}"); return
+        user_states.pop(uid,None)
+        lot_id = market_create_lot(uid, state["mtype"], state["title"], state["desc"], price)
+        commission = int(price * MARKET_COMMISSION)
+        log_action(uid, "market_create", str(lot_id))
+        bal = get_balance(uid)
+        rub = int(MARKET_LISTING_FEE * STAR_TO_RUB)
+        kb = InlineKeyboardBuilder()
+        if bal >= MARKET_LISTING_FEE:
             kb.button(
-                text=f"✍️ Написать @{PAY_CONTACT}",
-                url=f"https://t.me/{PAY_CONTACT}"
+                text=f"💰 С баланса ({MARKET_LISTING_FEE}⭐)",
+                callback_data=f"paybal_listing_{lot_id}"
             )
-            kb.button(text="❌ Отмена", callback_data="market_sell")
-            kb.adjust(1)
-    
-            await msg.answer(
-                f"📦 <b>Лот #{lot_id} создан!</b>\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"🏷 {state['title']}\n"
-                f"💰 Цена: <code>{price}⭐</code>\n"
-                f"📊 Вы получите: <code>{price - commission}⭐</code>\n\n"
-                f"<b>Оплата размещения: {MARKET_LISTING_FEE}⭐ ({rub}₽)</b>\n\n"
-                f"Выберите способ оплаты:",
-                reply_markup=kb.as_markup(),
-                parse_mode="HTML"
-            )
-            return
+        kb.button(
+            text=f"✍️ Написать @{PAY_CONTACT}",
+            url=f"https://t.me/{PAY_CONTACT}"
+        )
+        kb.button(text="❌ Отмена", callback_data="market_sell")
+        kb.adjust(1)
+        await msg.answer(
+            f"📦 <b>Лот #{lot_id} создан!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🏷 {state['title']}\n"
+            f"💰 Цена: <code>{price}⭐</code>\n"
+            f"📊 Вы получите: <code>{price - commission}⭐</code>\n\n"
+            f"<b>Оплата размещения: {MARKET_LISTING_FEE}⭐ ({rub}₽)</b>\n\n"
+            f"Выберите способ оплаты:",
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML"
+        )
+        return
 
         if action=="market_enter_promo":
             user_states.pop(uid,None)
@@ -6355,8 +6395,8 @@ async def daily_report_loop():
 
 async def free_cache_warmer_loop():
     targets = {
-        "default": 5000,
-        "beautiful": 4000,
+        "default": 500,
+        "beautiful": 400,
     }
     await asyncio.sleep(5)
     while True:
@@ -6371,35 +6411,40 @@ async def free_cache_warmer_loop():
                     continue
 
                 gen_func = mode["func"]
+                validate_func = mode.get("validate", is_valid_username)
                 batch_found = []
                 checked = set()
-                for _ in range(2000):
+
+                for _ in range(3000):
                     if current + len(batch_found) >= target:
                         break
+
                     u = None
-                    for __ in range(20):
+                    for __ in range(30):
                         c = gen_func()
-                        if len(c) >= 5 and c.isalpha() and c.lower() not in checked and is_valid_username(c):
+                        if c.isalpha() and c.lower() not in checked and validate_func(c):
                             u = c.lower()
                             break
+
                     if not u:
                         continue
+
                     checked.add(u)
-                    if "__" in u or u.startswith("_") or u.endswith("_"):
-                        continue
+
                     try:
                         if await is_username_free(u):
                             add_free_cache([u], mode_key)
                             batch_found.append(u)
-                            logger.info(f"[warmer] {mode_key}: ✅ @{u} (total {get_free_cache_count(mode_key)})")
+                            logger.info(f"[warmer] {mode_key}: ✅ @{u} ({len(u)} букв, total {get_free_cache_count(mode_key)})")
                     except Exception as e:
                         logger.debug(f"[warmer] check error @{u}: {e}")
-                    await asyncio.sleep(0.1)
+
+                    await asyncio.sleep(0.05)
+
                 await asyncio.sleep(1)
         except Exception as e:
             logger.error(f"Cache warmer: {e}")
-        await asyncio.sleep(10)
-
+        await asyncio.sleep(5)
 
 # ═══════════════════════ SYSTEMD ═══════════════════════
 
