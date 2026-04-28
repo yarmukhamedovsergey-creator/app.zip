@@ -214,7 +214,19 @@ def format_results(found, stats, title):
     for i, item in enumerate(found, 1):
         username = item.get("username", "")
         fragment = item.get("fragment", "unavailable")
-        frag_text = "Fragment" if fragment not in ("", "unavailable") else "Проверить Fragment"
+    
+    # Красивый статус
+        if fragment == "available":
+            frag_text = "💎 Доступен"
+        elif fragment == "sold":
+            frag_text = "❌ Продан"
+        elif fragment == "in auction":
+            frag_text = "🔨 Аукцион"
+        elif fragment == "reserved":
+            frag_text = "⏳ Резерв"
+        else:
+            frag_text = "—"
+    
         lines.extend([
             f"{i}. <code>@{username}</code>",
             f"📱 <a href='https://t.me/{username}'>Telegram</a> · 💎 <a href='https://fragment.com/username/{username}'>{frag_text}</a>",
@@ -967,28 +979,45 @@ async def check_username(u: str) -> str:
     return result
         
 async def check_fragment(u):
-    now=time.time(); cached=_fragment_cache.get(u)
-    if cached and now-cached[1]<_fragment_cache_ttl: return cached[0]
+    now = time.time()
+    cached = _fragment_cache.get(u)
+    if cached and now - cached[1] < _fragment_cache_ttl:
+        return cached[0]
+    
     try:
-        async with http_session.get(f"https://fragment.com/username/{u.lower()}",
+        async with http_session.get(
+            f"https://fragment.com/username/{u.lower()}",
             timeout=aiohttp.ClientTimeout(total=8),
-            headers={"User-Agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}) as resp:
-            if resp.status!=200:
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        ) as resp:
+            if resp.status != 200:
                 logger.info(f"[fragment] @{u} HTTP {resp.status} → unavailable")
                 return "unavailable"
-            text=await resp.text()
+            
+            text = await resp.text()
+            
+            # Ищем статус
             sm = re.search(r'class="tm-section-header-status[^"]*"[^>]*>([^<]+)<', text)
             if sm:
                 st = sm.group(1).strip().lower()
-                if "sold" in st: r="sold"
-                elif "auction" in st: r="in auction"
-                elif "available" in st: r="available"
-                elif "reserved" in st: r="reserved"
-                else: r="unavailable"
+                
+                if "sold" in st or "owner" in st:
+                    r = "sold"
+                elif "auction" in st or "bidding" in st:
+                    r = "in auction"
+                elif "available" in st or "buy now" in st:
+                    r = "available"
+                elif "reserved" in st:
+                    r = "reserved"
+                else:
+                    r = "unavailable"
             else:
-                r="unavailable"
+                r = "unavailable"
+            
             logger.info(f"[fragment] @{u} → {r}")
-            _fragment_cache[u]=(r,now); return r
+            _fragment_cache[u] = (r, now)
+            return r
+            
     except Exception as e:
         logger.info(f"[fragment] @{u} error: {e} → unavailable")
         return "unavailable"
@@ -1033,23 +1062,41 @@ async def check_username_tme(u: str) -> str:
         return "taken"  # При любой ошибке — считаем занятым
     
 async def is_username_free(u: str) -> bool:
+    """
+    Проверка свободен ли юзернейм
+    1. Базовая валидация
+    2. Проверка t.me
+    3. Проверка Fragment — ТОЛЬКО если продан или на аукционе
+    """
     if not is_valid_username(u):
         return False
 
     if "__" in u or u.startswith("_") or u.endswith("_"):
         return False
 
-    # Первая проверка
+    # Первая проверка t.me
     result = await check_username_tme(u)
     if result == "taken":
         return False
 
     await asyncio.sleep(0.3)
 
-    # Двойная проверка анти-фейк
+    # Двойная проверка t.me
     result2 = await check_username_tme(u)
     if result2 == "taken":
         return False
+
+    # Проверка Fragment — отсеиваем ТОЛЬКО проданные и аукцион
+    try:
+        fr = await check_fragment(u)
+        # Если продан или на аукционе — занят
+        if fr in ("sold", "in auction"):
+            logger.info(f"[check] @{u} Fragment: {fr} → taken")
+            return False
+        # available, reserved, unavailable — считаем свободным
+    except Exception as e:
+        logger.debug(f"[check] Fragment error @{u}: {e}")
+        # При ошибке Fragment не блокируем
 
     return True
     
@@ -1144,10 +1191,15 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         checked.add(u)
         attempts += 1
 
-        if await is_username_free(u):
-            found.append({"username": u, "fragment": "unavailable"})
-            save_history(uid, u, mode_name, len(u))
-            logger.info(f"[search] live ✅ @{u}")
+    if await is_username_free(u):
+        fr_status = "unavailable"
+        try:
+            fr_status = await check_fragment(u)
+        except:
+            pass
+        found.append({"username": u, "fragment": fr_status})
+        save_history(uid, u, mode_name, len(u))
+        logger.info(f"[search] live ✅ @{u} (Fragment: {fr_status})")
 
         await asyncio.sleep(0.05)
 
@@ -1178,7 +1230,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 def init_db():
     conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS free_cache (
-        username TEXT PRIMARY KEY, checked_at TEXT, mode TEXT
+        username TEXT PRIMARY KEY, checked_at TEXT, mode TEXT, length INTEGER DEFAULT 5
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS users (
         uid INTEGER PRIMARY KEY, uname TEXT DEFAULT '', joined TEXT DEFAULT '',
@@ -1232,7 +1284,11 @@ def init_db():
         except: pass
     try: c.execute("ALTER TABLE promotions ADD COLUMN button_text TEXT DEFAULT ''")
     except: pass
-
+    # Миграция: добавить длину если нет
+    try:
+        c.execute("ALTER TABLE free_cache ADD COLUMN length INTEGER DEFAULT 5")
+    except:
+        pass
     # Фикс: пересоздаём таблицу market с правильной структурой
     try:
         c.execute("SELECT mtype FROM market LIMIT 1")
@@ -1329,13 +1385,27 @@ def init_db():
     conn.commit(); conn.close()
 
 def get_cached_free(mode, count):
-    conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("SELECT username FROM free_cache WHERE mode=? ORDER BY RANDOM() LIMIT ?", (mode, count))
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    
+    # Определяем нужную длину для режима
+    target_length = 6 if mode == "default" else 5  # ← НОВОЕ
+    
+    # Берём только юзы нужной длины
+    c.execute(
+        "SELECT username FROM free_cache WHERE mode=? AND length=? ORDER BY RANDOM() LIMIT ?",
+        (mode, target_length, count)  # ← НОВОЕ
+    )
     rows = c.fetchall()
     usernames = [r[0] for r in rows]
+    
     if usernames:
-        c.execute("DELETE FROM free_cache WHERE username IN ({})".format(",".join("?" for _ in usernames)), usernames)
+        c.execute(
+            "DELETE FROM free_cache WHERE username IN ({})".format(",".join("?" for _ in usernames)),
+            usernames
+        )
         conn.commit()
+    
     conn.close()
     return usernames
 
@@ -1344,24 +1414,23 @@ def add_free_cache(usernames, mode):
         return
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     config = load_bot_config()
-    limit = config.get("cache_limit", 500)
+    limit = config.get("cache_limit", 5000)
 
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
     for u in usernames:
-        # фильтр мусора
         if "__" in u or u.startswith("_") or u.endswith("_"):
             continue
 
+        length = len(u)  # ← НОВОЕ
+        
         c.execute(
-            "INSERT OR IGNORE INTO free_cache (username, checked_at, mode) VALUES (?,?,?)",
-            (u, now, mode)
+            "INSERT OR IGNORE INTO free_cache (username, checked_at, mode, length) VALUES (?,?,?,?)",
+            (u, now, mode, length)  # ← НОВОЕ
         )
 
-    # 🔥 ОГРАНИЧЕНИЕ РАЗМЕРА КЭША
     c.execute("""
         DELETE FROM free_cache
         WHERE username NOT IN (
@@ -1375,8 +1444,15 @@ def add_free_cache(usernames, mode):
     conn.close()
 
 def get_free_cache_count(mode):
-    conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM free_cache WHERE mode=?", (mode,))
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+    
+    target_length = 6 if mode == "default" else 5  # ← НОВОЕ
+    
+    c.execute(
+        "SELECT COUNT(*) FROM free_cache WHERE mode=? AND length=?",
+        (mode, target_length)  # ← НОВОЕ
+    )
     count = c.fetchone()[0]
     conn.close()
     return count
@@ -5210,7 +5286,7 @@ async def register_handlers(dp: Dispatcher):
 
 
     # ═══════════════════════ АДМИНКА ═══════════════════════
-
+    
     @dp.callback_query(F.data == "cmd_admin")
     async def cb_admin(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
@@ -5244,6 +5320,7 @@ async def register_handlers(dp: Dispatcher):
         kb.button(text="💎 Подписки", callback_data="adm_subs")
         kb.button(text="🏪 Маркет", callback_data="adm_market")
         kb.button(text="🔑 Сессии", callback_data="adm_sessions")
+        kb.button(text="🗑 Очистить кэш", callback_data="clear_cache")
         kb.button(text="📢 Рассылка", callback_data="adm_broadcast")
         kb.button(text="⚙️ Настройки", callback_data="a_control")
         kb.button(text="🖥 Сервер", callback_data="adm_server")
@@ -5402,6 +5479,31 @@ async def register_handlers(dp: Dispatcher):
             BufferedInputFile(content.encode(), filename=f"sessions_{datetime.now().strftime('%Y%m%d_%H%M')}.json"),
             caption=f"💾 {len(saved)} аккаунтов")
 
+    @dp.callback_query(F.data == "clear_cache")
+    async def cb_clear_cache(cb: CallbackQuery):
+        if cb.from_user.id not in ADMIN_IDS:
+            return
+        await answer_cb(cb)
+    
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
+    
+    # Удаляем все юзы неправильной длины
+        c.execute("DELETE FROM free_cache WHERE mode='default' AND length != 6")
+        deleted_default = c.rowcount
+    
+        c.execute("DELETE FROM free_cache WHERE mode='beautiful' AND length != 5")
+        deleted_beautiful = c.rowcount
+    
+        conn.commit()
+        conn.close()
+        
+        await cb.message.answer(
+            f"🗑 Очищено:\n"
+            f"default: {deleted_default}\n"
+            f"beautiful: {deleted_beautiful}"
+        )
+    
     # === РАССЫЛКА ===
     @dp.callback_query(F.data == "adm_broadcast")
     async def cb_adm_broadcast(cb: CallbackQuery):
@@ -6433,18 +6535,25 @@ async def free_cache_warmer_loop():
 
                     try:
                         if await is_username_free(u):
+                            # Проверяем длину юзернейма для режима
+                            expected_length = 6 if mode_key == "default" else 5
+                            if len(u) != expected_length:
+                                logger.warning(f"[warmer] {mode_key}: skip @{u} - wrong length {len(u)} != {expected_length}")
+                                continue
+
                             add_free_cache([u], mode_key)
                             batch_found.append(u)
-                            logger.info(f"[warmer] {mode_key}: ✅ @{u} ({len(u)} букв, total {get_free_cache_count(mode_key)})")
+
+                            # Логируем с указанием статуса Fragment
+                            try:
+                                fr = await check_fragment(u)
+                                logger.info(f"[warmer] {mode_key}: ✅ @{u} ({len(u)} букв, Fragment: {fr}, total {get_free_cache_count(mode_key)})")
+                            except:
+                                logger.info(f"[warmer] {mode_key}: ✅ @{u} ({len(u)} букв, total {get_free_cache_count(mode_key)})")
                     except Exception as e:
                         logger.debug(f"[warmer] check error @{u}: {e}")
 
                     await asyncio.sleep(0.05)
-
-                await asyncio.sleep(1)
-        except Exception as e:
-            logger.error(f"Cache warmer: {e}")
-        await asyncio.sleep(5)
 
 # ═══════════════════════ SYSTEMD ═══════════════════════
 
