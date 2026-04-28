@@ -923,32 +923,21 @@ async def fast_check_username(u):
 
 async def check_username(u):
     try:
-        async with http_session.get(
-            f"https://t.me/{u}",
-            timeout=aiohttp.ClientTimeout(total=8),
-            headers={"User-Agent": "Mozilla/5.0"}
-        ) as resp:
+        res = await bot.get_chat(f"@{u}")
+        # если чат найден → ник занят
+        return "taken"
+    except Exception as e:
+        err = str(e).lower()
 
-            if resp.status != 200:
-                return "taken"
-
-            html = await resp.text()
-            hl = html.lower()
-
-            if "tgme_page_title" in html:
-                return "taken"
-
-            if "tgme_page_extra" in html:
-                return "taken"
-
-            if "tg:resolve?domain=" in hl:
-                return "taken"
-
+        if "username not found" in err or "chat not found" in err:
             return "free"
 
-    except:
-        return "unknown"
+        if "flood" in err:
+            await asyncio.sleep(1)
+            return "unknown"
 
+        return "unknown"
+        
 async def check_fragment(u):
     now=time.time(); cached=_fragment_cache.get(u)
     if cached and now-cached[1]<_fragment_cache_ttl: return cached[0]
@@ -980,9 +969,14 @@ async def is_username_free(u):
     if not is_valid_username(u):
         return False
 
+    # фильтр мусора
+    if "__" in u or u.startswith("_") or u.endswith("_"):
+        return False
+
+    # Telegram проверка
     tg = "unknown"
 
-    for _ in range(2):
+    for _ in range(3):
         tg = await check_username(u)
 
         if tg == "free":
@@ -991,14 +985,22 @@ async def is_username_free(u):
         if tg == "taken":
             return False
 
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.3)
 
     if tg != "free":
         return False
 
-    fr = await check_fragment(u)
+    # Fragment проверка
+    try:
+        fr = await check_fragment(u)
+        if fr != "unavailable":
+            return False
+    except:
+        return False
 
-    if fr != "unavailable":
+    # 🔁 ПОВТОРНАЯ ПРОВЕРКА (анти-фейк)
+    tg2 = await check_username(u)
+    if tg2 != "free":
         return False
 
     return True
@@ -1297,6 +1299,10 @@ def add_free_cache(usernames, mode):
     c = conn.cursor()
 
     for u in usernames:
+        # фильтр мусора
+        if "__" in u or u.startswith("_") or u.endswith("_"):
+            continue
+
         c.execute(
             "INSERT OR IGNORE INTO free_cache (username, checked_at, mode) VALUES (?,?,?)",
             (u, now, mode)
