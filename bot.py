@@ -1226,10 +1226,10 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
         if not free:
             continue
-# повторная проверка
-         try:
-            verify = await check_username_tme(u)
 
+        # повторная проверка
+        try:
+            verify = await check_username_tme(u)
             if verify != "free":
                 continue
         except:
