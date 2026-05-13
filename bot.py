@@ -1232,7 +1232,6 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
             if verify != "free":
                 continue
-
         except:
             continue
                 
@@ -6581,7 +6580,7 @@ async def free_cache_warmer_loop():
                                 logger.warning(f"[warmer] {mode_key}: skip @{u} - wrong length {len(u)} != {expected_length}")
                                 continue
 
-                            add_free_cache([u], mode_key)
+                            await add_free_cache([u], mode_key)
                             batch_found.append(u)
 
                             # Логируем с указанием статуса Fragment
@@ -6589,7 +6588,7 @@ async def free_cache_warmer_loop():
                                 fr = await check_fragment(u)
                                 logger.info(f"[warmer] {mode_key}: ✅ @{u} ({len(u)} букв, Fragment: {fr}, total {get_free_cache_count(mode_key)})")
                             except:
-                                logger.info(f"[warmer] {mode_key}: ✅ @{u} ({len(u)} букв, total {get_free_cache_count(mode_key)})")
+                                logger.info(f"[warmer] {mode_key}: ✅ @{u} ({len(u)} букв, total {await get_free_cache_count(mode_key)})")
                     except Exception as e:
                         logger.debug(f"[warmer] check error @{u}: {e}")
 
