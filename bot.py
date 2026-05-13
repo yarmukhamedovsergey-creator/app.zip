@@ -6539,7 +6539,7 @@ async def free_cache_warmer_loop():
                 if not mode or mode.get("disabled"):
                     continue
 
-                current = get_free_cache_count(mode_key)
+                current = await get_free_cache_count(mode_key)
                 if current >= target:
                     continue
 
