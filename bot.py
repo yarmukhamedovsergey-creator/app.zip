@@ -1179,12 +1179,12 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
             save_history(uid, u, mode_name, len(u))
 
-            logger.info(f"[search] cache hit ✅ @{u}")
+        #    logger.info(f"[search] cache hit ✅ @{u}")
 
         else:
             logger.info(f"[search] cache stale ❌ @{u}")
 
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.005)
 
     if len(found) >= count:
         return found[:count], {
@@ -1196,7 +1196,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     attempts = 0
     checked = {item["username"] for item in found}
 
-    while len(found) < count and attempts < 500:
+    while len(found) < count and attempts < 3000:
         u = None
 
         for _ in range(20):
@@ -1226,7 +1226,16 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
         if not free:
             continue
+# повторная проверка
+         try:
+            verify = await check_username_tme(u)
 
+            if verify != "free":
+                continue
+
+        except:
+            continue
+                
         fr_status = "unavailable"
 
         try:
@@ -1242,7 +1251,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
         save_history(uid, u, mode_name, len(u))
 
-        logger.info(f"[search] found @{u}")
+     #   logger.info(f"[search] found @{u}")
 
         now = time.time()
 
