@@ -16,6 +16,10 @@ import sys
 import subprocess
 from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
+from pathlib import Path
+
+CACHE_FILE = "free_usernames.json"
+cache_lock = asyncio.Lock()
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F
@@ -1153,24 +1157,40 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     last_update = 0
 
     # Получаем валидатор для режима
-    validate_func = SEARCH_MODES.get(mode_key, {}).get("validate", is_valid_username)
+    validate_func = SEARCH_MODES.get(
+        mode_key,
+        {}
+    ).get("validate", is_valid_username)
 
     # Шаг 1: берём из кэша
-    cached = get_cached_free(mode_key, count * 4)
+    cached = await get_cached_free(mode_key, count * 4)
+
     for u in cached:
         if len(found) >= count:
             break
+
         tg = await check_username_tme(u)
+
         if tg == "free":
-            found.append({"username": u, "fragment": "unavailable"})
+            found.append({
+                "username": u,
+                "fragment": "unavailable"
+            })
+
             save_history(uid, u, mode_name, len(u))
+
             logger.info(f"[search] cache hit ✅ @{u}")
+
         else:
             logger.info(f"[search] cache stale ❌ @{u}")
+
         await asyncio.sleep(0.02)
 
     if len(found) >= count:
-        return found[:count], {"attempts": 0, "elapsed": int(time.time() - start)}
+        return found[:count], {
+            "attempts": 0,
+            "elapsed": int(time.time() - start)
+        }
 
     # Шаг 2: генерим на лету
     attempts = 0
@@ -1178,9 +1198,15 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
     while len(found) < count and attempts < 500:
         u = None
+
         for _ in range(20):
             c = gen_func()
-            if c.isalpha() and c.lower() not in checked and validate_func(c):
+
+            if (
+                c.isalpha()
+                and c.lower() not in checked
+                and validate_func(c)
+            ):
                 u = c.lower()
                 break
 
@@ -1191,35 +1217,54 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         checked.add(u)
         attempts += 1
 
-    if await is_username_free(u):
+        try:
+            free = await is_username_free(u)
+
+        except Exception as e:
+            logger.error(f"check error @{u}: {e}")
+            continue
+
+        if not free:
+            continue
+
         fr_status = "unavailable"
+
         try:
             fr_status = await check_fragment(u)
+
         except:
             pass
-        found.append({"username": u, "fragment": fr_status})
-        save_history(uid, u, mode_name, len(u))
-        logger.info(f"[search] live ✅ @{u} (Fragment: {fr_status})")
 
-        await asyncio.sleep(0.05)
+        found.append({
+            "username": u,
+            "fragment": fr_status
+        })
+
+        save_history(uid, u, mode_name, len(u))
+
+        logger.info(f"[search] found @{u}")
 
         now = time.time()
+
         if msg and now - last_update > 2:
             last_update = now
+
             pct = min(len(found) / max(count, 1), 1.0)
             filled = int(pct * 10)
+
             bar = "█" * filled + "░" * (10 - filled)
-            spinner = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
-            sp = spinner[attempts % len(spinner)]
+
             text = (
                 f"🔍 <b>{mode_name}</b>\n\n"
-                f"{sp} [{bar}] {int(pct*100)}%\n\n"
+                f"[{bar}] {int(pct * 100)}%\n\n"
                 f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
                 f"📊 Проверено: <code>{attempts}</code>\n"
                 f"⏱ <code>{int(now - start)}</code>с"
             )
+
             try:
                 await edit_msg(msg, text)
+
             except:
                 pass
 
@@ -1384,78 +1429,64 @@ def init_db():
         except: pass
     conn.commit(); conn.close()
 
-def get_cached_free(mode, count):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    
-    # Определяем нужную длину для режима
-    target_length = 6 if mode == "default" else 5  # ← НОВОЕ
-    
-    # Берём только юзы нужной длины
-    c.execute(
-        "SELECT username FROM free_cache WHERE mode=? AND length=? ORDER BY RANDOM() LIMIT ?",
-        (mode, target_length, count)  # ← НОВОЕ
-    )
-    rows = c.fetchall()
-    usernames = [r[0] for r in rows]
-    
-    if usernames:
-        c.execute(
-            "DELETE FROM free_cache WHERE username IN ({})".format(",".join("?" for _ in usernames)),
-            usernames
-        )
-        conn.commit()
-    
-    conn.close()
+async def load_cache():
+    if not os.path.exists(CACHE_FILE):
+        return {}
+
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+
+async def save_cache(data):
+    async with cache_lock:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+async def get_cached_free(mode, count):
+    data = await load_cache()
+
+    if mode not in data:
+        return []
+
+    usernames = data[mode][:count]
+    data[mode] = data[mode][count:]
+
+    await save_cache(data)
+
     return usernames
 
-def add_free_cache(usernames, mode):
+
+async def add_free_cache(usernames, mode):
     if not usernames:
         return
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    config = load_bot_config()
-    limit = config.get("cache_limit", 5000)
+    data = await load_cache()
 
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+    if mode not in data:
+        data[mode] = []
+
+    existing = set(data[mode])
 
     for u in usernames:
-        if "__" in u or u.startswith("_") or u.endswith("_"):
-            continue
+        u = u.lower()
 
-        length = len(u)  # ← НОВОЕ
-        
-        c.execute(
-            "INSERT OR IGNORE INTO free_cache (username, checked_at, mode, length) VALUES (?,?,?,?)",
-            (u, now, mode, length)  # ← НОВОЕ
-        )
+        if u not in existing:
+            data[mode].append(u)
+            existing.add(u)
 
-    c.execute("""
-        DELETE FROM free_cache
-        WHERE username NOT IN (
-            SELECT username FROM free_cache
-            ORDER BY checked_at DESC
-            LIMIT ?
-        )
-    """, (limit,))
+    random.shuffle(data[mode])
 
-    conn.commit()
-    conn.close()
+    data[mode] = data[mode][:10000]
 
-def get_free_cache_count(mode):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    
-    target_length = 6 if mode == "default" else 5  # ← НОВОЕ
-    
-    c.execute(
-        "SELECT COUNT(*) FROM free_cache WHERE mode=? AND length=?",
-        (mode, target_length)  # ← НОВОЕ
-    )
-    count = c.fetchone()[0]
-    conn.close()
-    return count
+    await save_cache(data)
+
+async def get_free_cache_count(mode):
+    data = await load_cache()
+    return len(data.get(mode, []))
 
 def is_blacklisted(username):
     if not username:
