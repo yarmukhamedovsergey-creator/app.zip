@@ -1,5 +1,6 @@
 """
 USERNAME HUNTER v25.0 — VIP + ТЕМАТИЧЕСКИЙ ПОИСК + ССЫЛКИ
+FIXED: callback search v5-real-callback-fix
 """
 
 import asyncio
@@ -748,6 +749,28 @@ def normalize_search_mode_callback(data):
         return mode if mode in SEARCH_MODES else ""
 
     return lowered if lowered in SEARCH_MODES else ""
+
+
+# ═══════════════════════ HARD CALLBACK FIX v5 ═══════════════════════
+# Маркер ниже должен появиться в консоли после запуска. Если его нет — запущен старый файл.
+SEARCH_CALLBACK_FIX_VERSION = "v5-real-callback-fix"
+
+def _cb_data(cb):
+    return (getattr(cb, "data", "") or "").strip()
+
+def _is_cmd_search_callback(cb):
+    return _cb_data(cb) == "cmd_search"
+
+def _is_search_mode_callback(cb):
+    return normalize_search_mode_callback(_cb_data(cb)) in SEARCH_MODES
+
+def _print_callback_event(name, cb, extra=""):
+    try:
+        uid = getattr(getattr(cb, "from_user", None), "id", "unknown")
+        data = _cb_data(cb)
+        print(f"[{SEARCH_CALLBACK_FIX_VERSION}] {name} uid={uid} data={data!r} {extra}", flush=True)
+    except Exception as e:
+        print(f"[{SEARCH_CALLBACK_FIX_VERSION}] callback-log-error: {e}", flush=True)
 
 INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
                  "service","security","account","login","password","verify",
@@ -2831,8 +2854,9 @@ async def register_handlers(dp: Dispatcher):
     
     # ═══ CALLBACKS: Поиск ═══
     
-    @dp.callback_query(F.data == "cmd_search")
+    @dp.callback_query(_is_cmd_search_callback)
     async def cb_search(cb: CallbackQuery):
+        _print_callback_event("CALLBACK-CMD-SEARCH", cb)
         uid = cb.from_user.id; await answer_cb(cb)
         if is_banned(uid): return
         config = load_bot_config()
@@ -2873,8 +2897,9 @@ async def register_handlers(dp: Dispatcher):
     async def cb_nv(cb: CallbackQuery): 
         await answer_cb(cb, "🌟 Нужен VIP! Купи в магазине.", show_alert=True)
 
-    @dp.callback_query(lambda cb: normalize_search_mode_callback(cb.data) in SEARCH_MODES)
+    @dp.callback_query(_is_search_mode_callback)
     async def cb_go(cb: CallbackQuery):
+        _print_callback_event("CALLBACK-SEARCH-MODE", cb)
         uid = cb.from_user.id
         await answer_cb(cb)
         if is_banned(uid):
@@ -2924,7 +2949,9 @@ async def register_handlers(dp: Dispatcher):
             user_search_cooldown[uid]=time.time()
         try:
             count = get_search_count(uid)
+            print(f"[{SEARCH_CALLBACK_FIX_VERSION}] SEARCH-START uid={uid} mode={mode} count={count}", flush=True)
             found, stats = await do_search(count, mi["func"], cb.message, mi["name"], uid, mode)
+            print(f"[{SEARCH_CALLBACK_FIX_VERSION}] SEARCH-FINISH uid={uid} mode={mode} found={len(found)} attempts={stats.get('attempts')}", flush=True)
             text = format_results(found, stats, mi["name"])
             kb = InlineKeyboardBuilder()
             kb.button(text="🔙 Меню", callback_data="cmd_menu")
@@ -5412,6 +5439,15 @@ async def register_handlers(dp: Dispatcher):
             "🏷 <b>Создание промокода</b>\n\n"
             "Введите код (или <code>auto</code> для автогенерации):", kb.as_markup())
 
+
+    @dp.callback_query()
+    async def cb_unhandled_callback_debug(cb: CallbackQuery):
+        _print_callback_event("CALLBACK-UNHANDLED", cb)
+        try:
+            await cb.answer("Кнопка не обработана. Смотри data в консоли.", show_alert=False)
+        except Exception:
+            pass
+
     # ═══════════════════════ ФОНОВЫЕ ЗАДАЧИ ═══════════════════════
 
 async def reminder_loop():
@@ -5656,6 +5692,8 @@ async def main():
     await register_handlers(dp)
     logger.info("━"*30)
     logger.info(f"🚀 @{bot_info.username} v25.0")
+    print("SEARCH_CALLBACK_FIX_ACTIVE v5-real-callback-fix", flush=True)
+    logger.info("SEARCH_CALLBACK_FIX_ACTIVE v5-real-callback-fix")
     logger.info("🔄 Режим проверки: public_strict без user-сессий")
     logger.info("━"*30)
     asyncio.create_task(reminder_loop())
