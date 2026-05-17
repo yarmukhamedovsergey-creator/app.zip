@@ -20,8 +20,8 @@ from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
 from pathlib import Path
 
-# BOT_TME_CACHE_LOGS_ACTIVE
-CACHE_FILE = "free_usernames.json"
+# BOT_TME_STRICT_CACHE_ACTIVE
+CACHE_FILE = "free_usernames_tme_strict.json"
 cache_lock = asyncio.Lock()
 
 import aiohttp
@@ -914,11 +914,16 @@ _TME_USER_AGENTS = [
 
 async def check_username_tme(u: str) -> str:
     """
-    Проверка только через t.me, как задано:
-    GET https://t.me/<username>
-    Если в HTML есть tgme_page_title — занят.
-    Если tgme_page_title нет — свободен.
-    Любая ошибка, таймаут, лимит или не-200 — занят.
+    Строгая проверка через GET https://t.me/<username>.
+
+    taken:
+    - в HTML есть tgme_page_title;
+    - Telegram показывает страницу "username/link is taken";
+    - Telegram пишет "available for purchase";
+    - любая ошибка, таймаут или HTTP != 200.
+
+    free:
+    - HTTP 200 и нет ни одного признака занятого / купленного / резервного username.
     """
     u = (u or "").strip().replace("@", "").lower()
     if not is_valid_telegram_profile_username(u):
@@ -939,7 +944,7 @@ async def check_username_tme(u: str) -> str:
     try:
         async with http_session.get(
             url,
-            timeout=aiohttp.ClientTimeout(total=7),
+            timeout=aiohttp.ClientTimeout(total=10),
             headers=headers,
             allow_redirects=True,
         ) as resp:
@@ -949,7 +954,33 @@ async def check_username_tme(u: str) -> str:
             html_text = await resp.text(errors="ignore")
             low = html_text.lower()
 
-            if "tgme_page_title" in low:
+            # Обычные публичные страницы Telegram: username занят.
+            taken_markers = (
+                "tgme_page_title",
+                "tgme_page_photo",
+                "tgme_page_extra",
+                "tgme_action_button",
+                "tgme_widget_message",
+            )
+
+            # Страницы покупки/резерва на t.me: tgme_page_title может отсутствовать,
+            # но username всё равно занят или доступен только к покупке.
+            purchase_or_reserved_markers = (
+                "this username is already taken",
+                "sorry, this link is taken",
+                "link is taken",
+                "username is already taken",
+                "already taken",
+                "available for purchase",
+                "available on fragment",
+                "fragment.com/username",
+                "choose a username on telegram",
+                "you can choose a username",
+            )
+
+            if any(marker in low for marker in taken_markers):
+                return "taken"
+            if any(marker in low for marker in purchase_or_reserved_markers):
                 return "taken"
 
             return "free"
@@ -1017,8 +1048,8 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     Точный тихий поиск через GET https://t.me/<username>.
 
     Правило проверки:
-    - если в HTML есть tgme_page_title -> username занят;
-    - если tgme_page_title нет -> username свободен;
+    - tgme_page_title или already taken / available for purchase -> занят;
+    - нет признаков занятого username -> свободен;
     - любая ошибка/таймаут/не-200 -> занят.
 
     Консоль не спамит каждой проверкой. Пишет только:
@@ -5567,7 +5598,7 @@ async def daily_report_loop():
         await asyncio.sleep(60)
 
 async def cache_warmer_check_username(u: str) -> bool:
-    """Кэш наполняется только username, которые свободны по t.me/tgme_page_title."""
+    """Кэш наполняется только username, которые прошли строгий t.me-check."""
     u = (u or "").strip().replace("@", "").lower()
     if not is_valid_telegram_profile_username(u):
         return False
@@ -5580,7 +5611,7 @@ async def free_cache_warmer_loop():
     """Тихое фоновое наполнение кэша без потока строк в консоль."""
     targets = {"default": 120, "beautiful": 80}
     await asyncio.sleep(2)
-    print("cache start", flush=True)
+    print("cache start strict", flush=True)
 
     while True:
         try:
@@ -5669,7 +5700,7 @@ async def main():
     logger.info("━"*30)
     logger.info(f"🚀 @{bot_info.username} v25.0")
     print("bot active", flush=True)
-    logger.info("BOT_TME_CACHE_LOGS_ACTIVE")
+    logger.info("BOT_TME_STRICT_CACHE_ACTIVE")
     logger.info("🔄 Режим проверки: GET t.me + tgme_page_title")
     logger.info("━"*30)
     asyncio.create_task(reminder_loop())
