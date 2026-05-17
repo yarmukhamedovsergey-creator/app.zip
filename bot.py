@@ -1,11 +1,11 @@
 """
-USERNAME HUNTER v25.0 — VIP + ТЕМАТИЧЕСКИЙ ПОИСК + ССЫЛКИ
-TME CACHE LOG SEARCH: quiet GET https://t.me/username + tgme_page_title
+USERNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
+Проверка занятости: GET https://t.me/<username>; нет tgme_page_title → free.
+Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
 """
 
 import asyncio
 import random
-import string
 import logging
 import sqlite3
 import secrets
@@ -18,7 +18,6 @@ import sys
 import subprocess
 from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
-from pathlib import Path
 
 # BOT_TME_STRICT_CACHE_ACTIVE
 CACHE_FILE = "free_usernames_tme_strict.json"
@@ -135,8 +134,108 @@ WITHDRAW_FEE_PERCENT = 5
 
 # ═══════════════════════ INIT ═══════════════════════
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+# ═══ КРАСИВЫЙ ЛОГГЕР ═══════════════════════════════════════
+# ANSI-цвета без внешних зависимостей.
+# В IDE/файле выглядит как обычный текст, в терминале — раскрашенный.
+
+class _Ansi:
+    RESET = "\033[0m"
+    DIM = "\033[2m"
+    BOLD = "\033[1m"
+    GREY = "\033[90m"
+    RED = "\033[31m"
+    GREEN = "\033[32m"
+    YELLOW = "\033[33m"
+    BLUE = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN = "\033[36m"
+    WHITE = "\033[97m"
+    BG_RED = "\033[41m"
+
+
+def _supports_color() -> bool:
+    if os.environ.get("NO_COLOR"):
+        return False
+    if os.environ.get("FORCE_COLOR"):
+        return True
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+_USE_COLOR = _supports_color()
+
+
+def _c(code: str, text: str) -> str:
+    """Обернуть текст в ANSI-код, если терминал это поддерживает."""
+    if not _USE_COLOR or not code:
+        return text
+    return f"{code}{text}{_Ansi.RESET}"
+
+
+class _PrettyFormatter(logging.Formatter):
+    LEVEL_STYLE = {
+        logging.DEBUG:    (_Ansi.GREY,    "DEBUG"),
+        logging.INFO:     (_Ansi.CYAN,    "INFO "),
+        logging.WARNING:  (_Ansi.YELLOW,  "WARN "),
+        logging.ERROR:    (_Ansi.RED,     "ERROR"),
+        logging.CRITICAL: (_Ansi.BG_RED + _Ansi.WHITE, "CRIT "),
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
+        color, label = self.LEVEL_STYLE.get(record.levelno, ("", record.levelname))
+        msg = record.getMessage()
+        if record.exc_info:
+            msg = f"{msg}\n{self.formatException(record.exc_info)}"
+        return f"{_c(_Ansi.DIM, ts)} {_c(color, label)} {_c(_Ansi.DIM, '│')} {msg}"
+
+
+_root = logging.getLogger()
+_root.handlers.clear()
+_root.setLevel(logging.INFO)
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(_PrettyFormatter())
+_root.addHandler(_handler)
+# Шумные сторонние логи притушим.
+logging.getLogger("aiogram").setLevel(logging.WARNING)
+logging.getLogger("aiohttp").setLevel(logging.WARNING)
+logging.getLogger("asyncio").setLevel(logging.WARNING)
+
+logger = logging.getLogger("hunter")
+
+
+def log_event(category: str, message: str, level: int = logging.INFO) -> None:
+    """Однострочный лог-эвент: [CATEGORY] message."""
+    cat_color = {
+        "search":  _Ansi.MAGENTA,
+        "cache":   _Ansi.BLUE,
+        "warmer":  _Ansi.BLUE,
+        "monitor": _Ansi.GREEN,
+        "tme":     _Ansi.CYAN,
+        "fragment":_Ansi.MAGENTA,
+        "bot":     _Ansi.GREEN,
+        "db":      _Ansi.YELLOW,
+        "ui":      _Ansi.GREY,
+        "fatal":   _Ansi.RED,
+    }.get(category, _Ansi.CYAN)
+    tag = _c(cat_color, f"[{category}]".ljust(10))
+    logger.log(level, f"{tag} {message}")
+
+
+def log_banner(lines: list[str]) -> None:
+    """Красивый стартовый баннер. Печатается напрямую, минуя formatter."""
+    width = max(len(line) for line in lines) if lines else 0
+    width = min(max(width, 36), 60)
+    bar = "─" * (width + 2)
+    out = []
+    out.append(_c(_Ansi.CYAN, f"╭{bar}╮"))
+    for ln in lines:
+        pad = " " * (width - len(ln))
+        out.append(_c(_Ansi.CYAN, "│ ") + _c(_Ansi.BOLD, ln) + pad + _c(_Ansi.CYAN, " │"))
+    out.append(_c(_Ansi.CYAN, f"╰{bar}╯"))
+    print("\n".join(out), flush=True)
 bot = Bot(token=MAIN_TOKEN)
 user_states = {}
 http_session = None
@@ -771,7 +870,7 @@ def _print_callback_event(name, cb, extra=""):
         data = _cb_data(cb)
         mode = normalize_search_mode_callback(data)
         if mode in SEARCH_MODES:
-            print(f"search button {mode}", flush=True)
+            log_event("ui", f"🖱  search button → {mode}", logging.DEBUG)
     except Exception:
         pass
 
@@ -854,55 +953,90 @@ async def check_username(u: str) -> str:
         logger.debug(f"[check_username] @{u}: {e}")
         return "unknown"
         
-async def check_fragment(u):
+async def check_fragment(u: str) -> str:
+    """
+    Точная проверка статуса username на Fragment.
+
+    Возвращает один из:
+      "available"   — выставлен на продажу (Buy Now / Place Bid);
+      "in auction"  — идёт аукцион;
+      "sold"        — продан / уже имеет владельца через Fragment;
+      "reserved"    — зарезервирован;
+      "unavailable" — на Fragment нет карточки (обычный t.me username);
+      "unknown"     — сеть/таймаут/неоднозначно.
+
+    Сначала смотрим строго на класс ``.tm-section-header-status`` —
+    Fragment всегда печатает один из статусов внутри него.
+    Если карточки вообще нет — username не выставлен.
+    """
     u = (u or "").strip().replace("@", "").lower()
+    if not u:
+        return "unknown"
+
     now = time.time()
     cached = _fragment_cache.get(u)
     if cached and now - cached[1] < _fragment_cache_ttl:
         return cached[0]
 
+    if http_session is None:
+        return "unknown"
+
+    url = f"https://fragment.com/username/{u}"
+    headers = {
+        "User-Agent": random.choice(_TME_USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
     try:
         async with http_session.get(
-            f"https://fragment.com/username/{u}",
+            url,
             timeout=aiohttp.ClientTimeout(total=10),
-            headers={
-                "User-Agent": random.choice(_TME_USER_AGENTS),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            },
+            headers=headers,
             allow_redirects=True,
         ) as resp:
+            if resp.status == 404:
+                _fragment_cache[u] = ("unavailable", now)
+                return "unavailable"
             if resp.status != 200:
-                logger.info(f"[fragment] @{u} HTTP {resp.status} → unknown")
+                log_event("fragment", f"@{u} HTTP {resp.status} → unknown", logging.WARNING)
                 return "unknown"
-
-            text = await resp.text()
-            low = text.lower()
-
-            status_match = re.search(r'class="tm-section-header-status[^\"]*"[^>]*>(.*?)<', text, re.I | re.S)
-            status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
-
-            if any(x in low or x in status for x in ("sold", "owner", "owned")):
-                r = "sold"
-            elif any(x in low or x in status for x in ("auction", "bidding")):
-                r = "in auction"
-            elif any(x in low or x in status for x in ("buy now", "for sale", "available")):
-                r = "available"
-            elif "reserved" in low or "reserved" in status:
-                r = "reserved"
-            elif "tm-section-header-status" in low:
-                # Есть карточка Fragment, но статус не распознан — не рискуем.
-                r = "unknown"
-            else:
-                # Карточки username на Fragment нет — публично не числится как NFT/аукцион.
-                r = "unavailable"
-
-            logger.info(f"[fragment] @{u} → {r}")
-            _fragment_cache[u] = (r, now)
-            return r
-
-    except Exception as e:
-        logger.info(f"[fragment] @{u} error: {e} → unknown")
+            text = await resp.text(errors="ignore")
+    except asyncio.TimeoutError:
+        log_event("fragment", f"@{u} timeout → unknown", logging.WARNING)
         return "unknown"
+    except Exception as e:
+        log_event("fragment", f"@{u} error: {e} → unknown", logging.WARNING)
+        return "unknown"
+
+    status_match = re.search(
+        r'class="tm-section-header-status[^"]*"[^>]*>(.*?)<',
+        text, re.I | re.S,
+    )
+    status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
+    low = text.lower()
+
+    if status:
+        if "auction" in status or "bidding" in status:
+            result = "in auction"
+        elif "sold" in status or "taken" in status or "unavailable" in status:
+            result = "sold"
+        elif "available" in status or "for sale" in status or "buy now" in status:
+            result = "available"
+        elif "reserved" in status:
+            result = "reserved"
+        else:
+            result = "unknown"
+    elif "tm-section-header-status" in low:
+        # Карточка есть, но статус нераспознан — лучше не рисковать.
+        result = "unknown"
+    else:
+        # Никакого блока статуса нет → username не выставлен на Fragment.
+        result = "unavailable"
+
+    log_event("fragment", f"@{u} → {result}")
+    _fragment_cache[u] = (result, now)
+    return result
 
 _TME_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -914,21 +1048,18 @@ _TME_USER_AGENTS = [
 
 async def check_username_tme(u: str) -> str:
     """
-    Строгая проверка через GET https://t.me/<username>.
+    Точная проверка занятости через GET ``https://t.me/<username>``.
 
-    taken:
-    - в HTML есть tgme_page_title;
-    - Telegram показывает страницу "username/link is taken";
-    - Telegram пишет "available for purchase";
-    - любая ошибка, таймаут или HTTP != 200.
+    Логика именно такая, как просил пользователь:
+      • в HTML есть ``tgme_page_title``           → **taken** (есть карточка);
+      • элемента нет → страница-заглушка          → **free** (свободен);
+      • любая ошибка / таймаут / не-200 / не-html → **taken** (страховка).
 
-    free:
-    - HTTP 200 и нет ни одного признака занятого / купленного / резервного username.
+    Возвращает строку "free" или "taken".
     """
     u = (u or "").strip().replace("@", "").lower()
     if not is_valid_telegram_profile_username(u):
         return "taken"
-
     if http_session is None:
         return "taken"
 
@@ -949,51 +1080,24 @@ async def check_username_tme(u: str) -> str:
             allow_redirects=True,
         ) as resp:
             if resp.status != 200:
+                log_event("tme", f"@{u} HTTP {resp.status} → taken", logging.DEBUG)
                 return "taken"
-
             html_text = await resp.text(errors="ignore")
-            low = html_text.lower()
-
-            # Обычные публичные страницы Telegram: username занят.
-            taken_markers = (
-                "tgme_page_title",
-                "tgme_page_photo",
-                "tgme_page_extra",
-                "tgme_action_button",
-                "tgme_widget_message",
-            )
-
-            # Страницы покупки/резерва на t.me: tgme_page_title может отсутствовать,
-            # но username всё равно занят или доступен только к покупке.
-            purchase_or_reserved_markers = (
-                "this username is already taken",
-                "sorry, this link is taken",
-                "link is taken",
-                "username is already taken",
-                "already taken",
-                "available for purchase",
-                "available on fragment",
-                "fragment.com/username",
-                "choose a username on telegram",
-                "you can choose a username",
-            )
-
-            if any(marker in low for marker in taken_markers):
-                return "taken"
-            if any(marker in low for marker in purchase_or_reserved_markers):
-                return "taken"
-
-            return "free"
-
-    except Exception:
+    except asyncio.TimeoutError:
+        log_event("tme", f"@{u} timeout → taken", logging.DEBUG)
         return "taken"
+    except Exception as e:
+        log_event("tme", f"@{u} error {e} → taken", logging.DEBUG)
+        return "taken"
+
+    return "taken" if 'tgme_page_title' in html_text else "free"
 
 
 async def is_username_free(u: str, uid=None) -> bool:
-    """True только когда t.me-страница не содержит tgme_page_title."""
+    """True только когда t.me-страница не содержит ``tgme_page_title``."""
     return await check_username_tme(u) == "free"
 
-    
+
 async def get_rechecked_cached_free(mode, count):
     cached = await get_cached_free(mode, max(count * 3, count))
     validate_func = SEARCH_MODES.get(mode, {}).get("validate", is_valid_username)
@@ -1070,7 +1174,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     checked = set()
     mode_label = "beautiful" if mode_key == "beautiful" else "default"
 
-    print(f"search {mode_label} need={count}", flush=True)
+    log_event("search", f"▶  start mode={mode_label} uid={uid} need={count}")
 
     # 1) Берём старый кэш, но перед выдачей перепроверяем через t.me.
     cached = await get_cached_free(mode_key, max(count * 5, 20))
@@ -1091,14 +1195,14 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
             cache_used += 1
-            print(f"cache hit @{u} {mode_label}", flush=True)
+            log_event("cache", f"💾 hit  @{u} ({mode_label})")
         else:
             cache_rejected += 1
 
         await asyncio.sleep(0.08)
 
     if cache_rejected:
-        print(f"cache skip {mode_label} {cache_rejected}", flush=True)
+        log_event("cache", f"🗑  stale dropped: {cache_rejected} ({mode_label})", logging.DEBUG)
 
     # 2) Если кэша не хватило — генерируем и проверяем тем же методом.
     max_attempts = 10000
@@ -1125,7 +1229,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             save_history(uid, u, mode_name, len(u))
             await add_free_cache([u], mode_key)
             cached_new += 1
-            print(f"cache add @{u} {mode_label}", flush=True)
+            log_event("cache", f"✨ add  @{u} ({mode_label})")
         else:
             generated_rejected += 1
 
@@ -1151,11 +1255,12 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
     elapsed = int(time.time() - start)
     if generated_rejected:
-        print(f"cache noadd {mode_label} {generated_rejected}", flush=True)
-    print(
-        f"done {mode_label} found={len(found)}/{count} checked={attempts} "
-        f"cache_hit={cache_used} cache_add={cached_new} {elapsed}s",
-        flush=True,
+        log_event("search", f"⏭  rejected (taken): {generated_rejected} ({mode_label})", logging.DEBUG)
+    log_event(
+        "search",
+        f"✅ done mode={mode_label} found={len(found)}/{count} "
+        f"checked={attempts} hit={cache_used} add={cached_new} "
+        f"elapsed={elapsed}s",
     )
 
     return found, {"attempts": attempts, "elapsed": elapsed}
@@ -2657,12 +2762,39 @@ async def register_handlers(dp: Dispatcher):
         uid = msg.from_user.id
         if is_banned(uid): return
         ensure_user(uid, msg.from_user.username)
-        ok,reason = rate_limiter.check_action(uid)
+        ok, reason = rate_limiter.check_action(uid)
         if not ok:
-            await msg.answer("⚠️ Слишком быстро!" if reason!="ban" else f"🚫 Блокировка {TEMP_BAN_MINUTES} мин."); return
-        un = (command.args or "").strip().replace("@","").lower()
+            await msg.answer("⚠️ Слишком быстро!" if reason != "ban" else f"🚫 Блокировка {TEMP_BAN_MINUTES} мин.")
+            return
+        un = (command.args or "").strip().replace("@", "").lower()
         if not validate_username(un):
-            await msg.answer("❌ <code>/check username</code>", parse_mode="HTML"); return
+            await msg.answer("❌ <code>/check username</code>", parse_mode="HTML")
+            return
+        log_action(uid, "check", un)
+        wm = await msg.answer(f"⏳ Проверяю @{un}...")
+        tg, fr = await asyncio.gather(check_username(un), check_fragment(un))
+        tg_text = {"free": "✅ Свободен", "taken": "❌ Занят"}.get(tg, "❓")
+        fr_text = {
+            "available":   "💎 На продаже на Fragment",
+            "in auction":  "🔨 Идёт аукцион на Fragment",
+            "sold":        "🏷 Продан через Fragment",
+            "reserved":    "⏳ Зарезервирован на Fragment",
+            "unavailable": "—",
+            "unknown":     "❓",
+        }.get(fr, "❓")
+        ev = evaluate_username(un)
+        text = (
+            f"📊 <b>@{un}</b>\n\n"
+            f"📱 Telegram: {tg_text}\n"
+            f"💎 Fragment: {fr_text}\n\n"
+            f"🏷 <b>{ev['rarity']}</b> · 💰 <b>{ev['price']}</b>\n"
+            f"[{ev['bar']}] <code>{ev['score']}/200</code>\n\n"
+            f"📱 <a href='https://t.me/{un}'>Telegram</a> · "
+            f"💎 <a href='https://fragment.com/username/{un}'>Fragment</a>"
+        )
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🔙 Меню", callback_data="cmd_menu")
+        await edit_msg(wm, text, kb.as_markup())
 
     @dp.message(Command("fav"))
     async def cmd_fav(msg: Message, command: CommandObject):
@@ -2684,9 +2816,11 @@ async def register_handlers(dp: Dispatcher):
         un = (command.args or "").strip().replace("@","").lower()
         if not validate_username(un):
             await msg.answer("❌ <code>/similar username</code>", parse_mode="HTML"); return
-        log_action(uid,"similar",un)
+        log_action(uid, "similar", un)
         wm = await msg.answer(f"🔄 Ищу похожие на @{un}...")
-        found, stats = await do_similar_search(un, 5, wm, uid)
+        # У бота нет отдельной функции do_similar_search — используем word-search:
+        # генерация username на основе слова + проверка через t.me.
+        found, stats = await do_word_search(un, 5, wm, uid)
         kb = InlineKeyboardBuilder()
         text = format_results(found, stats, f"Похожие на @{un}")
         kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
@@ -2983,9 +3117,16 @@ async def register_handlers(dp: Dispatcher):
     async def cb_eval_direct(cb: CallbackQuery):
         await answer_cb(cb); un = cb.data[5:]
         await edit_msg(cb.message, "⏳...")
-        tg = await check_username(un); fr = await check_fragment(un)
-        tgs = {"free":"✅ Свободен","taken":"❌ Занят","error":"⚠️"}.get(tg,"❓")
-        frs = {"fragment":"💎 Fragment","sold":"✅ Продан","unavailable":"—"}.get(fr,"❓")
+        tg, fr = await asyncio.gather(check_username(un), check_fragment(un))
+        tgs = {"free": "✅ Свободен", "taken": "❌ Занят"}.get(tg, "❓")
+        frs = {
+            "available":   "💎 На продаже",
+            "in auction":  "🔨 Аукцион",
+            "sold":        "🏷 Продан",
+            "reserved":    "⏳ Резерв",
+            "unavailable": "—",
+            "unknown":     "❓",
+        }.get(fr, "❓")
         ev = evaluate_username(un)
         fac = "\n".join("  "+f for f in ev["factors"]) or "  —"
         kb = InlineKeyboardBuilder()
@@ -3606,7 +3747,7 @@ async def register_handlers(dp: Dispatcher):
             await cb.message.answer(f"✅ Заявка #{tid}\n\nУкажите сумму выплаты в рублях одним сообщением.")
 
     @dp.callback_query(F.data.startswith("tr_"))
-    async def cb_tr(cb: CallbackQuery):
+    async def cb_task_reject(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb); tid = int(cb.data[3:])
         user_states.pop(cb.from_user.id, None)
@@ -5611,7 +5752,7 @@ async def free_cache_warmer_loop():
     """Тихое фоновое наполнение кэша без потока строк в консоль."""
     targets = {"default": 120, "beautiful": 80}
     await asyncio.sleep(2)
-    print("cache start strict", flush=True)
+    log_event("warmer", f"🔥 started · targets={targets}")
 
     while True:
         try:
@@ -5649,8 +5790,7 @@ async def free_cache_warmer_loop():
                         if await cache_warmer_check_username(u):
                             await add_free_cache([u], mode_key)
                             added.append(u)
-                            # Не пишем каждую проверку. Только факты записи и итог.
-                            print(f"cache add @{u} {mode_key}", flush=True)
+                            log_event("warmer", f"✨ +@{u} ({mode_key})", logging.DEBUG)
                     except Exception:
                         pass
 
@@ -5659,10 +5799,13 @@ async def free_cache_warmer_loop():
                 if added:
                     total_now = await get_free_cache_count(mode_key)
                     skipped = max(attempts - len(added), 0)
-                    print(f"cache done {mode_key} +{len(added)} total={total_now} noadd={skipped}", flush=True)
+                    log_event(
+                        "warmer",
+                        f"📦 {mode_key} +{len(added)} total={total_now} skipped={skipped}",
+                    )
 
         except Exception as e:
-            logger.error(f"Cache warmer: {e}")
+            log_event("warmer", f"❌ error: {e}", logging.ERROR)
 
         await asyncio.sleep(15)
 
@@ -5695,14 +5838,15 @@ async def main():
             if k in PRICES: PRICES[k]["stars"]=v
     bot_info=await bot.get_me(); http_session=aiohttp.ClientSession()
     # User-сессии не подключаются: проверка работает через t.me + Bot API getChat + Fragment.
-    ps=pool.stats()
     await register_handlers(dp)
-    logger.info("━"*30)
-    logger.info(f"🚀 @{bot_info.username} v25.0")
-    print("bot active", flush=True)
-    logger.info("BOT_TME_STRICT_CACHE_ACTIVE")
-    logger.info("🔄 Режим проверки: GET t.me + tgme_page_title")
-    logger.info("━"*30)
+    log_banner([
+        "USERNAME HUNTER  ·  v25.1",
+        f"bot: @{bot_info.username}",
+        "check: GET t.me + tgme_page_title",
+        f"db:    {DB}",
+        f"cache: {CACHE_FILE}",
+    ])
+    log_event("bot", "🚀 polling started")
     asyncio.create_task(reminder_loop())
     asyncio.create_task(auto_renew_loop())
     asyncio.create_task(return_user_push_loop())
