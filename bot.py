@@ -1,8 +1,7 @@
 """
 USERNAME HUNTER v25.0 — VIP + ТЕМАТИЧЕСКИЙ ПОИСК + ССЫЛКИ
-FIXED: WORKING REAL CHECK — quiet UI, short logs
+TME CACHE LOG SEARCH: quiet GET https://t.me/username + tgme_page_title
 """
-# BOT_WORKING_REALCHECK_QUIET_ACTIVE
 
 import asyncio
 import random
@@ -21,7 +20,8 @@ from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
 from pathlib import Path
 
-CACHE_FILE = "free_usernames_real_checked.json"  # отдельный чистый кэш только для реально проверенных юзов
+# BOT_TME_CACHE_LOGS_ACTIVE
+CACHE_FILE = "free_usernames.json"
 cache_lock = asyncio.Lock()
 
 import aiohttp
@@ -754,7 +754,7 @@ def normalize_search_mode_callback(data):
 
 # ═══════════════════════ HARD CALLBACK FIX v5 ═══════════════════════
 # Маркер ниже должен появиться в консоли после запуска. Если его нет — запущен старый файл.
-SEARCH_CALLBACK_FIX_VERSION = "bot"
+SEARCH_CALLBACK_FIX_VERSION = "TME_CACHE_LOGS"
 
 def _cb_data(cb):
     return (getattr(cb, "data", "") or "").strip()
@@ -766,17 +766,14 @@ def _is_search_mode_callback(cb):
     return normalize_search_mode_callback(_cb_data(cb)) in SEARCH_MODES
 
 def _print_callback_event(name, cb, extra=""):
+    """Тихий callback-лог: только выбор режима поиска, без лишнего спама."""
     try:
-        uid = getattr(getattr(cb, "from_user", None), "id", "unknown")
         data = _cb_data(cb)
-        if name == "CALLBACK-SEARCH-MODE":
-            print(f"cb {data} {uid}", flush=True)
-        elif name == "CALLBACK-CMD-SEARCH":
-            print(f"cb search {uid}", flush=True)
-        else:
-            print(f"cb {data} {uid} {extra}".strip(), flush=True)
-    except Exception as e:
-        print(f"cb log error {e}", flush=True)
+        mode = normalize_search_mode_callback(data)
+        if mode in SEARCH_MODES:
+            print(f"search button {mode}", flush=True)
+    except Exception:
+        pass
 
 INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
                  "service","security","account","login","password","verify",
@@ -830,9 +827,11 @@ async def check_username_botapi(u: str) -> str:
 
 async def public_username_status(u: str, uid=None) -> str:
     """
-    Строгий публичный статус без user-сессий.
-    Возвращает free только если три независимых публичных проверки сошлись.
-    Любая неопределённость превращается в unknown/taken и не попадает в выдачу.
+    Точная проверка по методу пользователя:
+    GET https://t.me/<username>
+    - если в HTML есть tgme_page_title -> username занят;
+    - если tgme_page_title нет -> username свободен;
+    - любая ошибка / таймаут / не-200 -> считаем занятым.
     """
     u = (u or "").strip().replace("@", "").lower()
 
@@ -844,38 +843,7 @@ async def public_username_status(u: str, uid=None) -> str:
         if w == u or w in u:
             return "taken"
 
-    tme_results = []
-    for attempt in range(3):
-        r = await check_username_tme(u)
-        tme_results.append(r)
-        if r == "taken":
-            return "taken"
-        if r == "unknown":
-            await asyncio.sleep(0.6 + attempt * 0.4)
-            continue
-        await asyncio.sleep(0.25)
-
-    if tme_results.count("free") < 2:
-        logger.info(f"[public] @{u} t.me unstable={tme_results} → skip")
-        return "unknown"
-
-    botapi = await check_username_botapi(u)
-    if botapi == "taken":
-        logger.info(f"[public] @{u} BotAPI=taken → skip")
-        return "taken"
-    if botapi == "unknown":
-        logger.info(f"[public] @{u} BotAPI=unknown → skip")
-        return "unknown"
-
-    fr = await check_fragment(u)
-    if fr == "unknown":
-        logger.info(f"[public] @{u} Fragment=unknown → skip")
-        return "unknown"
-    if fr != "unavailable":
-        logger.info(f"[public] @{u} Fragment={fr} → skip")
-        return "taken"
-
-    return "free"
+    return await check_username_tme(u)
 
 async def check_username(u: str) -> str:
     """Публичный строгий статус username без Telethon/user-сессий."""
@@ -887,63 +855,53 @@ async def check_username(u: str) -> str:
         return "unknown"
         
 async def check_fragment(u):
-    """Статус Fragment. Всё кроме unavailable отсекается из выдачи."""
     u = (u or "").strip().replace("@", "").lower()
     now = time.time()
     cached = _fragment_cache.get(u)
     if cached and now - cached[1] < _fragment_cache_ttl:
         return cached[0]
 
-    if http_session is None:
-        return "unknown"
-
     try:
         async with http_session.get(
             f"https://fragment.com/username/{u}",
-            timeout=aiohttp.ClientTimeout(total=4),
+            timeout=aiohttp.ClientTimeout(total=10),
             headers={
                 "User-Agent": random.choice(_TME_USER_AGENTS),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-                "Cache-Control": "no-cache",
             },
             allow_redirects=True,
         ) as resp:
             if resp.status != 200:
+                logger.info(f"[fragment] @{u} HTTP {resp.status} → unknown")
                 return "unknown"
 
-            page = await resp.text()
-            low = page.lower()
-            status_match = re.search(r'class="tm-section-header-status[^\"]*"[^>]*>(.*?)<', page, re.I | re.S)
-            status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
-            joined = f"{status} {low}"
+            text = await resp.text()
+            low = text.lower()
 
-            if any(x in joined for x in (
-                "this username is already taken",
-                "sorry, this link is taken",
-                "already taken",
-                "link is taken",
-                "taken. but it's available for purchase",
-                "taken. but it is available for purchase",
-            )):
-                r = "taken"
-            elif any(x in joined for x in ("auction", "bidding", "@auction")):
-                r = "in auction"
-            elif any(x in joined for x in ("sold", "owner", "owned")):
+            status_match = re.search(r'class="tm-section-header-status[^\"]*"[^>]*>(.*?)<', text, re.I | re.S)
+            status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
+
+            if any(x in low or x in status for x in ("sold", "owner", "owned")):
                 r = "sold"
-            elif any(x in joined for x in ("buy now", "for sale", "available for purchase", "available")):
+            elif any(x in low or x in status for x in ("auction", "bidding")):
+                r = "in auction"
+            elif any(x in low or x in status for x in ("buy now", "for sale", "available")):
                 r = "available"
-            elif "reserved" in joined:
+            elif "reserved" in low or "reserved" in status:
                 r = "reserved"
             elif "tm-section-header-status" in low:
+                # Есть карточка Fragment, но статус не распознан — не рискуем.
                 r = "unknown"
             else:
+                # Карточки username на Fragment нет — публично не числится как NFT/аукцион.
                 r = "unavailable"
 
+            logger.info(f"[fragment] @{u} → {r}")
             _fragment_cache[u] = (r, now)
             return r
 
-    except Exception:
+    except Exception as e:
+        logger.info(f"[fragment] @{u} error: {e} → unknown")
         return "unknown"
 
 _TME_USER_AGENTS = [
@@ -956,169 +914,53 @@ _TME_USER_AGENTS = [
 
 async def check_username_tme(u: str) -> str:
     """
-    Проверка через публичную страницу t.me.
-    Возвращает: free / taken / unknown.
-    Никакой unknown не считается свободным.
-    """
-    u = (u or "").strip().replace("@", "").lower()
-    url = f"https://t.me/{u}"
-
-    for attempt in range(3):
-        headers = {
-            "User-Agent": random.choice(_TME_USER_AGENTS),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-            "Cache-Control": "no-cache",
-        }
-        try:
-            async with http_session.get(
-                url,
-                timeout=aiohttp.ClientTimeout(total=10),
-                headers=headers,
-                allow_redirects=True,
-            ) as resp:
-                if resp.status == 429:
-                    wait = int(resp.headers.get("Retry-After", 3))
-                    logger.warning(f"[tme] 429 @{u}, wait {wait}s")
-                    await asyncio.sleep(wait + random.uniform(0.5, 2.0))
-                    continue
-
-                if resp.status in (401, 403):
-                    return "taken"
-                if resp.status != 200:
-                    logger.debug(f"[tme] @{u} HTTP {resp.status}")
-                    return "unknown"
-
-                text = await resp.text()
-                low = text.lower()
-
-                taken_markers = (
-                    'class="tgme_page_title"',
-                    "tgme_page_extra",
-                    "tgme_page_photo",
-                    "tgme_action_button_new",
-                    "tgme_page_context_link",
-                    "tgme_widget_message",
-                )
-                if any(m in low for m in taken_markers):
-                    return "taken"
-
-                free_by_noindex = 'content="noindex' in low and "tgme_page_title" not in low
-                free_by_icon = "tgme_page_icon" in low and "tgme_page_title" not in low
-                not_found_text = any(x in low for x in (
-                    "this username is not occupied",
-                    "username not found",
-                    "page not found",
-                    "not found",
-                ))
-
-                if free_by_noindex or free_by_icon or not_found_text:
-                    return "free"
-
-                return "unknown"
-
-        except asyncio.TimeoutError:
-            logger.debug(f"[tme] timeout @{u} #{attempt+1}")
-            await asyncio.sleep(0.7 + attempt * 0.5)
-        except Exception as e:
-            logger.debug(f"[tme] error @{u}: {e}")
-            await asyncio.sleep(0.5 + attempt * 0.5)
-
-    return "unknown"
-
-    
-async def quick_check_username_tme(u: str) -> str:
-    """Один быстрый запрос к t.me: free / taken / unknown."""
-    u = (u or "").strip().replace("@", "").lower()
-    if not u or http_session is None:
-        return "unknown"
-
-    try:
-        async with http_session.get(
-            f"https://t.me/{u}",
-            timeout=aiohttp.ClientTimeout(total=3),
-            headers={
-                "User-Agent": random.choice(_TME_USER_AGENTS),
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-                "Cache-Control": "no-cache",
-            },
-            allow_redirects=True,
-        ) as resp:
-            if resp.status in (401, 403):
-                return "taken"
-            if resp.status == 429:
-                return "unknown"
-            if resp.status != 200:
-                return "unknown"
-
-            page = (await resp.text()).lower()
-            taken_markers = (
-                'class="tgme_page_title"',
-                "tgme_page_extra",
-                "tgme_page_photo",
-                "tgme_action_button_new",
-                "tgme_page_context_link",
-                "tgme_widget_message",
-            )
-            if any(m in page for m in taken_markers):
-                return "taken"
-
-            free_markers = (
-                "this username is not occupied",
-                "username not found",
-                "page not found",
-                "tgme_page_icon",
-            )
-            if ('content="noindex' in page and "tgme_page_title" not in page) or any(m in page for m in free_markers):
-                return "free"
-
-            return "unknown"
-    except Exception:
-        return "unknown"
-
-
-async def real_username_free(u: str, uid=None, mode_key: str = "", log_fragment: bool = True) -> bool:
-    """Рабочий фильтр выдачи.
-    Обязательное условие: Fragment = unavailable.
-    t.me и BotAPI используются как блокеры: если явно taken — не выдаём.
-    unknown не ломает поиск, потому что иначе бот снова уходит в 0/5 на сотни секунд.
+    Проверка только через t.me, как задано:
+    GET https://t.me/<username>
+    Если в HTML есть tgme_page_title — занят.
+    Если tgme_page_title нет — свободен.
+    Любая ошибка, таймаут, лимит или не-200 — занят.
     """
     u = (u or "").strip().replace("@", "").lower()
     if not is_valid_telegram_profile_username(u):
-        return False
-    if is_blacklisted(u):
-        return False
-    for bad in INVALID_WORDS:
-        if bad == u or bad in u:
-            return False
+        return "taken"
 
-    fr = await check_fragment(u)
-    if log_fragment:
-        print(f"frag {fr} @{u}", flush=True)
-    if fr != "unavailable":
-        return False
+    if http_session is None:
+        return "taken"
 
-    # Не ждём строгих трёх проверок. Нам важно не пропустить явно занятый username.
-    tme, botapi = await asyncio.gather(
-        quick_check_username_tme(u),
-        check_username_botapi(u),
-        return_exceptions=True,
-    )
+    url = f"https://t.me/{u}"
+    headers = {
+        "User-Agent": random.choice(_TME_USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
 
-    if isinstance(tme, Exception):
-        tme = "unknown"
-    if isinstance(botapi, Exception):
-        botapi = "unknown"
+    try:
+        async with http_session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=7),
+            headers=headers,
+            allow_redirects=True,
+        ) as resp:
+            if resp.status != 200:
+                return "taken"
 
-    if tme == "taken" or botapi == "taken":
-        return False
+            html_text = await resp.text(errors="ignore")
+            low = html_text.lower()
 
-    return True
+            if "tgme_page_title" in low:
+                return "taken"
+
+            return "free"
+
+    except Exception:
+        return "taken"
+
 
 async def is_username_free(u: str, uid=None) -> bool:
-    """Финальный фильтр выдачи username без user-сессий."""
-    return await public_username_status(u, uid) == "free"
+    """True только когда t.me-страница не содержит tgme_page_title."""
+    return await check_username_tme(u) == "free"
 
     
 async def get_rechecked_cached_free(mode, count):
@@ -1171,108 +1013,120 @@ def evaluate_username(u):
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
 async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
-    """Кнопочный поиск без фейковых результатов и без шумных сообщений.
-    Выдаём только username с Fragment=unavailable; t.me/BotAPI блокируют явно занятые.
+    """
+    Точный тихий поиск через GET https://t.me/<username>.
+
+    Правило проверки:
+    - если в HTML есть tgme_page_title -> username занят;
+    - если tgme_page_title нет -> username свободен;
+    - любая ошибка/таймаут/не-200 -> занят.
+
+    Консоль не спамит каждой проверкой. Пишет только:
+    - что взяло из кэша;
+    - что занесло в кэш;
+    - короткий итог, сколько не вошло в кэш/выдачу.
     """
     found = []
     start = time.time()
     attempts = 0
+    last_edit = 0
+    cache_used = 0
+    cache_rejected = 0
+    generated_rejected = 0
+    cached_new = 0
+
     validate_func = SEARCH_MODES.get(mode_key, {}).get("validate", is_valid_username)
+    checked = set()
+    mode_label = "beautiful" if mode_key == "beautiful" else "default"
 
-    print(f"search {mode_key} {count}", flush=True)
+    print(f"search {mode_label} need={count}", flush=True)
 
-    async def add_found(u, source):
-        u = (u or "").strip().replace("@", "").lower()
-        if not u or any(x["username"] == u for x in found):
-            return False
-        found.append({"username": u, "fragment": "unavailable"})
-        save_history(uid, u, mode_name, len(u))
-        print(f"{source} hit @{u} {mode_key}", flush=True)
-        return True
-
-    # 1) Сначала кэш. Он уже должен быть real-checked, но на всякий случай перепроверяем Fragment.
-    cached = await get_cached_free(mode_key, count * 6)
-    for u in cached:
+    # 1) Берём старый кэш, но перед выдачей перепроверяем через t.me.
+    cached = await get_cached_free(mode_key, max(count * 5, 20))
+    for raw in cached:
         if len(found) >= count:
             break
-        u = (u or "").strip().replace("@", "").lower()
-        if not validate_func(u):
+
+        u = (raw or "").strip().replace("@", "").lower()
+        if not validate_func(u) or u in checked:
+            cache_rejected += 1
             continue
+
+        checked.add(u)
         attempts += 1
-        if await real_username_free(u, uid, mode_key, log_fragment=True):
-            await add_found(u, "cache")
+
+        status = await check_username_tme(u)
+        if status == "free":
+            found.append({"username": u, "fragment": "unavailable"})
+            save_history(uid, u, mode_name, len(u))
+            cache_used += 1
+            print(f"cache hit @{u} {mode_label}", flush=True)
         else:
-            print(f"drop @{u} {mode_key}", flush=True)
+            cache_rejected += 1
 
-    if len(found) >= count:
-        elapsed = int(time.time() - start)
-        print(f"done {mode_key} {len(found)}/{count} {elapsed}s", flush=True)
-        return found[:count], {"attempts": attempts, "elapsed": elapsed}
+        await asyncio.sleep(0.08)
 
-    # 2) Live-поиск пачками. Ограничен по времени, чтобы бот не висел по 400 секунд.
-    checked = {item["username"] for item in found}
-    deadline = time.time() + (45 if mode_key == "beautiful" else 35)
-    max_attempts = 900 if mode_key == "beautiful" else 650
-    batch_size = 20 if mode_key == "beautiful" else 16
-    last_ui = 0
+    if cache_rejected:
+        print(f"cache skip {mode_label} {cache_rejected}", flush=True)
 
-    while len(found) < count and attempts < max_attempts and time.time() < deadline:
-        batch = []
-        for _ in range(batch_size * 4):
-            if len(batch) >= batch_size:
-                break
+    # 2) Если кэша не хватило — генерируем и проверяем тем же методом.
+    max_attempts = 10000
+    while len(found) < count and attempts < max_attempts:
+        u = None
+        for _ in range(40):
             c = gen_func()
-            u = (c or "").strip().replace("@", "").lower()
-            if u and u not in checked and u.isalpha() and validate_func(u):
-                checked.add(u)
-                batch.append(u)
+            c = (c or "").lower()
+            if c and c not in checked and c.isalpha() and validate_func(c):
+                u = c
+                break
 
-        if not batch:
+        if not u:
             attempts += 1
+            generated_rejected += 1
             continue
 
-        attempts += len(batch)
+        checked.add(u)
+        attempts += 1
+        status = await check_username_tme(u)
 
-        async def check_one(name):
-            ok = await real_username_free(name, uid, mode_key, log_fragment=True)
-            return name, ok
-
-        results = await asyncio.gather(*(check_one(x) for x in batch), return_exceptions=True)
-        good_for_cache = []
-        for item in results:
-            if len(found) >= count:
-                break
-            if isinstance(item, Exception):
-                continue
-            u, ok = item
-            if ok:
-                await add_found(u, "live")
-                good_for_cache.append(u)
-
-        if good_for_cache:
-            await add_free_cache(good_for_cache, mode_key)
+        if status == "free":
+            found.append({"username": u, "fragment": "unavailable"})
+            save_history(uid, u, mode_name, len(u))
+            await add_free_cache([u], mode_key)
+            cached_new += 1
+            print(f"cache add @{u} {mode_label}", flush=True)
+        else:
+            generated_rejected += 1
 
         now = time.time()
-        if msg and now - last_ui > 4:
-            last_ui = now
-            text = (
-                f"🔍 <b>{mode_name}</b>\n\n"
-                f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
-                f"📊 Проверено: <code>{attempts}</code>\n"
-                f"⏱ <code>{int(now - start)}с</code>"
-            )
+        if msg and now - last_edit > 4:
+            last_edit = now
+            pct = min(len(found) / max(count, 1), 1.0)
+            filled = int(pct * 10)
+            bar = "█" * filled + "░" * (10 - filled)
             try:
-                await edit_msg(msg, text)
+                await edit_msg(
+                    msg,
+                    f"🔍 <b>{mode_name}</b>\n\n"
+                    f"[{bar}] {int(pct * 100)}%\n\n"
+                    f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                    f"📊 Проверено: <code>{attempts}</code>\n"
+                    f"⏱ <code>{int(now - start)}с</code>"
+                )
             except Exception:
                 pass
 
-        if attempts % 160 < batch_size:
-            print(f"checked {attempts} {mode_key} found {len(found)}/{count}", flush=True)
-
-        await asyncio.sleep(0.03)
+        await asyncio.sleep(0.12)
 
     elapsed = int(time.time() - start)
-    print(f"done {mode_key} {len(found)}/{count} {elapsed}s", flush=True)
+    if generated_rejected:
+        print(f"cache noadd {mode_label} {generated_rejected}", flush=True)
+    print(
+        f"done {mode_label} found={len(found)}/{count} checked={attempts} "
+        f"cache_hit={cache_used} cache_add={cached_new} {elapsed}s",
+        flush=True,
+    )
+
     return found, {"attempts": attempts, "elapsed": elapsed}
 
 # ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
@@ -3066,9 +2920,7 @@ async def register_handlers(dp: Dispatcher):
             user_search_cooldown[uid]=time.time()
         try:
             count = get_search_count(uid)
-            print(f"search start {mode} {count}", flush=True)
             found, stats = await do_search(count, mi["func"], cb.message, mi["name"], uid, mode)
-            print(f"search finish {mode} {len(found)}", flush=True)
             text = format_results(found, stats, mi["name"])
             kb = InlineKeyboardBuilder()
             kb.button(text="🔙 Меню", callback_data="cmd_menu")
@@ -5715,11 +5567,19 @@ async def daily_report_loop():
         await asyncio.sleep(60)
 
 async def cache_warmer_check_username(u: str) -> bool:
-    return await real_username_free(u, None, "cache", log_fragment=True)
+    """Кэш наполняется только username, которые свободны по t.me/tgme_page_title."""
+    u = (u or "").strip().replace("@", "").lower()
+    if not is_valid_telegram_profile_username(u):
+        return False
+    if is_blacklisted(u):
+        return False
+    return await check_username_tme(u) == "free"
 
 
 async def free_cache_warmer_loop():
+    """Тихое фоновое наполнение кэша без потока строк в консоль."""
     targets = {"default": 120, "beautiful": 80}
+    await asyncio.sleep(2)
     print("cache start", flush=True)
 
     while True:
@@ -5737,54 +5597,43 @@ async def free_cache_warmer_loop():
                 validate_func = mode.get("validate", is_valid_username)
                 checked = set()
                 added = []
-                max_attempts = 600 if mode_key == "beautiful" else 400
-                batch_size = 10
                 attempts = 0
+                max_attempts = 2500
 
                 while current + len(added) < target and attempts < max_attempts:
-                    batch = []
-                    for _ in range(batch_size * 3):
-                        if len(batch) >= batch_size:
-                            break
+                    u = None
+                    for _ in range(40):
                         c = gen_func()
-                        u = (c or "").strip().replace("@", "").lower()
-                        if u and u not in checked and u.isalpha() and validate_func(u):
-                            checked.add(u)
-                            batch.append(u)
-
-                    if not batch:
+                        c = (c or "").lower()
+                        if c and c not in checked and c.isalpha() and validate_func(c):
+                            u = c
+                            break
+                    if not u:
                         attempts += 1
                         continue
 
-                    attempts += len(batch)
-
-                    async def check_one(name):
-                        ok = await cache_warmer_check_username(name)
-                        return name, ok
-
-                    results = await asyncio.gather(*(check_one(x) for x in batch), return_exceptions=True)
-                    for item in results:
-                        if isinstance(item, Exception):
-                            continue
-                        u, ok = item
-                        if ok:
+                    checked.add(u)
+                    attempts += 1
+                    try:
+                        if await cache_warmer_check_username(u):
                             await add_free_cache([u], mode_key)
                             added.append(u)
-                            total_now = await get_free_cache_count(mode_key)
-                            print(f"cache add @{u} {mode_key} total={total_now}", flush=True)
-                            if current + len(added) >= target:
-                                break
+                            # Не пишем каждую проверку. Только факты записи и итог.
+                            print(f"cache add @{u} {mode_key}", flush=True)
+                    except Exception:
+                        pass
 
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.12)
 
                 if added:
-                    print(f"cache done {mode_key} +{len(added)} total={await get_free_cache_count(mode_key)}", flush=True)
+                    total_now = await get_free_cache_count(mode_key)
+                    skipped = max(attempts - len(added), 0)
+                    print(f"cache done {mode_key} +{len(added)} total={total_now} noadd={skipped}", flush=True)
 
         except Exception as e:
-            print(f"cache error {e}", flush=True)
             logger.error(f"Cache warmer: {e}")
 
-        await asyncio.sleep(10)
+        await asyncio.sleep(15)
 
 # ═══════════════════════ SYSTEMD ═══════════════════════
 
@@ -5820,8 +5669,8 @@ async def main():
     logger.info("━"*30)
     logger.info(f"🚀 @{bot_info.username} v25.0")
     print("bot active", flush=True)
-    logger.info("bot active")
-    logger.info("🔄 Режим проверки: public_strict без user-сессий")
+    logger.info("BOT_TME_CACHE_LOGS_ACTIVE")
+    logger.info("🔄 Режим проверки: GET t.me + tgme_page_title")
     logger.info("━"*30)
     asyncio.create_task(reminder_loop())
     asyncio.create_task(auto_renew_loop())
