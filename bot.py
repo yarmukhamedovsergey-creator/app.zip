@@ -2468,6 +2468,7 @@ def build_menu(uid):
     if is_button_enabled("referral"):
         kb.button(text="👥 Рефералы", callback_data="cmd_referral")
     kb.button(text="🏪 Маркет", callback_data="cmd_market")
+    kb.button(text="📋 Документы бота", callback_data="cmd_documents")
     if is_button_enabled("support"):
         kb.button(text="💬 Поддержка", url=f"https://t.me/{ADMIN_CONTACT}")
     if uid in ADMIN_IDS:
@@ -2920,6 +2921,27 @@ async def register_handlers(dp: Dispatcher):
         if ns: t,k = build_sub_kb(ns)
         else: t,k = build_menu(uid); t = with_main_branding(t)
         await edit_to_photo(cb.message, t, k)
+
+    @dp.callback_query(F.data == "cmd_documents")
+    async def cb_documents(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        if is_banned(uid): return
+        kb = InlineKeyboardBuilder()
+        kb.button(
+            text="🔐 Политика конфиденциальности",
+            url="https://telegra.ph/Politika-konfidencialnosti-04-01-26"
+        )
+        kb.button(
+            text="📄 Пользовательское соглашение",
+            url="https://telegra.ph/Polzovatelskoe-soglashenie-04-01-19"
+        )
+        kb.button(text="🔙 Главное меню", callback_data="cmd_menu")
+        kb.adjust(1)
+        await edit_msg(
+            cb.message,
+            "📋 <b>Документы бота</b>\n\nВыберите нужный документ:",
+            kb.as_markup()
+        )
 
     
     # ═══ CALLBACKS: Поиск ═══
