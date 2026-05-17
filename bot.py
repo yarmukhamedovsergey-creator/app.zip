@@ -51,15 +51,8 @@ MAIN_TOKEN = "8325751391:AAFGB3KV34DiOp_Z0HXg5nErgxwOk6XR3C4"
 ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "emeuw"
 
-ACCOUNTS = [
-    {"api_id": 35094180, "api_hash": "8732d865063dadaf1cba0ace1ef87de9", "phone": "+959790770236"},
-    {"api_id": 34992704, "api_hash": "d54449feb7289284c9e4598911d08068", "phone": "+959973228130"},
-    {"api_id": 36284654, "api_hash": "1073109c2e1085dd601ad289a9a65562", "phone": "+67077454464"},
-    {"api_id": 34792667, "api_hash": "fc2eb570576ddc72819a5ba22f8c0f5d", "phone": "+959980062721"},
-    {"api_id": 36347986, "api_hash": "2ef08b03748cdf3b688efc18a1e540b7", "phone": "+13347793071"},
-    {"api_id": 36037729, "api_hash": "c48c8326dfb577fd4b8d503cb7dce2a4", "phone": "+19316345068"},
-    {"api_id": 36360664, "api_hash": "facb9902e2eafe009a2fb43c901c2328", "phone": "+959694410210"},
-]
+ACCOUNTS = []  # режим без user-сессий
+
 
 FREE_SEARCHES = 2
 FREE_COUNT = 2
@@ -251,10 +244,8 @@ DEFAULT_CONFIG = {
     "text_profile_header": "", "text_shop_header": "",
     "btn_tiktok": True, "btn_roulette": False, "btn_monitor": True,
     "btn_shop": True, "btn_support": True, "btn_referral": True,
-    "mode_default": True, "mode_beautiful": True, "mode_meaningful": True,
-    "mode_telegram": True,
+    "mode_default": True, "mode_beautiful": True,
     "mode_default_premium": False, "mode_beautiful_premium": True,
-    "mode_meaningful_premium": True, "mode_telegram_premium": True,
     "prices": {}, "daily_report": True, "daily_report_hour": 23,
     "notify_purchases": True, "notify_milestones": True,
     "checker_mode": "botapi", "cache_limit": 5000,
@@ -337,10 +328,11 @@ def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
 
 def get_checker_mode():
-    return globals().get("CHECKER_MODE", "sessions")
+    # Проверка username работает без Telethon user-сессий.
+    return "botapi"
 
 def is_sessions_checker():
-    return get_checker_mode() == "sessions"
+    return False
 
 # ═══════════════════════ RATE LIMITER (ОТКЛЮЧЁН) ═══════════════════════
 
@@ -591,32 +583,56 @@ class AccountPool:
         except: self._err(i); return "error",i
 
     async def _botapi(self, u):
-        """Проверка через t.me GET запрос"""
+        """Проверка через t.me GET запрос.
+        Возвращает taken / not_found / unknown, чтобы сетевые ошибки не считались занятостью.
+        """
         result = await check_username_tme(u)
         if result == "free":
             return "not_found"
-        return "taken"
+        if result == "taken":
+            return "taken"
+        return "unknown"
 
     async def check(self, u, uid=None):
         if not self.has_sessions():
-            r=await self._botapi(u); return "taken" if r=="taken" else "maybe_free"
-        b=await self._botapi(u)
-        if b=="taken": self.caught_by_botapi+=1; return "taken"
-        r,_=await self._resolve(u,uid)
-        if r in ("taken","invalid"): return "taken"
-        if r in ("flood","no_session","error"): return "skip"
+            r = await self._botapi(u)
+            if r == "taken":
+                return "taken"
+            if r == "not_found":
+                return "maybe_free"
+            return "skip"
+        b = await self._botapi(u)
+        if b == "taken":
+            self.caught_by_botapi += 1
+            return "taken"
+        if b == "unknown":
+            return "skip"
+        r, _ = await self._resolve(u, uid)
+        if r in ("taken", "invalid"):
+            return "taken"
+        if r in ("flood", "no_session", "error"):
+            return "skip"
         return "maybe_free"
 
     async def strong_check(self, u, uid=None):
+        """Строгая проверка: username должен быть доступен именно для установки в профиль.
+        Без рабочей user-сессии Telethon такой статус нельзя подтвердить надёжно.
+        """
         if not self.has_sessions():
-            r=await self._botapi(u); return "taken" if r=="taken" else "free"
-        b=await self._botapi(u)
-        if b=="taken": self.caught_by_botapi+=1; return "taken"
-        await asyncio.sleep(random.uniform(0.5,1.5))
-        r,_=await self._check_avail(u,uid)
-        if r=="taken": return "taken"
-        if r in ("flood","no_session","error"): return "skip"
-        return "free"
+            return "skip"
+        b = await self._botapi(u)
+        if b == "taken":
+            self.caught_by_botapi += 1
+            return "taken"
+        if b == "unknown":
+            return "skip"
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        r, _ = await self._check_avail(u, uid)
+        if r == "free":
+            return "free"
+        if r in ("taken", "invalid"):
+            return "taken"
+        return "skip"
 
     def add_user(self, uid):
         for i in range(len(self.clients)):
@@ -847,17 +863,9 @@ async def do_word_search(word, count, msg, uid):
 
             attempts += 1
 
-            tg = await check_username_tme(u)
-
-            if tg == "free":
+            if await is_username_free(u, uid):
                 found.append({"username": u, "fragment": "unavailable"})
                 save_history(uid, u, f"По слову: {word}", len(u))
-            elif tg == "unknown":
-                await asyncio.sleep(0.5)
-                tg2 = await check_username_tme(u)
-                if tg2 == "free":
-                    found.append({"username": u, "fragment": "unavailable"})
-                    save_history(uid, u, f"По слову: {word}", len(u))
 
             await asyncio.sleep(0.3)
 
@@ -918,20 +926,8 @@ def is_valid_username(u):
     return True
 
 def is_valid_username_word(u):
-    """Валидация для поиска по слову (5-32 символов, буквы+цифры+_)"""
-    if not u or len(u) < 5 or len(u) > 32:
-        return False
-    if not re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', u):
-        return False
-    if "__" in u or u.endswith("_"):
-        return False
-    ul = u.lower()
-    for w in INVALID_WORDS:
-        if w == ul:
-            return False
-    if is_blacklisted(u):
-        return False
-    return True
+    """Оставлено для совместимости: теперь допускаются только 5/6 латинских букв, без цифр и подчёркиваний."""
+    return is_valid_username(u)
 
 SEARCH_MODES = {
     "default": {
@@ -967,16 +963,32 @@ async def fast_check_username(u: str) -> str:
     """Быстрая проверка через t.me (одна попытка)"""
     return await check_username_tme(u)
 
+def is_valid_telegram_profile_username(u: str) -> bool:
+    """Разрешены только буквенные username из рабочих режимов: 5 или 6 латинских букв."""
+    if not u:
+        return False
+    u = u.strip().replace("@", "")
+    if len(u) not in (5, 6):
+        return False
+    if not re.match(r"^[a-zA-Z]+$", u):
+        return False
+    return True
+
 async def check_username(u: str) -> str:
     """
-    Надёжная проверка через t.me с ретраем при unknown.
-    Возвращает: 'free' | 'taken' | 'unknown'
+    Статус username в режиме без user-сессий:
+    free — t.me свободен, Fragment не держит username, строка состоит только из 5 или 6 латинских букв;
+    taken — username занят, зарезервирован, выставлен/продан на Fragment или не проходит локальные правила;
+    unknown — временно нельзя подтвердить статус.
     """
-    result = await check_username_tme(u)
-    if result != "unknown":
-        return result
-    await asyncio.sleep(1.5)
-    return await check_username_tme(u)
+    u = (u or "").strip().replace("@", "").lower()
+    if not is_valid_telegram_profile_username(u):
+        return "taken"
+    try:
+        return "free" if await is_username_free(u) else "taken"
+    except Exception as e:
+        logger.debug(f"[check_username] @{u}: {e}")
+        return "unknown"
         
 async def check_fragment(u):
     now = time.time()
@@ -991,8 +1003,8 @@ async def check_fragment(u):
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
         ) as resp:
             if resp.status != 200:
-                logger.info(f"[fragment] @{u} HTTP {resp.status} → unavailable")
-                return "unavailable"
+                logger.info(f"[fragment] @{u} HTTP {resp.status} → unknown")
+                return "unknown"
             
             text = await resp.text()
             
@@ -1019,8 +1031,8 @@ async def check_fragment(u):
             return r
             
     except Exception as e:
-        logger.info(f"[fragment] @{u} error: {e} → unavailable")
-        return "unavailable"
+        logger.info(f"[fragment] @{u} error: {e} → unknown")
+        return "unknown"
 
 _TME_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -1096,44 +1108,48 @@ async def check_username_tme(u: str) -> str:
 
     return "unknown"
     
-async def is_username_free(u: str) -> bool:
+async def is_username_free(u: str, uid=None) -> bool:
     """
-    Проверка свободен ли юзернейм (без сессий, только t.me):
-    1. Базовая валидация
-    2. Одна проверка t.me (с ретраем при unknown внутри check_username_tme)
-    3. Fragment — отсеиваем sold/auction/available; при ошибке пропускаем
+    Строгая проверка без Telethon user-сессий.
+    Username считается пригодным к выдаче только если одновременно выполнены условия:
+      1) строка состоит только из латинских букв;
+      2) длина соответствует одному из режимов: 5 букв для «Красивые» или 6 букв для «Дефолт»;
+      3) t.me не показывает существующий аккаунт/канал/бот;
+      4) Fragment не показывает sold / auction / available / reserved.
+    При неизвестном статусе возвращается False, чтобы не отдавать пользователю сомнительный username.
     """
-    if not is_valid_username(u):
+    u = (u or "").strip().replace("@", "").lower()
+    if not is_valid_telegram_profile_username(u):
         return False
-
-    if "__" in u or u.startswith("_") or u.endswith("_"):
+    if is_blacklisted(u):
         return False
+    for w in INVALID_WORDS:
+        if w == u or w in u:
+            return False
 
     result = await check_username_tme(u)
-    if result == "taken":
-        return False
     if result == "unknown":
         await asyncio.sleep(1.0)
         result = await check_username_tme(u)
-        if result != "free":
-            return False
+    if result != "free":
+        logger.info(f"[check] @{u} t.me={result} → skip")
+        return False
 
-    try:
-        fr = await check_fragment(u)
-        if fr in ("sold", "in auction", "available", "reserved"):
-            logger.info(f"[check] @{u} Fragment: {fr} → skip")
-            return False
-    except Exception as e:
-        logger.debug(f"[check] Fragment error @{u}: {e} → пропускаем")
+    fr = await check_fragment(u)
+    if fr != "unavailable":
+        logger.info(f"[check] @{u} Fragment={fr} → skip")
+        return False
 
     return True
     
 async def get_rechecked_cached_free(mode, count):
-    cached = get_cached_free(mode, max(count * 3, count))
+    cached = await get_cached_free(mode, max(count * 3, count))
+    validate_func = SEARCH_MODES.get(mode, {}).get("validate", is_valid_username)
     found = []
     rejected = []
     for u in cached:
-        if await is_username_free(u):
+        u = (u or "").strip().replace("@", "").lower()
+        if validate_func(u) and await is_username_free(u):
             found.append({"username": u, "fragment": "unavailable"})
             if len(found) >= count:
                 break
@@ -1185,26 +1201,21 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         {}
     ).get("validate", is_valid_username)
 
-    # Шаг 1: берём из кэша и перепроверяем через t.me
+    # Шаг 1: берём из кэша и перепроверяем полной строгой проверкой
     cached = await get_cached_free(mode_key, count * 4)
 
     for u in cached:
         if len(found) >= count:
             break
 
-        tg = await check_username_tme(u)
+        u = (u or "").strip().replace("@", "").lower()
+        if not validate_func(u):
+            logger.info(f"[search] cache stale ❌ @{u} - wrong format for {mode_key}")
+            continue
 
-        if tg == "free":
+        if await is_username_free(u, uid):
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
-        elif tg == "unknown":
-            await asyncio.sleep(0.5)
-            tg2 = await check_username_tme(u)
-            if tg2 == "free":
-                found.append({"username": u, "fragment": "unavailable"})
-                save_history(uid, u, mode_name, len(u))
-            else:
-                logger.info(f"[search] cache stale ❌ @{u}")
         else:
             logger.info(f"[search] cache stale ❌ @{u}")
 
@@ -1241,33 +1252,14 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
 
         try:
-            tg = await check_username_tme(u)
+            if not await is_username_free(u, uid):
+                await asyncio.sleep(0.2)
+                continue
         except Exception as e:
             logger.error(f"check error @{u}: {e}")
             continue
 
-        if tg == "taken":
-            await asyncio.sleep(0.15)
-            continue
-
-        if tg == "unknown":
-            await asyncio.sleep(0.8)
-            tg = await check_username_tme(u)
-            if tg != "free":
-                continue
-
-        # t.me говорит free — проверяем fragment
-        fr_status = "unavailable"
-        try:
-            fr_status = await check_fragment(u)
-            if fr_status in ("sold", "in auction", "available", "reserved"):
-                logger.info(f"[search] @{u} fragment={fr_status} → skip")
-                await asyncio.sleep(0.2)
-                continue
-        except:
-            pass
-
-        found.append({"username": u, "fragment": fr_status})
+        found.append({"username": u, "fragment": "unavailable"})
         save_history(uid, u, mode_name, len(u))
 
         now = time.time()
@@ -2514,7 +2506,6 @@ def build_menu(uid):
     kb = InlineKeyboardBuilder()
     kb.button(text="🔍 Поиск", callback_data="cmd_search")
     kb.button(text="👤 Профиль", callback_data="cmd_profile")
-    kb.button(text="🔧 Утилиты", callback_data="cmd_utils")
     kb.button(text="🏪 Магазин", callback_data="cmd_shop")
     if is_button_enabled("referral"):
         kb.button(text="👥 Рефералы", callback_data="cmd_referral")
@@ -2922,8 +2913,6 @@ async def register_handlers(dp: Dispatcher):
             f"а самое главное свободные 5-буквенные юзернеймы "
             f"для себя или продажи ⚡\n\n"
             f"🔍 <b>Поиск</b> — найди свободный юзернейм\n"
-            f"📊 <b>Утилиты</b> — проверка и оценка\n"
-            f"👁 <b>Мониторинг</b> — следи за юзами\n\n"
             f"🎁 У тебя <b>{FREE_SEARCHES}</b> бесплатных поиска!")
         try:
             photo = FSInputFile(MENU_IMAGE)
@@ -2948,8 +2937,6 @@ async def register_handlers(dp: Dispatcher):
             f"and most importantly free 5-letter usernames "
             f"for yourself or for sale ⚡\n\n"
             f"🔍 <b>Search</b> — find free username\n"
-            f"📊 <b>Utilities</b> — check and evaluate\n"
-            f"👁 <b>Monitoring</b> — track usernames\n\n"
             f"🎁 You have <b>{FREE_SEARCHES}</b> free searches!")
         try:
             photo = FSInputFile(MENU_IMAGE)
@@ -3116,7 +3103,7 @@ async def register_handlers(dp: Dispatcher):
         use_search(uid)
         log_action(uid,"search",mode)
 
-    # ═══ CALLBACKS: Оценка / Утилиты ═══
+    # ═══ CALLBACKS: Оценка ═══
     
     @dp.callback_query(F.data == "cmd_evaluate")
     async def cb_eval(cb: CallbackQuery):
@@ -3134,7 +3121,6 @@ async def register_handlers(dp: Dispatcher):
         ev = evaluate_username(un)
         fac = "\n".join("  "+f for f in ev["factors"]) or "  —"
         kb = InlineKeyboardBuilder()
-        if tg=="free": kb.button(text="👁 Мониторинг", callback_data=f"mon_add_{un}")
         kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
         text = (f"📊 <b>@{un}</b>\n\n📱 {tgs}\n💎 {frs}\n\n"
                 f"🏷 <b>{ev['rarity']}</b> | 💰 <b>{ev['price']}</b>\n"
@@ -3142,69 +3128,6 @@ async def register_handlers(dp: Dispatcher):
                 f"📱 <a href='https://t.me/{un}'>Telegram</a> · "
                 f"💎 <a href='https://fragment.com/username/{un}'>Fragment</a>")
         await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "cmd_utils")
-    async def cb_utils(cb: CallbackQuery):
-        await answer_cb(cb); kb = InlineKeyboardBuilder()
-        kb.button(text="🔍 Проверка", callback_data="util_check")
-        kb.button(text="📋 Массовая", callback_data="util_mass")
-        kb.button(text="📜 История", callback_data="util_hist")
-        if is_button_enabled("monitor"): kb.button(text="👁 Мониторинг", callback_data="cmd_monitors")
-        kb.button(text="📥 Экспорт", callback_data="util_export")
-        kb.button(text="🗑 Удалить по шаблону", callback_data="util_delete_pattern")
-        kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(2)
-        await edit_msg(cb.message, "🔧 <b>Утилиты</b>", kb.as_markup())
-    
-    @dp.callback_query(F.data == "util_check")
-    async def cb_util_check(cb: CallbackQuery):
-        await answer_cb(cb)
-        user_states[cb.from_user.id] = {"action": "quick_check"}
-        kb = InlineKeyboardBuilder()
-        kb.button(text="❌", callback_data="cmd_utils")
-        await edit_msg(cb.message, "🔍 <b>Введите юзернейм для проверки:</b>", kb.as_markup())
-
-    @dp.callback_query(F.data == "util_mass")
-    async def cb_util_mass(cb: CallbackQuery):
-        await answer_cb(cb)
-        user_states[cb.from_user.id] = {"action": "mass_check"}
-        kb = InlineKeyboardBuilder()
-        kb.button(text="❌", callback_data="cmd_utils")
-        await edit_msg(cb.message,
-            "📋 <b>Массовая проверка</b>\n\n"
-            "Отправьте юзернеймы через пробел или по одному на строку\n"
-            "(макс 20):", kb.as_markup())
-    
-    @dp.callback_query(F.data == "util_hist")
-    async def cb_uh(cb: CallbackQuery):
-        await answer_cb(cb); uid = cb.from_user.id; hist = get_history(uid)
-        kb = InlineKeyboardBuilder()
-        text = f"📜 <b>({len(hist)})</b>\n\n" if hist else "📜 Пусто"
-        for h in hist[:15]: text += f"• <code>@{h[0]}</code> {h[2]} {h[1]}\n"
-        kb.button(text="📥 TXT", callback_data="util_export")
-        kb.button(text="🗑 Удалить", callback_data="util_delete_pattern")
-        kb.button(text="🔙", callback_data="cmd_utils"); kb.adjust(2,1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "util_export")
-    async def cb_ue(cb: CallbackQuery):
-        await answer_cb(cb); uid = cb.from_user.id; hist = get_history(uid,100)
-        if not hist: return
-        content = "ИСТОРИЯ\n\n"
-        for i,h in enumerate(hist,1): content += f"{i}. @{h[0]} | {h[2]} | {h[1]}\n"
-        await bot.send_document(uid, BufferedInputFile(content.encode(), filename=f"history_{uid}.txt"), caption="📥")
-    
-    # ═══ НОВОЕ: Удаление по шаблону ═══
-    @dp.callback_query(F.data == "util_delete_pattern")
-    async def cb_del_pat(cb: CallbackQuery):
-        await answer_cb(cb); user_states[cb.from_user.id] = {"action":"delete_pattern"}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_utils")
-        await edit_msg(cb.message,
-            "🗑 <b>Удаление по шаблону</b>\n\n"
-            "Введите часть юзернейма для удаления из истории:\n\n"
-            "Примеры:\n"
-            "• <code>craft</code> — удалит все с 'craft'\n"
-            "• <code>_pro</code> — удалит все с '_pro'\n"
-            "• <code>tg</code> — удалит все с 'tg'", kb.as_markup())
 
     # ═══ МАРКЕТПЛЕЙС ОТКЛЮЧЁН ═══
 
@@ -3217,51 +3140,6 @@ async def register_handlers(dp: Dispatcher):
     @dp.callback_query(F.data.startswith("market_"))
     async def cb_market_callbacks_disabled(cb: CallbackQuery):
         await answer_cb(cb, "Раздел отключён", show_alert=True)
-
-    # ═══════════════════════ CALLBACKS: Мониторинг ═══════════════════════
-
-    @dp.callback_query(F.data == "cmd_monitors")
-    async def cb_monitors(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        mons = get_user_monitors(uid); limit = get_monitor_limit(uid)
-        kb = InlineKeyboardBuilder()
-        text = f"👁 <b>Мониторинг</b>\n\n📊 <code>{len(mons)}/{limit}</code>\n\n"
-        if mons:
-            for m in mons:
-                si = "✅" if m["last_status"]=="free" else "❌"
-                text += f"{si} <code>@{m['username']}</code> до {m['expires'][:10]}\n"
-                kb.button(text=f"❌ {m['username']}", callback_data=f"mon_del_{m['id']}")
-        else: text += "<i>Пусто</i>\n"
-        text += "\n💡 Проверяет каждые 30 мин"
-        kb.button(text="➕ Добавить", callback_data="mon_add_new")
-        kb.button(text="🔙", callback_data="cmd_utils"); kb.adjust(2,1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "mon_add_new")
-    async def cb_mon_new(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        if get_monitor_count(uid)>=get_monitor_limit(uid):
-            kb = InlineKeyboardBuilder(); kb.button(text="🏪", callback_data="cmd_shop"); kb.button(text="🔙", callback_data="cmd_monitors"); kb.adjust(1)
-            await edit_msg(cb.message, "❌ Лимит слотов", kb.as_markup()); return
-        user_states[uid] = {"action":"monitor_add"}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="cmd_monitors")
-        await edit_msg(cb.message, "👁 <b>Введите занятый юзернейм:</b>", kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("mon_add_"))
-    async def cb_mon_add(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        un = cb.data[8:]
-        if un=="new": return
-        if get_monitor_count(uid)>=get_monitor_limit(uid):
-            await answer_cb(cb,"❌ Лимит",show_alert=True); return
-        mid = add_monitor(uid,un); log_action(uid,"monitor_add",un)
-        kb = InlineKeyboardBuilder(); kb.button(text="👁 Мои", callback_data="cmd_monitors"); kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(cb.message, f"✅ @{un} на мониторинге", kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("mon_del_"))
-    async def cb_mon_del(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        remove_monitor(int(cb.data[8:]),uid); await cb_monitors(cb)
 
 
     # ═══════════════════════ CALLBACKS: Магазин ═══════════════════════
@@ -3302,7 +3180,6 @@ async def register_handlers(dp: Dispatcher):
                 f"• {PREMIUM_SEARCHES_LIMIT} поисков/день\n"
                 f"• Все режимы\n"
                 f"• Шаблон + Похожие\n"
-                f"• Мониторинг {MONITOR_MAX_PREMIUM} юзов\n"
                 f"<b>Цены:</b>\n\n")
 
         for p in PRICES.values():
@@ -3587,7 +3464,6 @@ async def register_handlers(dp: Dispatcher):
 
         cnt = get_search_count(uid); mx = get_max_searches(uid)
         bal = u.get("balance",0.0); uname = u.get("uname","")
-        mons = get_monitor_count(uid); mon_limit = get_monitor_limit(uid)
         custom_header = config.get("text_profile_header","")
 
         text = f"👤 <b>Профиль</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -3597,11 +3473,9 @@ async def register_handlers(dp: Dispatcher):
                  f"🎯 {cnt} юзов/поиск | 🔄 {mx} осталось\n"
                  f"📊 Всего: <code>{u.get('searches',0)}</code>\n"
                  f"👥 Рефералов: <code>{u.get('ref_count',0)}</code>\n"
-                 f"👁 Мониторинг: <code>{mons}/{mon_limit}</code>\n"
                  f"💰 Баланс: <code>{bal:.1f}</code> ⭐ (<code>{bal*STAR_TO_RUB:.0f}₽</code>)")
 
         kb = InlineKeyboardBuilder()
-        kb.button(text="📜 История", callback_data="util_hist")
         kb.button(text="🔑 Ключ", callback_data="cmd_activate")
         if bal>=MIN_WITHDRAW: kb.button(text=f"💸 Вывести ({bal:.1f}⭐)", callback_data="cmd_withdraw")
         kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
@@ -4286,7 +4160,6 @@ async def register_handlers(dp: Dispatcher):
             frs={"fragment":"💎","sold":"✅ Продан","unavailable":"—"}.get(fr,"❓")
             ev=evaluate_username(un); fac="\n".join("  "+f for f in ev["factors"]) or "  —"
             kb=InlineKeyboardBuilder()
-            if tg=="free": kb.button(text="👁 Мониторинг",callback_data=f"mon_add_{un}")
             kb.button(text="📊 Ещё",callback_data="cmd_evaluate"); kb.button(text="🔙",callback_data="cmd_menu"); kb.adjust(1)
             try: await wm.delete()
             except: pass
@@ -4296,41 +4169,6 @@ async def register_handlers(dp: Dispatcher):
                     f"📱 <a href='https://t.me/{un}'>Telegram</a> · "
                     f"💎 <a href='https://fragment.com/username/{un}'>Fragment</a>")
             await msg.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML", disable_web_page_preview=True); return
-
-        if action=="quick_check":
-            user_states.pop(uid,None); un=msg.text.strip().replace("@","").lower()
-            if not validate_username(un): await msg.answer("❌"); return
-            wm=await msg.answer("⏳..."); tg=await check_username(un)
-            st={"free":"✅ Свободен!","taken":"❌ Занят","error":"⚠️"}.get(tg,"❓")
-            kb=InlineKeyboardBuilder()
-            if tg=="free": kb.button(text="👁 Мониторинг",callback_data=f"mon_add_{un}")
-            kb.button(text="🔍 Ещё",callback_data="util_check"); kb.button(text="🔙",callback_data="cmd_menu"); kb.adjust(1)
-            try: await wm.delete()
-            except: pass
-            text = (f"🔍 <b>@{un}</b> — {st}\n\n"
-                    f"📱 <a href='https://t.me/{un}'>Telegram</a> · "
-                    f"💎 <a href='https://fragment.com/username/{un}'>Fragment</a>")
-            await msg.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML", disable_web_page_preview=True); return
-
-        if action=="mass_check":
-            user_states.pop(uid,None)
-            names=[n.strip().replace("@","").lower() for n in msg.text.split("\n") if validate_username(n.strip().replace("@","").lower())][:20]
-            if not names: await msg.answer("❌"); return
-            wm=await msg.answer(f"⏳ {len(names)}...")
-            results=[]
-            for n in names: r=await check_username(n); results.append(r); await asyncio.sleep(0.4)
-            fc=sum(1 for r in results if r=="free")
-            text=f"📋 <b>({len(names)})</b> ✅{fc}\n\n"
-            for i,r in enumerate(results):
-                icon={"free":"✅","taken":"❌","unknown":"❓"}.get(r,"⚠️")
-                text+=f"{icon} <code>@{names[i]}</code>"
-                if r=="free":
-                    text+=f" <a href='https://t.me/{names[i]}'>📱</a> <a href='https://fragment.com/username/{names[i]}'>💎</a>"
-                text+="\n"
-            kb=InlineKeyboardBuilder(); kb.button(text="📋 Ещё",callback_data="util_mass"); kb.button(text="🔙",callback_data="cmd_menu"); kb.adjust(1)
-            try: await wm.delete()
-            except: pass
-            await msg.answer(text,reply_markup=kb.as_markup(),parse_mode="HTML",disable_web_page_preview=True); return
 
         # ═══ МАРКЕТПЛЕЙС ТЕКСТОВЫЕ ХЕНДЛЕРЫ ═══
         if action=="msell_title":
@@ -4459,22 +4297,6 @@ async def register_handlers(dp: Dispatcher):
                 parse_mode="HTML"
             )
             return
-
-        if action=="monitor_add":
-            user_states.pop(uid,None); un=msg.text.strip().replace("@","").lower()
-            if not validate_username(un): await msg.answer("❌"); return
-            if get_monitor_count(uid)>=get_monitor_limit(uid): await msg.answer("❌ Лимит"); return
-            mid=add_monitor(uid,un); log_action(uid,"monitor_add",un)
-            await msg.answer(f"✅ @{un} на мониторинге"); return
-
-        # ═══ НОВОЕ: Удаление по шаблону ═══
-        if action=="delete_pattern":
-            user_states.pop(uid,None); pattern=msg.text.strip().lower().replace("@","")
-            if len(pattern)<2: await msg.answer("❌ Минимум 2 символа"); return
-            deleted = delete_history_pattern(uid, pattern)
-            kb=InlineKeyboardBuilder(); kb.button(text="📜 История",callback_data="util_hist"); kb.button(text="🔙",callback_data="cmd_menu"); kb.adjust(1)
-            await msg.answer(f"🗑 Удалено <code>{deleted}</code> записей по шаблону <code>{pattern}</code>",
-                             reply_markup=kb.as_markup(), parse_mode="HTML"); return
 
         if action=="withdraw_amount":
             user_states.pop(uid,None)
@@ -5502,7 +5324,7 @@ async def register_handlers(dp: Dispatcher):
     async def cb_ctl_btns(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb); config=load_bot_config()
-        btns={"tiktok":"🎁 TikTok","roulette":"🎰 Рулетка","monitor":"👁 Мониторинг","shop":"🏪 Магазин","support":"🤖 Донат","referral":"👥 Рефералы"}
+        btns={"tiktok":"🎁 TikTok","roulette":"🎰 Рулетка","shop":"🏪 Магазин","support":"🤖 Донат","referral":"👥 Рефералы"}
         text="🔘 <b>Кнопки</b>\n\n"; kb=InlineKeyboardBuilder()
         for k,n in btns.items():
             on=config.get(f"btn_{k}",True); icon="✅" if on else "❌"
@@ -5942,7 +5764,6 @@ async def monitor_loop():
                             update_monitor_status(mon["id"], "free")
                             kb = InlineKeyboardBuilder()
                             kb.button(text="📊 Оценить", callback_data=f"eval_{mon['username']}")
-                            kb.button(text="👁 Мониторинг", callback_data="cmd_monitors")
                             kb.adjust(1)
                             try:
                                 await bot.send_message(mon["uid"],
@@ -6087,19 +5908,17 @@ async def main():
         for k,v in config["prices"].items():
             if k in PRICES: PRICES[k]["stars"]=v
     bot_info=await bot.get_me(); http_session=aiohttp.ClientSession()
-    await pool.init(ACCOUNTS); ps=pool.stats()
+    # User-сессии Telethon не подключаются: проверка работает только через t.me + Fragment.
+    ps=pool.stats()
     await register_handlers(dp)
     logger.info("━"*30)
     logger.info(f"🚀 @{bot_info.username} v25.0")
-    logger.info(f"🔄 {ps['total']} сессий")
-    if ps['total'] == 0:
-        logger.warning("Поиск работает без user sessions (Telethon). Точность проверки username ограничена.")
+    logger.info("🔄 Режим проверки: без user-сессий")
     logger.info("━"*30)
     asyncio.create_task(reminder_loop())
     asyncio.create_task(auto_renew_loop())
     asyncio.create_task(return_user_push_loop())
     asyncio.create_task(session_watchdog())
-    asyncio.create_task(monitor_loop())
     asyncio.create_task(daily_report_loop())
     asyncio.create_task(free_cache_warmer_loop())
     try:
