@@ -1,8 +1,8 @@
 """
 USERNAME HUNTER v25.0 — VIP + ТЕМАТИЧЕСКИЙ ПОИСК + ССЫЛКИ
-FIXED: REAL CHECK SEARCH — Fragment/t.me strict, no fake hits
+FIXED: WORKING REAL CHECK — quiet UI, short logs
 """
-# BOT_REAL_FRAGMENT_CHECK_ACTIVE
+# BOT_WORKING_REALCHECK_QUIET_ACTIVE
 
 import asyncio
 import random
@@ -754,7 +754,7 @@ def normalize_search_mode_callback(data):
 
 # ═══════════════════════ HARD CALLBACK FIX v5 ═══════════════════════
 # Маркер ниже должен появиться в консоли после запуска. Если его нет — запущен старый файл.
-SEARCH_CALLBACK_FIX_VERSION = "BOT_REAL_CHECK"
+SEARCH_CALLBACK_FIX_VERSION = "bot"
 
 def _cb_data(cb):
     return (getattr(cb, "data", "") or "").strip()
@@ -900,7 +900,7 @@ async def check_fragment(u):
     try:
         async with http_session.get(
             f"https://fragment.com/username/{u}",
-            timeout=aiohttp.ClientTimeout(total=6),
+            timeout=aiohttp.ClientTimeout(total=4),
             headers={
                 "User-Agent": random.choice(_TME_USER_AGENTS),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -1036,7 +1036,7 @@ async def quick_check_username_tme(u: str) -> str:
     try:
         async with http_session.get(
             f"https://t.me/{u}",
-            timeout=aiohttp.ClientTimeout(total=5),
+            timeout=aiohttp.ClientTimeout(total=3),
             headers={
                 "User-Agent": random.choice(_TME_USER_AGENTS),
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -1079,7 +1079,11 @@ async def quick_check_username_tme(u: str) -> str:
 
 
 async def real_username_free(u: str, uid=None, mode_key: str = "", log_fragment: bool = True) -> bool:
-    """Единый реальный фильтр выдачи. Никаких fake/unavailable без проверки."""
+    """Рабочий фильтр выдачи.
+    Обязательное условие: Fragment = unavailable.
+    t.me и BotAPI используются как блокеры: если явно taken — не выдаём.
+    unknown не ломает поиск, потому что иначе бот снова уходит в 0/5 на сотни секунд.
+    """
     u = (u or "").strip().replace("@", "").lower()
     if not is_valid_telegram_profile_username(u):
         return False
@@ -1089,22 +1093,28 @@ async def real_username_free(u: str, uid=None, mode_key: str = "", log_fragment:
         if bad == u or bad in u:
             return False
 
-    tme = await quick_check_username_tme(u)
-    if tme != "free":
-        return False
-
     fr = await check_fragment(u)
     if log_fragment:
         print(f"frag {fr} @{u}", flush=True)
     if fr != "unavailable":
         return False
 
-    botapi = await check_username_botapi(u)
-    if botapi == "taken":
+    # Не ждём строгих трёх проверок. Нам важно не пропустить явно занятый username.
+    tme, botapi = await asyncio.gather(
+        quick_check_username_tme(u),
+        check_username_botapi(u),
+        return_exceptions=True,
+    )
+
+    if isinstance(tme, Exception):
+        tme = "unknown"
+    if isinstance(botapi, Exception):
+        botapi = "unknown"
+
+    if tme == "taken" or botapi == "taken":
         return False
 
     return True
-
 
 async def is_username_free(u: str, uid=None) -> bool:
     """Финальный фильтр выдачи username без user-сессий."""
@@ -1161,8 +1171,8 @@ def evaluate_username(u):
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
 async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
-    """Реальный поиск: cache -> live concurrent real checks.
-    В выдачу попадает только username с t.me=free и Fragment=unavailable.
+    """Кнопочный поиск без фейковых результатов и без шумных сообщений.
+    Выдаём только username с Fragment=unavailable; t.me/BotAPI блокируют явно занятые.
     """
     found = []
     start = time.time()
@@ -1180,7 +1190,8 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         print(f"{source} hit @{u} {mode_key}", flush=True)
         return True
 
-    cached = await get_cached_free(mode_key, count * 8)
+    # 1) Сначала кэш. Он уже должен быть real-checked, но на всякий случай перепроверяем Fragment.
+    cached = await get_cached_free(mode_key, count * 6)
     for u in cached:
         if len(found) >= count:
             break
@@ -1191,21 +1202,23 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         if await real_username_free(u, uid, mode_key, log_fragment=True):
             await add_found(u, "cache")
         else:
-            print(f"cache drop @{u} {mode_key}", flush=True)
+            print(f"drop @{u} {mode_key}", flush=True)
 
     if len(found) >= count:
         elapsed = int(time.time() - start)
         print(f"done {mode_key} {len(found)}/{count} {elapsed}s", flush=True)
         return found[:count], {"attempts": attempts, "elapsed": elapsed}
 
+    # 2) Live-поиск пачками. Ограничен по времени, чтобы бот не висел по 400 секунд.
     checked = {item["username"] for item in found}
-    max_attempts = 2200 if mode_key == "beautiful" else 1400
-    batch_size = 18 if mode_key == "beautiful" else 14
+    deadline = time.time() + (45 if mode_key == "beautiful" else 35)
+    max_attempts = 900 if mode_key == "beautiful" else 650
+    batch_size = 20 if mode_key == "beautiful" else 16
     last_ui = 0
 
-    while len(found) < count and attempts < max_attempts:
+    while len(found) < count and attempts < max_attempts and time.time() < deadline:
         batch = []
-        for _ in range(batch_size * 3):
+        for _ in range(batch_size * 4):
             if len(batch) >= batch_size:
                 break
             c = gen_func()
@@ -1225,6 +1238,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             return name, ok
 
         results = await asyncio.gather(*(check_one(x) for x in batch), return_exceptions=True)
+        good_for_cache = []
         for item in results:
             if len(found) >= count:
                 break
@@ -1233,27 +1247,29 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             u, ok = item
             if ok:
                 await add_found(u, "live")
-                await add_free_cache([u], mode_key)
+                good_for_cache.append(u)
+
+        if good_for_cache:
+            await add_free_cache(good_for_cache, mode_key)
 
         now = time.time()
-        if msg and now - last_ui > 3:
+        if msg and now - last_ui > 4:
             last_ui = now
             text = (
                 f"🔍 <b>{mode_name}</b>\n\n"
                 f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
                 f"📊 Проверено: <code>{attempts}</code>\n"
-                f"⏱ <code>{int(now - start)}с</code>\n\n"
-                f"<i>Ищу только реально свободные: t.me free + Fragment unavailable.</i>"
+                f"⏱ <code>{int(now - start)}с</code>"
             )
             try:
                 await edit_msg(msg, text)
             except Exception:
                 pass
 
-        if attempts % 180 < batch_size:
+        if attempts % 160 < batch_size:
             print(f"checked {attempts} {mode_key} found {len(found)}/{count}", flush=True)
 
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.03)
 
     elapsed = int(time.time() - start)
     print(f"done {mode_key} {len(found)}/{count} {elapsed}s", flush=True)
@@ -5803,8 +5819,8 @@ async def main():
     await register_handlers(dp)
     logger.info("━"*30)
     logger.info(f"🚀 @{bot_info.username} v25.0")
-    print("bot active real check", flush=True)
-    logger.info("bot active real check")
+    print("bot active", flush=True)
+    logger.info("bot active")
     logger.info("🔄 Режим проверки: public_strict без user-сессий")
     logger.info("━"*30)
     asyncio.create_task(reminder_loop())
