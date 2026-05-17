@@ -32,14 +32,8 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
-try:
-    from telethon import TelegramClient
-    from telethon.tl.functions.contacts import ResolveUsernameRequest
-    from telethon.tl.functions.account import CheckUsernameRequest as AccountCheckUsername
-    from telethon.errors import FloodWaitError, UsernameNotOccupiedError, UsernameInvalidError
-    HAS_TELETHON = True
-except ImportError:
-    HAS_TELETHON = False
+# Telethon полностью отключён: бот работает без user-сессий.
+HAS_TELETHON = False
 
 pool = None
 http_session = None
@@ -146,7 +140,7 @@ user_states = {}
 http_session = None
 bot_info = None
 DB = "hunter.db"
-os.makedirs("sessions", exist_ok=True)
+# os.makedirs("sessions", exist_ok=True)  # user-сессии отключены
 searching_users = set()
 user_search_cooldown = {}
 _fragment_cache = {}
@@ -248,7 +242,7 @@ DEFAULT_CONFIG = {
     "mode_default_premium": False, "mode_beautiful_premium": True,
     "prices": {}, "daily_report": True, "daily_report_hour": 23,
     "notify_purchases": True, "notify_milestones": True,
-    "checker_mode": "botapi", "cache_limit": 5000,
+    "checker_mode": "public_strict", "cache_limit": 5000,
 }
 
 def load_bot_config():
@@ -298,38 +292,14 @@ def apply_config(config):
                 PRICES[k]["stars"] = v
 
 def load_saved_sessions():
-    """Загружает список всех аккаунтов (из конфига + добавленных)"""
-    result = []
-    # Основные аккаунты
-    for acc in ACCOUNTS:
-        result.append({
-            "phone": acc.get("phone", "?"),
-            "api_id": acc.get("api_id", "?"),
-            "api_hash": acc.get("api_hash", "?"),
-            "status": "active"
-        })
-    # Добавленные через бота
-    try:
-        if os.path.exists("added_sessions.json"):
-            with open("added_sessions.json") as f:
-                added = json.load(f)
-                for acc in added:
-                    result.append({
-                        "phone": acc.get("phone", "?"),
-                        "api_id": acc.get("api_id", "?"),
-                        "api_hash": acc.get("api_hash", "?"),
-                        "status": "added"
-                    })
-    except:
-        pass
-    return result 
+    """User-сессии удалены. Возвращаем пустой список для совместимости админ-панели."""
+    return []
 
 def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
 
 def get_checker_mode():
-    # Проверка username работает без Telethon user-сессий.
-    return "botapi"
+    return "public_strict"
 
 def is_sessions_checker():
     return False
@@ -404,273 +374,71 @@ def get_action_log(limit=50):
 # ═══════════════════════ ПУЛ АККАУНТОВ ═══════════════════════
 
 class AccountPool:
+    """Заглушка вместо Telethon-пула. В проекте нет user-сессий вообще."""
+
     def __init__(self):
         self.clients = []
-        self.accounts_data = []
-        self.lock = asyncio.Lock()
         self.status = {}
         self.cooldown_until = {}
-        self.last_used = {}
-        self.error_streak = {}
-        self.total_errors = {}
-        self.req_count = {}
-        self.window_start = {}
-        self.flood_times = {}
-        self.adaptive_delay = {}
-        self.BASE_DELAY = 2.0
-        self.MAX_DELAY = 20.0
-        self.BUDGET_PER_MIN = 12
-        self.MAX_ERROR_STREAK = 3
-        self.FLOOD_REST_TIME = 600
-        self.WARMUP_EXTRA_DELAY = 10.0
         self.total_checks = 0
         self.caught_by_botapi = 0
         self.caught_by_recheck = 0
         self.reconnect_count = 0
-        self.active_users = {}
-        self.max_users_per_account = 3
-        self._health_task = None
-        self._monitor_task = None
 
-    async def init(self, accounts):
-        if not HAS_TELETHON or not accounts:
-            logger.info("Bot API mode"); return
-        self.accounts_data = list(accounts)
-        try:
-            if os.path.exists("added_sessions.json"):
-                with open("added_sessions.json") as f:
-                    self.accounts_data += json.load(f)
-        except: pass
-        for acc in self.accounts_data:
-            phone = acc["phone"].replace("+","").replace(" ","")
-            try:
-                c = TelegramClient(f"sessions/s_{phone}", acc["api_id"], acc["api_hash"],
-                                   connection_retries=5, retry_delay=3, timeout=15, request_retries=2)
-                await c.connect()
-                if not await c.is_user_authorized():
-                    logger.warning(f"⏭ Пропуск неавторизованной сессии: {acc['phone']}")
-                    try:
-                        await c.disconnect()
-                    except:
-                        pass
-                    continue
-                self.clients.append(c)
-                idx = len(self.clients)-1
-                self._init(idx)
-                logger.info(f"✅ #{idx+1}: {acc['phone']}")
-            except Exception as e:
-                logger.error(f"❌ {acc['phone']}: {e}")
-        logger.info(f"Пул: {len(self.clients)}")
-        self._health_task = asyncio.create_task(self._health_loop())
-        self._monitor_task = asyncio.create_task(self._monitor_loop())
-
-    def _init(self, i):
-        self.status[i]='warming'; self.cooldown_until[i]=0; self.last_used[i]=0
-        self.error_streak[i]=0; self.total_errors[i]=0; self.req_count[i]=0
-        self.window_start[i]=time.time(); self.flood_times[i]=[]; self.adaptive_delay[i]=self.BASE_DELAY
+    async def init(self, accounts=None):
+        logger.info("Public strict mode: Telethon sessions are disabled")
 
     def has_sessions(self):
-        return any(self.status.get(i) in ('healthy','warming') for i in range(len(self.clients)))
-
-    async def _health_loop(self):
-        while True:
-            try:
-                await asyncio.sleep(60); now=time.time()
-                for i in range(len(self.clients)):
-                    st=self.status.get(i,'dead')
-                    if st=='dead': await self._try_reconnect(i)
-                    elif st=='cooldown' and now>=self.cooldown_until.get(i,0):
-                        self.status[i]='warming'; self.error_streak[i]=0; self.adaptive_delay[i]=self.BASE_DELAY+2
-                    elif st=='warming' and now-self.last_used.get(i,0)>30 and self.error_streak.get(i,0)==0:
-                        self.status[i]='healthy'; self.adaptive_delay[i]=self.BASE_DELAY
-                    if now-self.window_start.get(i,0)>60: self.req_count[i]=0; self.window_start[i]=now
-                    if i in self.flood_times: self.flood_times[i]=[t for t in self.flood_times[i] if now-t<3600]
-                alive=sum(1 for j in range(len(self.clients)) if self.status.get(j) in ('healthy','warming'))
-                if 0<alive<=2:
-                    for i in range(len(self.clients)):
-                        if self.status.get(i) in ('healthy','warming'):
-                            self.adaptive_delay[i]=max(self.adaptive_delay[i], self.BASE_DELAY*2)
-            except Exception as e: logger.error(f"Health: {e}")
-
-    async def _monitor_loop(self):
-        while True:
-            await asyncio.sleep(300)
-            try:
-                s=self.stats()
-                logger.info(f"📊 {s['active']}/{s['total']} checks={s['checks']}")
-            except: pass
-
-    async def _try_reconnect(self, i):
-        try:
-            c=self.clients[i]
-            if c.is_connected(): await c.disconnect()
-            await asyncio.sleep(2); await c.connect()
-            if await c.is_user_authorized():
-                self.status[i]='warming'; self.error_streak[i]=0
-                self.adaptive_delay[i]=self.BASE_DELAY+3; self.reconnect_count+=1
-                logger.info(f"🔄 #{i+1} reconnected")
-        except Exception as e: logger.error(f"Reconnect #{i+1}: {e}")
-
-    def _best(self, uid=None):
-        now=time.time(); cands=[]
-        for i in range(len(self.clients)):
-            st=self.status.get(i,'dead')
-            if st=='dead': continue
-            if st=='cooldown' and now<self.cooldown_until.get(i,0): continue
-            if now-self.window_start.get(i,0)>60: self.req_count[i]=0; self.window_start[i]=now
-            b=self.BUDGET_PER_MIN
-            alive=sum(1 for j in range(len(self.clients)) if self.status.get(j) in ('healthy','warming'))
-            if alive<=2: b=max(5,b//2)
-            if self.req_count.get(i,0)>=b: continue
-            d=self.adaptive_delay.get(i,self.BASE_DELAY)
-            if st=='warming': d+=self.WARMUP_EXTRA_DELAY
-            if now-self.last_used.get(i,0)<d: continue
-            sc=self.error_streak.get(i,0)*20+self.req_count.get(i,0)*2
-            if st=='warming': sc+=50
-            if uid and uid in self.active_users.get(i,set()): sc-=25
-            cands.append((i,sc))
-        if not cands: return None
-        cands.sort(key=lambda x:x[1])
-        return random.choice(cands[:min(3,len(cands))])[0]
-
-    async def _acquire(self, uid=None, timeout=45):
-        dl=time.time()+timeout; a=0
-        while time.time()<dl:
-            async with self.lock:
-                i=self._best(uid)
-                if i is not None:
-                    self.last_used[i]=time.time(); self.req_count[i]=self.req_count.get(i,0)+1
-                    self.total_checks+=1; return i, self.clients[i]
-            await asyncio.sleep(min(0.3*(1.2**a),3)+random.uniform(0,0.5)); a+=1
-        return None, None
-
-    def _ok(self, i):
-        self.error_streak[i]=0
-        if self.status.get(i)=='warming' and self.req_count.get(i,0)>=3: self.status[i]='healthy'
-        self.adaptive_delay[i]=max(self.BASE_DELAY, self.adaptive_delay.get(i,self.BASE_DELAY)*0.95)
-
-    def _err(self, i, flood=False, secs=0):
-        self.error_streak[i]=self.error_streak.get(i,0)+1
-        self.total_errors[i]=self.total_errors.get(i,0)+1
-        if flood:
-            self.cooldown_until[i]=time.time()+secs+random.randint(20,45)
-            self.status[i]='cooldown'
-            self.flood_times.setdefault(i,[]).append(time.time())
-            if len([t for t in self.flood_times[i] if time.time()-t<3600])>=3:
-                self.cooldown_until[i]=time.time()+self.FLOOD_REST_TIME
-        elif self.error_streak[i]>=self.MAX_ERROR_STREAK:
-            self.status[i]='dead'
-        else:
-            self.adaptive_delay[i]=min(self.adaptive_delay.get(i,self.BASE_DELAY)*1.5, self.MAX_DELAY)
-            self.cooldown_until[i]=time.time()+3; self.status[i]='cooldown'
-
-    async def _resolve(self, u, uid=None):
-        i,c=await self._acquire(uid,30)
-        if c is None: return "no_session",-1
-        try:
-            await c(ResolveUsernameRequest(u)); self._ok(i); return "taken",i
-        except UsernameNotOccupiedError: self._ok(i); return "free",i
-        except UsernameInvalidError: self._ok(i); return "invalid",i
-        except FloodWaitError as e: self._err(i,True,e.seconds); return "flood",i
-        except: self._err(i); return "error",i
-
-    async def _check_avail(self, u, uid=None):
-        i,c=await self._acquire(uid,20)
-        if c is None: return "no_session",-1
-        try:
-            ok=await c(AccountCheckUsername(u)); self._ok(i); return ("free" if ok else "taken"),i
-        except FloodWaitError as e: self._err(i,True,e.seconds); return "flood",i
-        except: self._err(i); return "error",i
-
-    async def _botapi(self, u):
-        """Проверка через t.me GET запрос.
-        Возвращает taken / not_found / unknown, чтобы сетевые ошибки не считались занятостью.
-        """
-        result = await check_username_tme(u)
-        if result == "free":
-            return "not_found"
-        if result == "taken":
-            return "taken"
-        return "unknown"
+        return False
 
     async def check(self, u, uid=None):
-        if not self.has_sessions():
-            r = await self._botapi(u)
-            if r == "taken":
-                return "taken"
-            if r == "not_found":
-                return "maybe_free"
+        self.total_checks += 1
+        try:
+            return "free" if await is_username_free(u, uid) else "taken"
+        except Exception as e:
+            logger.debug(f"[public-check] @{u}: {e}")
             return "skip"
-        b = await self._botapi(u)
-        if b == "taken":
-            self.caught_by_botapi += 1
-            return "taken"
-        if b == "unknown":
-            return "skip"
-        r, _ = await self._resolve(u, uid)
-        if r in ("taken", "invalid"):
-            return "taken"
-        if r in ("flood", "no_session", "error"):
-            return "skip"
-        return "maybe_free"
 
     async def strong_check(self, u, uid=None):
-        """Строгая проверка: username должен быть доступен именно для установки в профиль.
-        Без рабочей user-сессии Telethon такой статус нельзя подтвердить надёжно.
-        """
-        if not self.has_sessions():
-            return "skip"
-        b = await self._botapi(u)
-        if b == "taken":
-            self.caught_by_botapi += 1
-            return "taken"
-        if b == "unknown":
-            return "skip"
-        await asyncio.sleep(random.uniform(0.5, 1.5))
-        r, _ = await self._check_avail(u, uid)
-        if r == "free":
-            return "free"
-        if r in ("taken", "invalid"):
-            return "taken"
-        return "skip"
+        return await self.check(u, uid)
 
     def add_user(self, uid):
-        for i in range(len(self.clients)):
-            if self.status.get(i)=='dead': continue
-            if uid in self.active_users.get(i,set()): return i
-        for i in range(len(self.clients)):
-            if self.status.get(i)=='dead': continue
-            us=self.active_users.setdefault(i,set())
-            if len(us)<self.max_users_per_account: us.add(uid); return i
         return None
 
     def remove_user(self, uid):
-        for i in self.active_users: self.active_users[i].discard(uid)
+        return None
 
     def stats(self):
-        a=sum(1 for i in range(len(self.clients)) if self.status.get(i) in ('healthy','warming'))
-        w=sum(1 for i in range(len(self.clients)) if self.status.get(i)=='warming')
-        cd=sum(1 for i in range(len(self.clients)) if self.status.get(i)=='cooldown')
-        d=sum(1 for i in range(len(self.clients)) if self.status.get(i)=='dead')
-        e=sum(self.total_errors.get(i,0) for i in range(len(self.clients)))
-        return {"total":len(self.clients),"active":a,"warming":w,"cooldown":cd,"dead":d,
-                "checks":self.total_checks,"errors":e,"botapi_saves":self.caught_by_botapi,
-                "recheck_saves":self.caught_by_recheck,"reconnects":self.reconnect_count}
+        return {
+            "total": 0,
+            "active": 0,
+            "warming": 0,
+            "cooldown": 0,
+            "dead": 0,
+            "checks": self.total_checks,
+            "errors": 0,
+            "botapi_saves": self.caught_by_botapi,
+            "recheck_saves": self.caught_by_recheck,
+            "reconnects": self.reconnect_count,
+        }
 
     def detailed_status(self):
-        lines=[]
-        for i in range(len(self.clients)):
-            st=self.status.get(i,'dead')
-            em={'healthy':'🟢','warming':'🟡','cooldown':'🟠','dead':'🔴'}.get(st,'⚪')
-            lines.append(f"{em}#{i+1} {st} d={self.adaptive_delay.get(i,0):.1f} e={self.error_streak.get(i,0)} r={self.req_count.get(i,0)}")
-        return "\n".join(lines)
+        return "User-сессии отключены. Проверка работает только публичными методами: t.me + Bot API + Fragment."
+
+    async def _try_reconnect(self, i):
+        return False
+
+    async def _acquire(self, uid=None, timeout=0):
+        return None, None
+
+    def _ok(self, i):
+        return None
+
+    def _err(self, i, flood=False, secs=0):
+        return None
 
     async def disconnect(self):
-        if self._health_task: self._health_task.cancel()
-        if self._monitor_task: self._monitor_task.cancel()
-        for c in self.clients:
-            try: await c.disconnect()
-            except: pass
+        return None
 
 
 # ═══════════════════════ ГЕНЕРАТОРЫ v5 ═══════════════════════
@@ -960,8 +728,8 @@ INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
 # ═══════════════════════ ЧЕКЕРЫ ═══════════════════════
 
 async def fast_check_username(u: str) -> str:
-    """Быстрая проверка через t.me (одна попытка)"""
-    return await check_username_tme(u)
+    """Быстрая проверка больше не отдаёт free по одному t.me-запросу."""
+    return await check_username(u)
 
 def is_valid_telegram_profile_username(u: str) -> bool:
     """Разрешены только буквенные username из рабочих режимов: 5 или 6 латинских букв."""
@@ -974,62 +742,138 @@ def is_valid_telegram_profile_username(u: str) -> bool:
         return False
     return True
 
-async def check_username(u: str) -> str:
+async def check_username_botapi(u: str) -> str:
     """
-    Статус username в режиме без user-сессий:
-    free — t.me свободен, Fragment не держит username, строка состоит только из 5 или 6 латинских букв;
-    taken — username занят, зарезервирован, выставлен/продан на Fragment или не проходит локальные правила;
-    unknown — временно нельзя подтвердить статус.
+    Дополнительная публичная проверка через Bot API getChat.
+    taken    — Bot API нашёл публичный username;
+    free     — Bot API явно ответил, что чат не найден;
+    unknown  — ошибка сети/лимит/неоднозначный ответ.
+
+    Важно: Bot API не является официальной проверкой установки username,
+    поэтому free здесь используется только вместе с t.me и Fragment.
+    """
+    if not bot:
+        return "unknown"
+    u = (u or "").strip().replace("@", "").lower()
+    if not u:
+        return "unknown"
+    try:
+        await bot.get_chat(f"@{u}")
+        return "taken"
+    except TelegramBadRequest as e:
+        text = str(e).lower()
+        if "chat not found" in text or "not found" in text:
+            return "free"
+        logger.debug(f"[botapi] @{u}: {e}")
+        return "unknown"
+    except Exception as e:
+        logger.debug(f"[botapi] @{u}: {e}")
+        return "unknown"
+
+async def public_username_status(u: str, uid=None) -> str:
+    """
+    Строгий публичный статус без user-сессий.
+    Возвращает free только если три независимых публичных проверки сошлись.
+    Любая неопределённость превращается в unknown/taken и не попадает в выдачу.
     """
     u = (u or "").strip().replace("@", "").lower()
+
     if not is_valid_telegram_profile_username(u):
         return "taken"
+    if is_blacklisted(u):
+        return "taken"
+    for w in INVALID_WORDS:
+        if w == u or w in u:
+            return "taken"
+
+    tme_results = []
+    for attempt in range(3):
+        r = await check_username_tme(u)
+        tme_results.append(r)
+        if r == "taken":
+            return "taken"
+        if r == "unknown":
+            await asyncio.sleep(0.6 + attempt * 0.4)
+            continue
+        await asyncio.sleep(0.25)
+
+    if tme_results.count("free") < 2:
+        logger.info(f"[public] @{u} t.me unstable={tme_results} → skip")
+        return "unknown"
+
+    botapi = await check_username_botapi(u)
+    if botapi == "taken":
+        logger.info(f"[public] @{u} BotAPI=taken → skip")
+        return "taken"
+    if botapi == "unknown":
+        logger.info(f"[public] @{u} BotAPI=unknown → skip")
+        return "unknown"
+
+    fr = await check_fragment(u)
+    if fr == "unknown":
+        logger.info(f"[public] @{u} Fragment=unknown → skip")
+        return "unknown"
+    if fr != "unavailable":
+        logger.info(f"[public] @{u} Fragment={fr} → skip")
+        return "taken"
+
+    return "free"
+
+async def check_username(u: str) -> str:
+    """Публичный строгий статус username без Telethon/user-сессий."""
+    u = (u or "").strip().replace("@", "").lower()
     try:
-        return "free" if await is_username_free(u) else "taken"
+        return await public_username_status(u)
     except Exception as e:
         logger.debug(f"[check_username] @{u}: {e}")
         return "unknown"
         
 async def check_fragment(u):
+    u = (u or "").strip().replace("@", "").lower()
     now = time.time()
     cached = _fragment_cache.get(u)
     if cached and now - cached[1] < _fragment_cache_ttl:
         return cached[0]
-    
+
     try:
         async with http_session.get(
-            f"https://fragment.com/username/{u.lower()}",
-            timeout=aiohttp.ClientTimeout(total=8),
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            f"https://fragment.com/username/{u}",
+            timeout=aiohttp.ClientTimeout(total=10),
+            headers={
+                "User-Agent": random.choice(_TME_USER_AGENTS),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            },
+            allow_redirects=True,
         ) as resp:
             if resp.status != 200:
                 logger.info(f"[fragment] @{u} HTTP {resp.status} → unknown")
                 return "unknown"
-            
+
             text = await resp.text()
-            
-            # Ищем статус
-            sm = re.search(r'class="tm-section-header-status[^"]*"[^>]*>([^<]+)<', text)
-            if sm:
-                st = sm.group(1).strip().lower()
-                
-                if "sold" in st or "owner" in st:
-                    r = "sold"
-                elif "auction" in st or "bidding" in st:
-                    r = "in auction"
-                elif "available" in st or "buy now" in st:
-                    r = "available"
-                elif "reserved" in st:
-                    r = "reserved"
-                else:
-                    r = "unavailable"
+            low = text.lower()
+
+            status_match = re.search(r'class="tm-section-header-status[^\"]*"[^>]*>(.*?)<', text, re.I | re.S)
+            status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
+
+            if any(x in low or x in status for x in ("sold", "owner", "owned")):
+                r = "sold"
+            elif any(x in low or x in status for x in ("auction", "bidding")):
+                r = "in auction"
+            elif any(x in low or x in status for x in ("buy now", "for sale", "available")):
+                r = "available"
+            elif "reserved" in low or "reserved" in status:
+                r = "reserved"
+            elif "tm-section-header-status" in low:
+                # Есть карточка Fragment, но статус не распознан — не рискуем.
+                r = "unknown"
             else:
+                # Карточки username на Fragment нет — публично не числится как NFT/аукцион.
                 r = "unavailable"
-            
+
             logger.info(f"[fragment] @{u} → {r}")
             _fragment_cache[u] = (r, now)
             return r
-            
+
     except Exception as e:
         logger.info(f"[fragment] @{u} error: {e} → unknown")
         return "unknown"
@@ -1044,22 +888,20 @@ _TME_USER_AGENTS = [
 
 async def check_username_tme(u: str) -> str:
     """
-    Проверка через GET https://t.me/username
-    Возвращает: 'free' | 'taken' | 'unknown'
-
-    Логика определения:
-      - tgme_page_title / tgme_page_extra / tgme_page_photo → занят
-      - noindex + нет tgme_page_title → свободен
-      - 429 / таймаут / ошибка → unknown (НЕ taken)
+    Проверка через публичную страницу t.me.
+    Возвращает: free / taken / unknown.
+    Никакой unknown не считается свободным.
     """
+    u = (u or "").strip().replace("@", "").lower()
     url = f"https://t.me/{u}"
-    headers = {
-        "User-Agent": random.choice(_TME_USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
 
-    for attempt in range(2):
+    for attempt in range(3):
+        headers = {
+            "User-Agent": random.choice(_TME_USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+            "Cache-Control": "no-cache",
+        }
         try:
             async with http_session.get(
                 url,
@@ -1073,74 +915,54 @@ async def check_username_tme(u: str) -> str:
                     await asyncio.sleep(wait + random.uniform(0.5, 2.0))
                     continue
 
+                if resp.status in (401, 403):
+                    return "taken"
                 if resp.status != 200:
                     logger.debug(f"[tme] @{u} HTTP {resp.status}")
                     return "unknown"
 
                 text = await resp.text()
+                low = text.lower()
 
-                if 'class="tgme_page_title"' in text:
-                    return "taken"
-                if "tgme_page_extra" in text:
-                    return "taken"
-                if "tgme_page_photo" in text:
+                taken_markers = (
+                    'class="tgme_page_title"',
+                    "tgme_page_extra",
+                    "tgme_page_photo",
+                    "tgme_action_button_new",
+                    "tgme_page_context_link",
+                    "tgme_widget_message",
+                )
+                if any(m in low for m in taken_markers):
                     return "taken"
 
-                if 'content="noindex' in text and "tgme_page_title" not in text:
-                    return "free"
-                if "tgme_page_icon" in text and "tgme_page_title" not in text:
+                free_by_noindex = 'content="noindex' in low and "tgme_page_title" not in low
+                free_by_icon = "tgme_page_icon" in low and "tgme_page_title" not in low
+                not_found_text = any(x in low for x in (
+                    "this username is not occupied",
+                    "username not found",
+                    "page not found",
+                    "not found",
+                ))
+
+                if free_by_noindex or free_by_icon or not_found_text:
                     return "free"
 
                 return "unknown"
 
         except asyncio.TimeoutError:
             logger.debug(f"[tme] timeout @{u} #{attempt+1}")
-            if attempt == 0:
-                await asyncio.sleep(1.0)
-                continue
-            return "unknown"
+            await asyncio.sleep(0.7 + attempt * 0.5)
         except Exception as e:
             logger.debug(f"[tme] error @{u}: {e}")
-            if attempt == 0:
-                await asyncio.sleep(0.5)
-                continue
-            return "unknown"
+            await asyncio.sleep(0.5 + attempt * 0.5)
 
     return "unknown"
+
     
 async def is_username_free(u: str, uid=None) -> bool:
-    """
-    Строгая проверка без Telethon user-сессий.
-    Username считается пригодным к выдаче только если одновременно выполнены условия:
-      1) строка состоит только из латинских букв;
-      2) длина соответствует одному из режимов: 5 букв для «Красивые» или 6 букв для «Дефолт»;
-      3) t.me не показывает существующий аккаунт/канал/бот;
-      4) Fragment не показывает sold / auction / available / reserved.
-    При неизвестном статусе возвращается False, чтобы не отдавать пользователю сомнительный username.
-    """
-    u = (u or "").strip().replace("@", "").lower()
-    if not is_valid_telegram_profile_username(u):
-        return False
-    if is_blacklisted(u):
-        return False
-    for w in INVALID_WORDS:
-        if w == u or w in u:
-            return False
+    """Финальный фильтр выдачи username без user-сессий."""
+    return await public_username_status(u, uid) == "free"
 
-    result = await check_username_tme(u)
-    if result == "unknown":
-        await asyncio.sleep(1.0)
-        result = await check_username_tme(u)
-    if result != "free":
-        logger.info(f"[check] @{u} t.me={result} → skip")
-        return False
-
-    fr = await check_fragment(u)
-    if fr != "unavailable":
-        logger.info(f"[check] @{u} Fragment={fr} → skip")
-        return False
-
-    return True
     
 async def get_rechecked_cached_free(mode, count):
     cached = await get_cached_free(mode, max(count * 3, count))
@@ -2423,23 +2245,13 @@ async def check_fragment_nft(username):
         return {"is_nft": False, "status": "error"}
 
 async def verify_nft_owner(uid, username):
+    # Без user-сессий проверяем только username самого пользователя, доступный Bot API.
     try:
         chat = await bot.get_chat(uid)
         if chat.username and chat.username.lower() == username.lower():
             return True
-    except: pass
-    if pool.has_sessions():
-        try:
-            i, client = await pool._acquire(uid, 10)
-            if client:
-                try:
-                    user = await client.get_entity(uid)
-                    pool._ok(i)
-                    if user.username and user.username.lower() == username.lower():
-                        return True
-                except:
-                    pool._err(i)
-        except: pass
+    except:
+        pass
     return False
 
 def _d(uid_val, uname_val):
@@ -4520,46 +4332,9 @@ async def register_handlers(dp: Dispatcher):
                 await msg.answer("❌ Код уже существует")
             return
 
-        if action=="admin_add_session_api_id":
-            try: api_id=int(msg.text.strip())
-            except: await msg.answer("❌ Число"); return
-            user_states[uid]={"action":"admin_add_session_api_hash","api_id":api_id}
-            await msg.answer("<b>api_hash:</b>",parse_mode="HTML"); return
-
-        if action=="admin_add_session_api_hash":
-            ah=msg.text.strip()
-            if len(ah)<10: await msg.answer("❌"); return
-            user_states[uid]={"action":"admin_add_session_phone","api_id":state["api_id"],"api_hash":ah}
-            await msg.answer("<b>Телефон (с +):</b>",parse_mode="HTML"); return
-
-        if action=="admin_add_session_phone":
-            phone=msg.text.strip()
-            if not phone.startswith("+"): await msg.answer("❌ С +"); return
-            user_states.pop(uid,None)
-            wm=await msg.answer("🔄...")
-            try:
-                cp=phone.replace("+","").replace(" ","")
-                cl=TelegramClient(f"sessions/s_{cp}",state["api_id"],state["api_hash"],
-                                  connection_retries=5,retry_delay=3,timeout=15,request_retries=2)
-                await cl.connect()
-                if not await cl.is_user_authorized(): await cl.start(phone=phone)
-                idx=len(pool.clients); pool.clients.append(cl); pool._init(idx)
-                new_acc={"api_id":state["api_id"],"api_hash":state["api_hash"],"phone":phone}
-                try:
-                    existing=[]
-                    if os.path.exists("added_sessions.json"):
-                        with open("added_sessions.json") as f: existing=json.load(f)
-                    existing.append(new_acc)
-                    with open("added_sessions.json","w") as f: json.dump(existing,f,indent=2)
-                except: pass
-                log_action(uid,"add_session",phone)
-                try: await wm.delete()
-                except: pass
-                await msg.answer(f"✅ #{idx+1} {phone}",parse_mode="HTML")
-            except Exception as e:
-                try: await wm.delete()
-                except: pass
-                await msg.answer(f"❌ <code>{str(e)[:200]}</code>",parse_mode="HTML")
+        if action in ("admin_add_session_api_id", "admin_add_session_api_hash", "admin_add_session_phone"):
+            user_states.pop(uid, None)
+            await msg.answer("⚡ User-сессии удалены. Бот работает только в публичном строгом режиме.")
             return
 
         if action=="admin_refs_check_input":
@@ -4718,37 +4493,19 @@ async def register_handlers(dp: Dispatcher):
 
         ps = pool.stats()
         detail = pool.detailed_status()
-        saved = load_saved_sessions()
-        mode_text = "🔑 Сессии" if is_sessions_checker() else "⚡ Без сессий"
 
         text = (
-            f"🔑 <b>Сессии</b>\n\n"
-            f"⚙️ Режим проверки: {mode_text}\n\n"
-            f"🟢 Активных: {ps['active']-ps.get('warming',0)}\n"
-            f"🟡 Прогрев: {ps.get('warming',0)}\n"
-            f"🟠 Кулдаун: {ps.get('cooldown',0)}\n"
-            f"🔴 Мёртвых: {ps.get('dead',0)}\n"
-            f"🔢 Проверок: {ps['checks']}\n\n"
-            f"<pre>{detail}</pre>\n\n"
-            f"💾 Сохранённых: <code>{len(saved)}</code>"
+            "⚡ <b>Публичная строгая проверка</b>\n\n"
+            "User-сессии и Telethon-пул отключены полностью.\n"
+            "Поиск использует только t.me, Bot API getChat и Fragment.\n\n"
+            f"🔢 Проверок: <code>{ps['checks']}</code>\n\n"
+            f"<pre>{detail}</pre>"
         )
 
         kb = InlineKeyboardBuilder()
-        for i in range(len(pool.clients)):
-            st = pool.status.get(i, 'dead')
-            em = {'healthy':'🟢','warming':'🟡','cooldown':'🟠','dead':'🔴'}.get(st,'❓')
-            if st == 'dead':
-                kb.button(text=f"🔄 #{i+1}", callback_data=f"a_revive_{i}")
-            else:
-                kb.button(text=f"{em} #{i+1}", callback_data=f"a_kill_{i}")
-
-        kb.button(text="➕ Добавить", callback_data="a_add_session")
-        kb.button(text="💾 Все аккаунты", callback_data="adm_all_accounts")
-        kb.button(text="⚡ Reconnect all", callback_data="a_reconnect_all")
-        kb.button(text=f"⚙️ {'Без сессий' if is_sessions_checker() else 'Сессии'}", callback_data="a_toggle_checker")
         kb.button(text="🔄 Обновить", callback_data="adm_sessions")
         kb.button(text="🔙 Админ", callback_data="cmd_admin")
-        kb.adjust(2)
+        kb.adjust(1)
 
         await edit_msg(cb.message, text, kb.as_markup())
 
@@ -4758,14 +4515,8 @@ async def register_handlers(dp: Dispatcher):
             return
         await answer_cb(cb)
 
-        config = load_bot_config()
-        current = config.get("checker_mode", "sessions")
-        config["checker_mode"] = "botapi" if current == "sessions" else "sessions"
-
-        save_bot_config(config)
-        apply_config(config)
-        log_action(cb.from_user.id, "checker_mode", config["checker_mode"])
-
+        log_action(cb.from_user.id, "checker_mode", "public_strict")
+        await answer_cb(cb, "User-сессии отключены. Доступен только публичный строгий режим.", show_alert=True)
         await cb_adm_sessions(cb)
 
     # === ВСЕ АККАУНТЫ ===
@@ -4773,35 +4524,14 @@ async def register_handlers(dp: Dispatcher):
     async def cb_all_accounts(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
-        saved = load_saved_sessions()
-        if not saved:
-            kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="adm_sessions")
-            await edit_msg(cb.message, "💾 <b>Нет сохранённых аккаунтов</b>", kb.as_markup())
-            return
-        text = f"💾 <b>Все аккаунты ({len(saved)})</b>\n{'='*20}\n\n"
-        for i, s in enumerate(saved):
-            st_em = "🟢" if s.get("status") == "active" else "🔴"
-            phone = s.get("phone", "?")
-            hidden = phone[:4] + "****" + phone[-3:] if len(phone) > 7 else phone
-            text += (f"{st_em} <b>#{i+1}</b> {hidden}\n"
-                    f"   api_id: <code>{s.get('api_id','?')}</code>\n"
-                    f"   hash: <code>{str(s.get('api_hash','?'))[:8]}...</code>\n\n")
-        kb = InlineKeyboardBuilder()
-        kb.button(text="📤 Скачать JSON", callback_data="adm_export_sessions")
-        kb.button(text="➕ Добавить", callback_data="a_add_session")
-        kb.button(text="🔙 Сессии", callback_data="adm_sessions")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="adm_sessions")
+        await edit_msg(cb.message, "💾 <b>User-сессии удалены. Сохранённых аккаунтов нет.</b>", kb.as_markup())
 
     @dp.callback_query(F.data == "adm_export_sessions")
     async def cb_export_sessions(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
-        saved = load_saved_sessions()
-        content = json.dumps(saved, indent=2, ensure_ascii=False)
-        await bot.send_document(cb.from_user.id,
-            BufferedInputFile(content.encode(), filename=f"sessions_{datetime.now().strftime('%Y%m%d_%H%M')}.json"),
-            caption=f"💾 {len(saved)} аккаунтов")
+        await answer_cb(cb, "User-сессии удалены, экспорт пустой", show_alert=True)
 
     @dp.callback_query(F.data == "clear_cache")
     async def cb_clear_cache(cb: CallbackQuery):
@@ -4987,19 +4717,14 @@ async def register_handlers(dp: Dispatcher):
         await answer_cb(cb)
         ps = pool.stats(); detail = pool.detailed_status()
         text = (
-            f"🔄 <b>Сессии</b>\n\n"
-            f"🟢 {ps['active']-ps.get('warming',0)} | 🟡 {ps.get('warming',0)} | 🟠 {ps.get('cooldown',0)} | 🔴 {ps.get('dead',0)}\n"
-            f"📊 {ps['checks']} | ❌ {ps.get('errors',0)} | 🛡 {ps['botapi_saves']+ps.get('recheck_saves',0)} | 🔄 {ps.get('reconnects',0)}\n\n"
-            f"<pre>{detail}</pre>")
+            "⚡ <b>Без user-сессий</b>\n\n"
+            f"📊 Проверок: <code>{ps['checks']}</code>\n\n"
+            f"<pre>{detail}</pre>"
+        )
         kb = InlineKeyboardBuilder()
-        for i in range(len(pool.clients)):
-            st = pool.status.get(i,'dead')
-            if st=='dead': kb.button(text=f"🔄 #{i+1}", callback_data=f"a_revive_{i}")
-            else: kb.button(text=f"💀 #{i+1}", callback_data=f"a_kill_{i}")
-        kb.button(text="➕ Добавить", callback_data="a_add_session")
-        kb.button(text="⚡ Reconnect all", callback_data="a_reconnect_all")
         kb.button(text="🔄 Обновить", callback_data="a_sessions")
-        kb.button(text="🔙", callback_data="cmd_admin"); kb.adjust(3)
+        kb.button(text="🔙", callback_data="cmd_admin")
+        kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
 
     @dp.callback_query(F.data.startswith("a_kill_"))
@@ -5038,9 +4763,8 @@ async def register_handlers(dp: Dispatcher):
     async def cb_add_sess(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
-        user_states[cb.from_user.id] = {"action":"admin_add_session_api_id"}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="a_sessions")
-        await edit_msg(cb.message, "➕ <b>api_id:</b>", kb.as_markup())
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="a_sessions")
+        await edit_msg(cb.message, "⚡ <b>User-сессии удалены. Добавление аккаунтов отключено.</b>", kb.as_markup())
 
     @dp.callback_query(F.data == "a_keys")
     async def cb_akeys(cb: CallbackQuery):
@@ -5785,19 +5509,9 @@ async def monitor_loop():
         await asyncio.sleep(MONITOR_CHECK_INTERVAL)
 
 async def session_watchdog():
-    await asyncio.sleep(60); last_alert=0
+    # User-сессии удалены; watchdog оставлен как пустой фоновой таск для совместимости.
     while True:
-        try:
-            ps=pool.stats(); dead=ps.get('dead',0)
-            if dead>0:
-                for i in range(len(pool.clients)):
-                    if pool.status.get(i)=='dead': await pool._try_reconnect(i); await asyncio.sleep(10)
-            ps2=pool.stats(); now=time.time()
-            if ps2['active']<=max(ps['total']//2,1) and ps['total']>0 and now-last_alert>3600:
-                last_alert=now
-                await notify_admins(f"⚠️ Сессий: {ps2['active']}/{ps['total']}")
-        except Exception as e: logger.error(f"Watchdog: {e}")
-        await asyncio.sleep(900)
+        await asyncio.sleep(3600)
 
 async def daily_report_loop():
     while True:
@@ -5908,12 +5622,12 @@ async def main():
         for k,v in config["prices"].items():
             if k in PRICES: PRICES[k]["stars"]=v
     bot_info=await bot.get_me(); http_session=aiohttp.ClientSession()
-    # User-сессии Telethon не подключаются: проверка работает только через t.me + Fragment.
+    # User-сессии не подключаются: проверка работает через t.me + Bot API getChat + Fragment.
     ps=pool.stats()
     await register_handlers(dp)
     logger.info("━"*30)
     logger.info(f"🚀 @{bot_info.username} v25.0")
-    logger.info("🔄 Режим проверки: без user-сессий")
+    logger.info("🔄 Режим проверки: public_strict без user-сессий")
     logger.info("━"*30)
     asyncio.create_task(reminder_loop())
     asyncio.create_task(auto_renew_loop())
