@@ -720,6 +720,35 @@ SEARCH_MODES = {
     },
 }
 
+SEARCH_MODE_ALIASES = {
+    "go_default": "default",
+    "default": "default",
+    "дефолт": "default",
+    "дeфолт": "default",  # на случай латинской e в старом callback_data
+    "🎲 дефолт": "default",
+    "go_beautiful": "beautiful",
+    "beautiful": "beautiful",
+    "красивые": "beautiful",
+    "красивая": "beautiful",
+    "💎 красивые": "beautiful",
+}
+
+def normalize_search_mode_callback(data):
+    """Приводит старые и новые callback_data кнопок поиска к ключам SEARCH_MODES."""
+    raw = (data or "").strip()
+    if not raw:
+        return ""
+
+    lowered = raw.lower()
+    if lowered in SEARCH_MODE_ALIASES:
+        return SEARCH_MODE_ALIASES[lowered]
+
+    if lowered.startswith("go_"):
+        mode = lowered[3:]
+        return mode if mode in SEARCH_MODES else ""
+
+    return lowered if lowered in SEARCH_MODES else ""
+
 INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
                  "service","security","account","login","password","verify",
                  "moderator","system","null","undefined","root","user","about","contact",
@@ -2844,7 +2873,7 @@ async def register_handlers(dp: Dispatcher):
     async def cb_nv(cb: CallbackQuery): 
         await answer_cb(cb, "🌟 Нужен VIP! Купи в магазине.", show_alert=True)
 
-    @dp.callback_query(F.data.startswith("go_"))
+    @dp.callback_query(lambda cb: normalize_search_mode_callback(cb.data) in SEARCH_MODES)
     async def cb_go(cb: CallbackQuery):
         uid = cb.from_user.id
         await answer_cb(cb)
@@ -2864,7 +2893,7 @@ async def register_handlers(dp: Dispatcher):
             await edit_msg(cb.message, "⛔️ <b>Закончились!</b>", kb.as_markup())
             return
 
-        mode = cb.data[3:]
+        mode = normalize_search_mode_callback(cb.data)
         mi = SEARCH_MODES.get(mode)
         if not mi or mi.get("disabled"):
             return
