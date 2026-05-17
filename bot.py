@@ -11,6 +11,7 @@ import secrets
 import time
 import re
 import json
+import html
 import os
 import sys
 import subprocess
@@ -48,7 +49,7 @@ bot_info = None
 
 MAIN_TOKEN = "8325751391:AAFGB3KV34DiOp_Z0HXg5nErgxwOk6XR3C4"
 ADMIN_IDS = [5969266721, 7894051808]
-ADMIN_CONTACT = "pdwqb"
+ADMIN_CONTACT = "emeuw"
 
 ACCOUNTS = [
     {"api_id": 35094180, "api_hash": "8732d865063dadaf1cba0ace1ef87de9", "phone": "+959790770236"},
@@ -68,6 +69,7 @@ FREE_SEARCHES_LIMIT = 2
 PREMIUM_SEARCHES_LIMIT = 7
 VIP_SEARCHES_LIMIT = 15  # ═ НОВОЕ ═
 REF_BONUS = 2
+REFERRAL_PREMIUM_BONUSES = {5: 1, 10: 3, 15: 8, 30: 14}
 REFERRAL_COMMISSION = 0.04
 SEARCH_COOLDOWN = 10
 MIN_WITHDRAW = 50
@@ -195,13 +197,7 @@ async def answer_cb(cb, text=None, show_alert=False):
     except: pass
 
 def with_main_branding(text):
-    footer = "⚡ <b>Сделано в студии</b> <a href='https://webly.su'>webly.su</a>"
-    marker = "webly.su"
-    if not text:
-        return footer
-    if marker in text:
-        return text
-    return f"{text}\n\n{footer}"
+    return text or ""
 
 def format_results(found, stats, title):
     attempts = int((stats or {}).get("attempts", 0) or 0)
@@ -253,7 +249,7 @@ DEFAULT_CONFIG = {
     "required_channels": ["SwordUsers"],
     "text_welcome": "", "text_found": "", "text_empty": "",
     "text_profile_header": "", "text_shop_header": "",
-    "btn_tiktok": True, "btn_roulette": True, "btn_monitor": True,
+    "btn_tiktok": True, "btn_roulette": False, "btn_monitor": True,
     "btn_shop": True, "btn_support": True, "btn_referral": True,
     "mode_default": True, "mode_beautiful": True, "mode_meaningful": True,
     "mode_telegram": True,
@@ -1322,7 +1318,8 @@ def init_db():
     c.execute("""CREATE TABLE IF NOT EXISTS tasks (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER,
         status TEXT DEFAULT 'pending', created TEXT,
-        reviewed_by INTEGER DEFAULT 0, photo_count INTEGER DEFAULT 0)""")
+        reviewed_by INTEGER DEFAULT 0, photo_count INTEGER DEFAULT 0,
+        proof_url TEXT DEFAULT '', sbp TEXT DEFAULT '', amount_rub REAL DEFAULT 0)""")
     c.execute("""CREATE TABLE IF NOT EXISTS history (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, username TEXT,
         found_at TEXT, mode TEXT, length INTEGER DEFAULT 5)""")
@@ -1352,6 +1349,13 @@ def init_db():
         ("daily_searches_used","0"),("daily_searches_date",""),
         ("vip_end","")]:
         try: c.execute(f"ALTER TABLE users ADD COLUMN {col} DEFAULT {default}")
+        except: pass
+    for col, col_type, default in [
+        ("proof_url", "TEXT", "''"),
+        ("sbp", "TEXT", "''"),
+        ("amount_rub", "REAL", "0")
+    ]:
+        try: c.execute(f"ALTER TABLE tasks ADD COLUMN {col} {col_type} DEFAULT {default}")
         except: pass
     try: c.execute("ALTER TABLE promotions ADD COLUMN button_text TEXT DEFAULT ''")
     except: pass
@@ -1707,19 +1711,34 @@ def add_template_uses(uid, count):
     c.execute("UPDATE users SET template_uses=template_uses+? WHERE uid=?", (count, uid)); conn.commit(); conn.close()
 
 def process_referral(new_uid, ref_uid):
-    if new_uid == ref_uid: return False
+    if new_uid == ref_uid:
+        return False
     u = get_user(new_uid)
-    if u.get("referred_by", 0) != 0: return False
+    if u.get("referred_by", 0) != 0:
+        return False
+
     ensure_user(ref_uid)
+    ref_user = get_user(ref_uid)
+    old_count = int(ref_user.get("ref_count", 0) or 0)
+    new_count = old_count + 1
+    premium_days = int(REFERRAL_PREMIUM_BONUSES.get(new_count, 0) or 0)
     uname = get_user(new_uid).get("uname", "")
+
     conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("UPDATE users SET referred_by=? WHERE uid=?", (ref_uid, new_uid))
-    c.execute("UPDATE users SET ref_count=ref_count+1, extra_searches=extra_searches+? WHERE uid=?", (REF_BONUS, ref_uid))
+    c.execute("UPDATE users SET ref_count=ref_count+1 WHERE uid=?", (ref_uid,))
     c.execute("INSERT INTO referrals (referrer_uid,referred_uid,referred_uname,created) VALUES (?,?,?,?)",
               (ref_uid, new_uid, uname, datetime.now().strftime("%Y-%m-%d %H:%M")))
     conn.commit(); conn.close()
-    log_action(ref_uid, "ref_bonus", f"+{REF_BONUS} searches from {new_uid}")
-    return True
+
+    sub_end = ""
+    if premium_days > 0:
+        sub_end = give_subscription(ref_uid, premium_days)
+        log_action(ref_uid, "ref_premium_bonus", f"{new_count} refs +{premium_days}d")
+    else:
+        log_action(ref_uid, "ref_join", f"{new_count} refs from {new_uid}")
+
+    return {"ref_count": new_count, "premium_days": premium_days, "sub_end": sub_end}
 
 def get_user_referrals(uid, limit=50):
     conn = sqlite3.connect(DB); c = conn.cursor()
@@ -1872,6 +1891,23 @@ def get_my_ref_place(uid):
     above = c.fetchone()[0]; conn.close()
     return above+1, my
 
+def get_referrals_until_next_bonus(ref_count):
+    ref_count = int(ref_count or 0)
+    for threshold in sorted(REFERRAL_PREMIUM_BONUSES):
+        if ref_count < threshold:
+            return threshold - ref_count
+    return 0
+
+def get_tiktok_approved_count(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    try:
+        c.execute("SELECT COUNT(*) FROM tasks WHERE uid=? AND status='approved'", (uid,))
+        count = c.fetchone()[0]
+    except Exception:
+        count = 0
+    conn.close()
+    return int(count or 0)
+
 def add_favorite(uid, username):
     conn = sqlite3.connect(DB); c = conn.cursor()
     try:
@@ -1919,6 +1955,21 @@ def task_create(uid):
               (uid,datetime.now().strftime("%Y-%m-%d %H:%M")))
     tid = c.lastrowid; conn.commit(); conn.close(); return tid
 
+def task_set_proof(tid, proof_url):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE tasks SET proof_url=? WHERE id=?", (proof_url, tid))
+    conn.commit(); conn.close()
+
+def task_set_sbp(tid, sbp):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE tasks SET sbp=? WHERE id=?", (sbp, tid))
+    conn.commit(); conn.close()
+
+def task_set_amount(tid, amount_rub):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE tasks SET amount_rub=? WHERE id=?", (float(amount_rub), tid))
+    conn.commit(); conn.close()
+
 def task_approve(tid, admin_uid):
     conn = sqlite3.connect(DB); c = conn.cursor()
     c.execute("SELECT uid FROM tasks WHERE id=? AND status='pending'", (tid,))
@@ -1937,9 +1988,9 @@ def task_reject(tid, admin_uid):
 
 def get_pending_tasks():
     conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("SELECT id,uid,created,photo_count FROM tasks WHERE status='pending'")
+    c.execute("SELECT id,uid,created,photo_count,proof_url,sbp,amount_rub FROM tasks WHERE status='pending'")
     rows = c.fetchall(); conn.close()
-    return [{"id":r[0],"uid":r[1],"created":r[2],"photos":r[3]} for r in rows]
+    return [{"id":r[0],"uid":r[1],"created":r[2],"photos":r[3],"proof_url":r[4] or "","sbp":r[5] or "","amount_rub":r[6] or 0} for r in rows]
 
 def get_stats():
     conn = sqlite3.connect(DB); c = conn.cursor()
@@ -2467,7 +2518,6 @@ def build_menu(uid):
     kb.button(text="🏪 Магазин", callback_data="cmd_shop")
     if is_button_enabled("referral"):
         kb.button(text="👥 Рефералы", callback_data="cmd_referral")
-    kb.button(text="🏪 Маркет", callback_data="cmd_market")
     kb.button(text="📋 Документы бота", callback_data="cmd_documents")
     if is_button_enabled("support"):
         kb.button(text="💬 Поддержка", url=f"https://t.me/{ADMIN_CONTACT}")
@@ -2845,7 +2895,16 @@ async def register_handlers(dp: Dispatcher):
             set_pending_ref(uid,0); set_captcha_passed(uid)
             if ok:
                 log_action(uid,"referral_join",str(ref_uid))
-                try: await bot.send_message(ref_uid, f"🎉 Новый реферал! <b>+{REF_BONUS}</b>", parse_mode="HTML")
+                try:
+                    if isinstance(ok, dict):
+                        bonus_days = int(ok.get("premium_days", 0) or 0)
+                        ref_count = int(ok.get("ref_count", 0) or 0)
+                        text = f"🎉 Новый реферал!\n👥 Всего приглашено: <code>{ref_count}</code>"
+                        if bonus_days > 0:
+                            text += f"\n💎 Бонус: <b>+{bonus_days} дн. Premium</b>\nДо: <code>{ok.get('sub_end','')}</code>"
+                    else:
+                        text = "🎉 Новый реферал!"
+                    await bot.send_message(ref_uid, text, parse_mode="HTML")
                 except: pass
         else: set_captcha_passed(uid)
         t,k = build_menu(uid); t = with_main_branding(t); await edit_to_photo(cb.message, t, k)
@@ -2864,8 +2923,7 @@ async def register_handlers(dp: Dispatcher):
             f"для себя или продажи ⚡\n\n"
             f"🔍 <b>Поиск</b> — найди свободный юзернейм\n"
             f"📊 <b>Утилиты</b> — проверка и оценка\n"
-            f"👁 <b>Мониторинг</b> — следи за юзами\n"
-            f"🏪 <b>Маркет</b> — купи/продай юзернейм\n\n"
+            f"👁 <b>Мониторинг</b> — следи за юзами\n\n"
             f"🎁 У тебя <b>{FREE_SEARCHES}</b> бесплатных поиска!")
         try:
             photo = FSInputFile(MENU_IMAGE)
@@ -2891,8 +2949,7 @@ async def register_handlers(dp: Dispatcher):
             f"for yourself or for sale ⚡\n\n"
             f"🔍 <b>Search</b> — find free username\n"
             f"📊 <b>Utilities</b> — check and evaluate\n"
-            f"👁 <b>Monitoring</b> — track usernames\n"
-            f"🏪 <b>Market</b> — buy/sell username\n\n"
+            f"👁 <b>Monitoring</b> — track usernames\n\n"
             f"🎁 You have <b>{FREE_SEARCHES}</b> free searches!")
         try:
             photo = FSInputFile(MENU_IMAGE)
@@ -3042,13 +3099,9 @@ async def register_handlers(dp: Dispatcher):
             found, stats = await do_search(count, mi["func"], cb.message, mi["name"], uid, mode)
             text = format_results(found, stats, mi["name"])
             kb = InlineKeyboardBuilder()
-            for item in found[:10]:
-                un = item.get("username", "")
-                kb.button(text=f"⭐ {un}", callback_data=f"addfav_{un}")
             kb.button(text="🔙 Меню", callback_data="cmd_menu")
             kb.button(text="🔄 Повторить", callback_data=f"go_{mode}")
-            kb.button(text="⚡ webly.su", url="https://webly.su")
-            kb.adjust(3)
+            kb.adjust(2)
             try: await cb.message.delete()
             except: pass
             await send_menu_photo(uid, text, kb.as_markup())
@@ -3153,675 +3206,18 @@ async def register_handlers(dp: Dispatcher):
             "• <code>_pro</code> — удалит все с '_pro'\n"
             "• <code>tg</code> — удалит все с 'tg'", kb.as_markup())
 
-    # ═══ МАРКЕТПЛЕЙС ХЕНДЛЕРЫ ═══
-    
+    # ═══ МАРКЕТПЛЕЙС ОТКЛЮЧЁН ═══
+
     @dp.callback_query(F.data == "cmd_market")
-    async def cb_market(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        if is_banned(uid): return
-        lots = market_get_active_lots(5)
-        nft_lots = market_get_active_lots(3, nft_only=True)
-        rating = get_user_rating(uid)
-        bal = get_balance(uid)
-
-        text = (f"🏪 <b>Маркет</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"💰 Баланс: <code>{bal:.0f}⭐</code>\n"
-                f"⭐ Рейтинг: {'⭐'*int(rating['avg'])+'☆'*(5-int(rating['avg']))} ({rating['count']})\n"
-                f"📊 Комиссия: {int(MARKET_COMMISSION*100)}%\n")
-
-        if lots:
-            text += "\n<b>📦 Последние лоты:</b>\n"
-            for lot in lots:
-                promo = "🔥 " if lot["promoted"] else ""
-                text += f"{promo}<b>{lot['title']}</b> — <code>{lot['price']}⭐</code>\n"
-
-        if nft_lots:
-            text += "\n<b>💎 NFT юзернеймы:</b>\n"
-            for lot in nft_lots:
-                text += f"💎 <b>{lot['title']}</b> — <code>{lot['price']}⭐</code>\n"
-
-        kb = InlineKeyboardBuilder()
-        kb.button(text="📋 Все лоты", callback_data="market_browse")
-        kb.button(text="💎 NFT юзы", callback_data="market_nft")
-        kb.button(text="➕ Продать", callback_data="market_sell")
-        kb.button(text="📦 Мои лоты", callback_data="market_my")
-        kb.button(text="🛒 Мои покупки", callback_data="market_my_purchases")
-        kb.button(text="🔄 Обменник", callback_data="market_exchange")
-      # kb.button(text="🎡 Колесо", callback_data="market_wheel")
-        kb.button(text="📦 Лутбокс", callback_data="market_lootbox")
-        kb.button(text="🔙 Меню", callback_data="cmd_menu")
-        kb.adjust(2)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "market_browse")
-    async def cb_market_browse(cb: CallbackQuery):
+    async def cb_market_disabled(cb: CallbackQuery):
         await answer_cb(cb)
-        lots = market_get_active_lots(20)
-        text = f"📋 <b>Лоты ({len(lots)})</b>\n\n"
-        kb = InlineKeyboardBuilder()
-        for lot in lots:
-            sr = get_user_rating(lot["seller"])
-            promo = "🔥 " if lot["promoted"] else ""
-            stars = f"⭐{sr['avg']}" if sr['avg'] else "🆕"
-            text += f"{promo}<b>{lot['title']}</b> — <code>{lot['price']}⭐</code> ({stars})\n"
-            kb.button(text=f"🛒 {lot['title'][:20]} ({lot['price']}⭐)", callback_data=f"mlot_{lot['id']}")
-        if not lots: text += "<i>Пусто</i>"
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
+        t, k = build_menu(cb.from_user.id)
+        await edit_to_photo(cb.message, t, k)
 
-    @dp.callback_query(F.data == "market_nft")
-    async def cb_market_nft(cb: CallbackQuery):
-        await answer_cb(cb)
-        lots = market_get_active_lots(20, nft_only=True)
-        text = (f"💎 <b>NFT Юзернеймы</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Юзернеймы купленные на Fragment.\n"
-                f"Размещение: <code>{MARKET_NFT_LISTING_FEE}⭐</code>\n\n")
-        kb = InlineKeyboardBuilder()
-        for lot in lots:
-            promo = "🔥 " if lot["promoted"] else ""
-            text += f"{promo}💎 <b>{lot['title']}</b> — <code>{lot['price']}⭐</code>\n"
-            if lot.get("fragment_url"): text += f"   🔗 <a href='{lot['fragment_url']}'>Fragment</a>\n"
-            text += "\n"
-            kb.button(text=f"💎 {lot['title'][:20]} ({lot['price']}⭐)", callback_data=f"mlot_{lot['id']}")
-        if not lots: text += "<i>Нет NFT лотов</i>"
-        kb.button(text="➕ Продать NFT", callback_data="market_sell_nft")
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
+    @dp.callback_query(F.data.startswith("market_"))
+    async def cb_market_callbacks_disabled(cb: CallbackQuery):
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
 
-    @dp.callback_query(F.data.startswith("mlot_"))
-    async def cb_mlot(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[5:])
-        lot = market_get_lot(lot_id)
-        if not lot or lot["status"] != "active":
-            kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="market_browse")
-            await edit_msg(cb.message, "❌ Лот не найден", kb.as_markup()); return
-
-        seller = get_user(lot["seller_uid"])
-        sr = get_user_rating(lot["seller_uid"])
-        name = f"@{seller.get('uname','')}" if seller.get('uname') else f"ID:{lot['seller_uid']}"
-        stars_d = "⭐"*int(sr['avg'])+"☆"*(5-int(sr['avg'])) if sr['avg'] else "🆕"
-        nft_badge = "💎 NFT | " if lot.get("is_nft") else ""
-        promo_badge = "🔥 ПРОМО | " if lot.get("promoted") else ""
-        type_names = {"username":"👤 Юзернейм","service":"🔧 Услуга","premium":"💎 Premium","other":"📦 Другое","nft":"💎 NFT"}
-
-        text = (f"📦 <b>Лот #{lot_id}</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            f"{promo_badge}{nft_badge}{type_names.get(lot['mtype'],'📦')}\n"
-            f"🏷 <b>{lot['title']}</b>\n"
-            f"📝 {lot['description']}\n\n"
-            f"💰 Цена: <code>{lot['price']}⭐</code> ({int(int(lot['price'])*STAR_TO_RUB)}₽)\n\n"
-            f"👤 {name}\n"
-            f"⭐ {stars_d} ({sr['count']} отзывов)\n"
-            f"📅 {lot['created']}")
-
-        if lot.get("fragment_url"):
-            text += f"\n🔗 <a href='{lot['fragment_url']}'>Fragment</a>"
-
-        kb = InlineKeyboardBuilder()
-        if lot["seller_uid"] != uid:
-            kb.button(text=f"🛒 Купить за {lot['price']}⭐", callback_data=f"mbuy_{lot_id}")
-            kb.button(text="🏷 Есть промокод", callback_data=f"mpromo_{lot_id}")
-        else:
-            kb.button(text=f"🔥 Продвинуть ({MARKET_PROMOTE_PRICE}⭐)", callback_data=f"mpromote_{lot_id}")
-            kb.button(text="❌ Снять", callback_data=f"mcancel_{lot_id}")
-        kb.button(text="👤 Отзывы", callback_data=f"mrev_{lot['seller_uid']}")
-        back = "market_nft" if lot.get("is_nft") else "market_browse"
-        kb.button(text="🔙", callback_data=back); kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("mbuy_"))
-    async def cb_mbuy(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[5:])
-        lot = market_get_lot(lot_id)
-        if not lot or lot["status"] != "active":
-            await answer_cb(cb, "❌ Лот уже продан!", show_alert=True); return
-        if lot["seller_uid"] == uid:
-            await answer_cb(cb, "❌ Нельзя купить свой лот!", show_alert=True); return
-
-        bal = get_balance(uid)
-        price = int(lot["price"])
-        rub = int(price * STAR_TO_RUB)
-
-        kb = InlineKeyboardBuilder()
-        if bal >= price:
-            kb.button(text=f"💰 С баланса ({price}⭐)", callback_data=f"paybal_lot_{lot_id}")
-        kb.button(text=f"⭐ Telegram Stars ({price}⭐)", callback_data=f"paystars_lot_{lot_id}")
-        kb.button(text="❌ Отмена", callback_data=f"mlot_{lot_id}")
-        kb.adjust(1)
-
-        await edit_msg(cb.message,
-            f"🛒 <b>Покупка лота #{lot_id}</b>\n\n"
-            f"📦 {lot['title']}\n"
-            f"💰 Цена: <code>{price}⭐</code> (<code>{rub}₽</code>)\n\n"
-            f"💰 Ваш баланс: <code>{bal:.1f}⭐</code>\n\n"
-            f"Выберите способ оплаты:", kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("paybal_lot_"))
-    async def cb_paybal_lot(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[11:])
-        lot = market_get_lot(lot_id)
-        if not lot or lot["status"] != "active":
-            await answer_cb(cb, "❌ Лот продан!", show_alert=True); return
-        if lot["seller_uid"] == uid:
-            await answer_cb(cb, "❌ Свой лот!", show_alert=True); return
-
-        price = int(lot["price"])
-        bal = get_balance(uid)
-        if bal < price:
-            await answer_cb(cb, f"❌ Нужно {price}⭐, у вас {bal:.1f}⭐", show_alert=True); return
-
-        # Списываем с баланса
-        set_balance(uid, bal - price)
-
-        # Переводим в эскроу
-        ok = market_buy_lot(lot_id, uid)
-        if not ok:
-            add_balance(uid, price)  # возврат
-            await answer_cb(cb, "❌ Ошибка покупки!", show_alert=True); return
-
-        log_action(uid, "market_buy_bal", f"lot={lot_id} paid={price}")
-        display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
-
-        # Кнопки покупателю
-        kb = InlineKeyboardBuilder()
-        kb.button(text="✅ Получил товар", callback_data=f"mbuyerok_{lot_id}")
-        kb.button(text="⚠️ Открыть спор", callback_data=f"mdispute_{lot_id}")
-        kb.adjust(1)
-        await edit_msg(cb.message,
-            f"✅ <b>Оплачено с баланса!</b>\n\n"
-            f"📦 {lot['title']}\n"
-            f"💰 Списано: {price}⭐\n"
-            f"💰 Остаток: {bal-price:.1f}⭐\n\n"
-            f"🔒 Деньги на эскроу\n"
-            f"⏰ Срок: {MARKET_ESCROW_HOURS} часов\n\n"
-            f"Когда получите товар — нажмите <b>✅ Получил товар</b>",
-            kb.as_markup())
-
-        # Уведомление продавцу
-        skb = InlineKeyboardBuilder()
-        skb.button(text="✅ Я передал товар", callback_data=f"msellerok_{lot_id}")
-        try: await bot.send_message(lot["seller_uid"],
-            f"🛒 <b>Ваш лот куплен!</b>\n\n"
-            f"📦 {lot['title']}\n"
-            f"💰 {price}⭐\n"
-            f"👤 Покупатель: {display}\n\n"
-            f"⏰ Передайте товар в течение {MARKET_ESCROW_HOURS} часов",
-            reply_markup=skb.as_markup(), parse_mode="HTML")
-        except: pass
-
-        # Уведомление админу
-        commission = int(price * MARKET_COMMISSION)
-        payout = price - commission
-        await notify_admins(
-            f"🛒 <b>ПРОДАЖА (баланс)</b>\n"
-            f"📦 {lot['title']}\n"
-            f"💰 {price}⭐ | Комиссия: {commission}⭐\n"
-            f"👤 Покупатель: {display}\n"
-            f"👤 Продавец: <code>{lot['seller_uid']}</code>")
-
-
-    @dp.callback_query(F.data.startswith("paybal_listing_"))
-    async def cb_paybal_listing(cb: CallbackQuery):
-        uid = cb.from_user.id
-        await answer_cb(cb)
-    
-        lot_id = int(cb.data[15:])
-        lot = market_get_lot(lot_id)
-    
-        if not lot:
-            await answer_cb(cb, "❌ Лот не найден!", show_alert=True)
-            return
-    
-        if lot["seller_uid"] != uid:
-            await answer_cb(cb, "❌ Это не ваш лот!", show_alert=True)
-            return
-    
-        if lot.get("listing_paid"):
-            await answer_cb(cb, "✅ Уже оплачено!", show_alert=True)
-            return
-    
-        bal = get_balance(uid)
-        if bal < MARKET_LISTING_FEE:
-            await answer_cb(
-                cb,
-                f"❌ Нужно {MARKET_LISTING_FEE}⭐, у вас {bal:.1f}⭐",
-                show_alert=True
-            )
-            return
-    
-        # Списываем с баланса
-        set_balance(uid, bal - MARKET_LISTING_FEE)
-    
-        # Помечаем лот как оплаченный
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
-        c.execute("UPDATE market SET listing_paid=1 WHERE id=?", (lot_id,))
-        conn.commit()
-        conn.close()
-    
-        log_action(uid, "listing_paid_bal", f"lot={lot_id} -{MARKET_LISTING_FEE}⭐")
-        display = f"@{cb.from_user.username}" if cb.from_user.username else f"ID:{uid}"
-    
-        kb = InlineKeyboardBuilder()
-        kb.button(text="📦 Мои лоты", callback_data="market_my")
-        kb.button(text="🏪 Маркет", callback_data="cmd_market")
-        kb.adjust(1)
-    
-        await edit_msg(cb.message,
-            f"✅ <b>Размещение оплачено!</b>\n\n"
-            f"📦 Лот #{lot_id}\n"
-            f"💰 Списано: <code>{MARKET_LISTING_FEE}⭐</code>\n"
-            f"💰 Остаток: <code>{bal - MARKET_LISTING_FEE:.1f}⭐</code>\n\n"
-            f"⏳ Ожидайте проверки администратором",
-            kb.as_markup()
-        )
-    
-        # Уведомление админу
-        lot = market_get_lot(lot_id)
-        if lot:
-            akb = InlineKeyboardBuilder()
-            akb.button(text="✅ Одобрить", callback_data=f"mmod_ok_{lot_id}")
-            akb.button(text="❌ Отклонить", callback_data=f"mmod_no_{lot_id}")
-            akb.adjust(2)
-        
-            nft = "💎 NFT " if lot.get("is_nft") else ""
-        
-            await notify_admins(
-                f"📦 <b>НОВЫЙ ЛОТ (оплата с баланса)</b>\n\n"
-                f"{nft}#{lot_id}\n"
-                f"📌 {lot['title']}\n"
-                f"📝 {lot.get('description', '')}\n"
-                f"💰 {lot['price']}⭐\n"
-                f"👤 {display}\n"
-                f"💳 Размещение: {MARKET_LISTING_FEE}⭐ с баланса ✅",
-                kb=akb.as_markup()
-            )
-            
-    @dp.callback_query(F.data.startswith("paystars_lot_"))
-    async def cb_paystars_lot(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[13:])
-        lot = market_get_lot(lot_id)
-        if not lot or lot["status"] != "active":
-            await answer_cb(cb, "❌ Лот продан!", show_alert=True); return
-        if lot["seller_uid"] == uid:
-            await answer_cb(cb, "❌ Свой лот!", show_alert=True); return
-
-        await bot.send_invoice(uid,
-            title=f"🛒 {lot['title'][:50]}",
-            description=f"Маркет: {lot['description'][:100]}" if lot['description'] else f"Маркет: {lot['title']}",
-            payload=f"market_{lot_id}_{uid}_0",
-            provider_token="", currency="XTR",
-            prices=[LabeledPrice(label=lot["title"][:50], amount=lot["price"])])
-
-    @dp.callback_query(F.data.startswith("mpromo_"))
-    async def cb_mpromo(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[7:])
-        user_states[uid] = {"action":"market_enter_promo","lot_id":lot_id}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data=f"mlot_{lot_id}")
-        await edit_msg(cb.message, "🏷 <b>Введите промокод:</b>", kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("mpromote_"))
-    async def cb_mpromote(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[9:])
-        await redirect_payment(uid, f"🔥 Продвижение лота #{lot_id}", MARKET_PROMOTE_PRICE, None, f"mlot_{lot_id}")
-
-    @dp.callback_query(F.data.startswith("mcancel_"))
-    async def cb_mcancel(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[8:])
-        market_cancel_lot(lot_id, uid); log_action(uid, "market_cancel", str(lot_id))
-        await cb_market(cb)
-
-    @dp.callback_query(F.data.startswith("msellerok_"))
-    async def cb_msellerok(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[10:]); lot = market_get_lot(lot_id)
-        if not lot or lot["seller_uid"] != uid: return
-        completed = market_confirm_seller(lot_id)
-        if completed:
-            payout = int(lot["price"] * (1 - MARKET_COMMISSION))
-            await edit_msg(cb.message, f"✅ <b>Сделка завершена!</b>\n+{payout}⭐ на баланс")
-            try: await bot.send_message(lot["buyer_uid"], "✅ Сделка завершена!", parse_mode="HTML")
-            except: pass
-        else:
-            await edit_msg(cb.message, "✅ Подтверждено! Ждём покупателя")
-
-    @dp.callback_query(F.data.startswith("mbuyerok_"))
-    async def cb_mbuyerok(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[9:]); lot = market_get_lot(lot_id)
-        if not lot or lot["buyer_uid"] != uid: return
-        completed = market_confirm_buyer(lot_id)
-        if completed:
-            await edit_msg(cb.message, "✅ <b>Сделка завершена!</b>\nСпасибо за покупку!")
-            payout = int(lot["price"] * (1 - MARKET_COMMISSION))
-            try: await bot.send_message(lot["seller_uid"], f"✅ Сделка завершена!\n💰 +{payout}⭐", parse_mode="HTML")
-            except: pass
-        else:
-            await edit_msg(cb.message, "✅ Подтверждено! Ждём продавца")
-
-    @dp.callback_query(F.data.startswith("mdispute_"))
-    async def cb_mdispute(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lot_id = int(cb.data[9:])
-        user_states[uid] = {"action":"market_dispute_reason","lot_id":lot_id}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="market_my_purchases")
-        await edit_msg(cb.message, "⚠️ <b>Причина спора:</b>", kb.as_markup())
-
-    @dp.callback_query(F.data == "market_sell")
-    async def cb_market_sell(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        max_lots = market_get_max_lots(uid)
-        current = market_count_user_lots(uid)
-        text = (f"➕ <b>Продать</b>\n\n"
-                f"📦 Лотов: {current}/{max_lots}\n"
-                f"💰 Размещение: {MARKET_LISTING_FEE}⭐\n"
-                f"📊 Комиссия: {int(MARKET_COMMISSION*100)}%\n")
-        kb = InlineKeyboardBuilder()
-        if current >= max_lots:
-            text += f"\n❌ Лимит! Купите доп слот ({MARKET_EXTRA_SLOT_PRICE}⭐)"
-            kb.button(text=f"📦 +1 слот ({MARKET_EXTRA_SLOT_PRICE}⭐)", callback_data="market_buy_slot")
-        else:
-            kb.button(text="👤 Юзернейм", callback_data="msell_username")
-            kb.button(text="💎 Premium", callback_data="msell_premium")
-            kb.button(text="🔧 Услуга", callback_data="msell_service")
-            kb.button(text="📦 Другое", callback_data="msell_other")
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(2,2,1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "market_sell_nft")
-    async def cb_sell_nft(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        user_states[uid] = {"action":"msell_nft_title"}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="market_nft")
-        await edit_msg(cb.message,
-            f"💎 <b>Продать NFT юзернейм</b>\n\n"
-            f"💰 Размещение: <code>{MARKET_NFT_LISTING_FEE}⭐</code>\n\n"
-            f"Введите @юзернейм:", kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("msell_"))
-    async def cb_msell_type(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        mtype = cb.data[6:]
-        user_states[uid] = {"action":"msell_title","mtype":mtype}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="market_sell")
-        await edit_msg(cb.message, "📝 <b>Название лота:</b>", kb.as_markup())
-
-    @dp.callback_query(F.data == "market_buy_slot")
-    async def cb_buy_slot(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        await redirect_payment(uid, "📦 +1 слот маркета", MARKET_EXTRA_SLOT_PRICE, None, "market_sell")
-
-    @dp.callback_query(F.data == "market_my")
-    async def cb_market_my(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        lots = market_get_user_lots(uid)
-        max_lots = market_get_max_lots(uid)
-        text = f"📦 <b>Мои лоты ({len(lots)}/{max_lots})</b>\n\n"
-        kb = InlineKeyboardBuilder()
-        for lot in lots:
-            st = {"pending":"⏳","active":"✅","escrow":"🔒"}.get(lot["status"],"❓")
-            nft = "💎" if lot["is_nft"] else ""
-            promo = "🔥" if lot["promoted"] else ""
-            text += f"{st}{nft}{promo} <b>{lot['title']}</b> — {lot['price']}⭐\n"
-            if lot["status"] == "escrow":
-                kb.button(text=f"✅ Передал #{lot['id']}", callback_data=f"msellerok_{lot['id']}")
-            elif lot["status"] in ("pending","active"):
-                kb.button(text=f"❌ #{lot['id']}", callback_data=f"mcancel_{lot['id']}")
-        if not lots: text += "<i>Нет</i>"
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "market_my_purchases")
-    async def cb_market_purchases(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        conn = sqlite3.connect(DB); c = conn.cursor()
-        c.execute("SELECT id,title,price,status,buyer_confirmed FROM market WHERE buyer_uid=? AND status IN ('escrow','completed','dispute') ORDER BY id DESC LIMIT 20", (uid,))
-        rows = c.fetchall(); conn.close()
-        text = f"🛒 <b>Мои покупки</b>\n\n"
-        kb = InlineKeyboardBuilder()
-        for r in rows:
-            st = {"escrow":"🔒","completed":"✅","dispute":"⚠️"}.get(r[3],"❓")
-            text += f"{st} <b>{r[1]}</b> — {r[2]}⭐\n"
-            if r[3] == "escrow" and not r[4]:
-                kb.button(text=f"✅ Получил #{r[0]}", callback_data=f"mbuyerok_{r[0]}")
-                kb.button(text=f"⚠️ Спор #{r[0]}", callback_data=f"mdispute_{r[0]}")
-        if not rows: text += "<i>Нет</i>"
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("mrev_"))
-    async def cb_mrev(cb: CallbackQuery):
-        uid_target = int(cb.data[5:]); await answer_cb(cb)
-        reviews = get_user_reviews(uid_target)
-        rating = get_user_rating(uid_target)
-        u = get_user(uid_target)
-        name = f"@{u.get('uname','')}" if u.get('uname') else f"ID:{uid_target}"
-        text = f"⭐ <b>{name}</b>\n{'⭐'*int(rating['avg'])+'☆'*(5-int(rating['avg']))} ({rating['avg']}/5, {rating['count']})\n\n"
-        for r in reviews:
-            fn = f"@{get_user(r['from']).get('uname','')}" if get_user(r['from']).get('uname') else f"ID:{r['from']}"
-            text += f"{'⭐'*r['rating']} {fn}\n{r['text']}\n\n"
-        if not reviews: text += "<i>Нет отзывов</i>"
-        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_market"); kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-
-    # ═══ ЛУТБОКС ═══
-
-    @dp.callback_query(F.data == "market_lootbox")
-    async def cb_lootbox(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        can = lootbox_can_open(uid)
-        text = (f"📦 <b>Лутбокс</b>\n\n"
-                f"💰 Цена: <code>{LOOTBOX_PRICE}⭐</code>\n"
-                f"⏰ КД: 1 час\n\n"
-                f"🎁 Возможные призы:\n"
-                f"  💎 Premium (5%)\n  🌟 VIP (10%)\n  ⭐ Звёзды (20%)\n"
-                f"  🔍 Поиски (25%)\n  📦 Слот маркета (20%)\n  🧸 Сувенир (20%)")
-        kb = InlineKeyboardBuilder()
-        if can:
-            kb.button(text=f"📦 Открыть ({LOOTBOX_PRICE}⭐)", callback_data="lootbox_open")
-        else:
-            kb.button(text="⏰ Подождите...", callback_data="cmd_market")
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "lootbox_open")
-    async def cb_lootbox_open(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        if not lootbox_can_open(uid):
-            await answer_cb(cb, "⏰ Подождите!", show_alert=True); return
-        await redirect_payment(uid, "📦 Лутбокс", LOOTBOX_PRICE, None, "market_lootbox")
-
-    # ═══ ОБМЕННИК ═══
-
-    @dp.callback_query(F.data == "market_exchange")
-    async def cb_exchange(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        exs = exchange_get_open(10)
-        text = f"🔄 <b>Обменник:</b>\n\n"
-        kb = InlineKeyboardBuilder()
-        for ex in exs:
-            u = get_user(ex["uid"])
-            name = f"@{u.get('uname','')}" if u.get('uname') else f"ID:{ex['uid']}"
-            text += f"🔄 #{ex['id']} {name}: <b>{ex['offer']}</b>\n"
-            if ex["uid"] != uid:
-                kb.button(text=f"🔄 #{ex['id']}", callback_data=f"exview_{ex['id']}")
-        if not exs: text += "<i>Нет</i>\n"
-        kb.button(text="➕ Создать", callback_data="exchange_new")
-        kb.button(text="🔙 Маркет", callback_data="cmd_market")
-        kb.adjust(2,1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "exchange_new")
-    async def cb_ex_new(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        user_states[uid] = {"action":"exchange_offer"}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="market_exchange")
-        await edit_msg(cb.message, "🔄 <b>Что отдаёте?</b>\n\nНапример: <code>@myusername</code>", kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("exview_"))
-    async def cb_exview(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        eid = int(cb.data[7:]); ex = exchange_get(eid)
-        if not ex or ex["status"] != "open":
-            kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="market_exchange")
-            await edit_msg(cb.message, "❌ Обмен закрыт", kb.as_markup()); return
-        u = get_user(ex["initiator_uid"])
-        name = f"@{u.get('uname','')}" if u.get('uname') else f"ID:{ex['initiator_uid']}"
-        text = f"🔄 <b>#{eid}</b>\n\n👤 {name}\n📦 <b>{ex['initiator_offer']}</b>"
-        kb = InlineKeyboardBuilder()
-        if ex["initiator_uid"] != uid:
-            kb.button(text="🔄 Предложить обмен", callback_data=f"exaccept_{eid}")
-        kb.button(text="🔙", callback_data="market_exchange")
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    # Обновляем cb_exaccept и cb_exview
-    @dp.callback_query(F.data.startswith("exaccept_"))
-    async def cb_exaccept(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        eid = int(cb.data[9:])
-        user_states[uid] = {"action": "exchange_counter", "eid": eid}
-
-        ex = exchange_get(eid)
-        if not ex:
-            await edit_msg(cb.message, "❌ Обмен не найден")
-            return
-
-        kb = InlineKeyboardBuilder()
-        kb.button(text="❌ Отмена", callback_data=f"exview_{eid}")
-
-        await edit_msg(cb.message,
-            f"🔄 <b>Принять обмен #{eid}</b>\n\n"
-            f"📥 Тебе предлагают: <code>@{ex['initiator_offer']}</code>\n\n"
-            f"📤 Что предложишь взамен?\n"
-            f"Введи свой юзернейм (без @):",
-            kb.as_markup())
-
-    @dp.callback_query(F.data.startswith("exconfirm_"))
-    async def cb_exconfirm(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        eid = int(cb.data[10:])
-
-        completed, ex_data = exchange_confirm(eid, uid)
-
-        if completed and ex_data:
-            init_uid = ex_data["initiator_uid"]
-            part_uid = ex_data["partner_uid"]
-            init_offer = ex_data["initiator_offer"]  # юз инициатора
-            part_offer = ex_data["partner_offer"]    # юз партнёра
-
-            # Определяем кто что получает
-            # Инициатор ПОЛУЧАЕТ юз партнёра
-            # Партнёр ПОЛУЧАЕТ юз инициатора
-
-            if uid == init_uid:
-                # Инициатор подтвердил последним
-                i_get = part_offer   # инициатор получает юз партнёра
-                p_get = init_offer   # партнёр получает юз инициатора
-            else:
-                # Партнёр подтвердил последним
-                i_get = part_offer
-                p_get = init_offer
-
-            # Сообщение тому кто нажал (видит сразу)
-            you_get = i_get if uid == init_uid else p_get
-            you_gave = init_offer if uid == init_uid else part_offer
-
-            await edit_msg(cb.message,
-                f"✅ <b>Обмен #{eid} завершён!</b>\n\n"
-                f"📤 Ты отдал: <code>@{you_gave}</code>\n"
-                f"📥 Ты получил: <code>@{you_get}</code>\n\n"
-                f"🔗 <a href='https://t.me/{you_get}'>Открыть в Telegram</a>\n"
-                f"💎 <a href='https://fragment.com/username/{you_get}'>Проверить на Fragment</a>\n\n"
-                f"⚠️ Не забудь — юзернейм нужно "
-                f"<b>успеть забрать</b> до того как его займут!")
-
-            # Уведомляем второго участника
-            other_uid = part_uid if uid == init_uid else init_uid
-            other_get = i_get if other_uid == init_uid else p_get
-            other_gave = init_offer if other_uid == init_uid else part_offer
-
-            try:
-                await bot.send_message(other_uid,
-                    f"✅ <b>Обмен #{eid} завершён!</b>\n\n"
-                    f"📤 Ты отдал: <code>@{other_gave}</code>\n"
-                    f"📥 Ты получил: <code>@{other_get}</code>\n\n"
-                    f"🔗 <a href='https://t.me/{other_get}'>Открыть в Telegram</a>\n"
-                    f"💎 <a href='https://fragment.com/username/{other_get}'>Проверить на Fragment</a>\n\n"
-                    f"⚠️ Не забудь — юзернейм нужно "
-                    f"<b>успеть забрать</b> до того как его займут!",
-                    parse_mode="HTML",
-                    disable_web_page_preview=True)
-            except: pass
-
-            # Логируем
-            log_action(uid, "exchange_complete",
-                      f"#{eid} {init_offer}↔{part_offer}")
-
-        else:
-            # Ждём второго
-            ex = exchange_get(eid)
-            if not ex:
-                await edit_msg(cb.message, "❌ Обмен не найден")
-                return
-
-            # Показываем что предложил другой
-            if uid == ex.get("initiator_uid"):
-                you_offer = ex.get("initiator_offer", "?")
-                they_offer = ex.get("partner_offer", "?")
-            else:
-                you_offer = ex.get("partner_offer", "?")
-                they_offer = ex.get("initiator_offer", "?")
-
-            kb = InlineKeyboardBuilder()
-            kb.button(text="🏪 Обменник", callback_data="market_exchange")
-            kb.adjust(1)
-
-            await edit_msg(cb.message,
-                f"✅ <b>Ты подтвердил получение!</b>\n\n"
-                f"📤 Ты отдаёшь: <code>@{you_offer}</code>\n"
-                f"📥 Ты получишь: <code>@{they_offer}</code>\n\n"
-                f"⏳ Ждём подтверждения второй стороны...\n\n"
-                f"💡 Как только они нажмут подтвердить — "
-                f"вы оба получите юзернеймы автоматически",
-                kb.as_markup())
-
-    # калбак оплаты новой
-    @dp.callback_query(F.data == "market_pay_balance")
-    async def market_pay_balance(cb: CallbackQuery):
-        uid = cb.from_user.id
-        user = get_user(uid)
-
-        if user["balance"] < MARKET_LISTING_FEE:
-            await cb.answer("❌ Недостаточно средств", show_alert=True)
-            return
-
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
-
-        c.execute(
-            "UPDATE users SET balance = balance - ? WHERE uid=?",
-            (MARKET_LISTING_FEE, uid)
-        )
-
-        conn.commit()
-        conn.close()
-
-        user_states[uid] = {"listing_paid": True}
-
-        await cb.message.edit_text("✅ Оплата прошла. Теперь заново создайте товар")
     # ═══════════════════════ CALLBACKS: Мониторинг ═══════════════════════
 
     @dp.callback_query(F.data == "cmd_monitors")
@@ -3873,45 +3269,27 @@ async def register_handlers(dp: Dispatcher):
     @dp.callback_query(F.data == "cmd_shop")
     async def cb_shop(cb: CallbackQuery):
         uid = cb.from_user.id; await answer_cb(cb)
-        u = get_user(uid); extra = u.get("extra_searches",0)
         bal = get_balance(uid)
 
         text = (f"🏪 <b>Магазин</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"💰 Баланс: <code>{bal:.1f}⭐</code>\n"
-                f"🔍 Доп. поисков: <code>{extra}</code>\n\n"
-                f"💎 <b>Premium:</b>\n")
-
-        for p in PRICES.values():
-            text += f"• {p['label']} — <code>{p['stars']}⭐</code>/<code>{p['rub']}₽</code>\n"
+                f"💰 Баланс: <code>{bal:.1f}⭐</code>\n\n"
+                f"Выберите раздел:\n"
+                f"• 💎 Premium\n"
+                f"• 🌟 VIP\n"
+                f"• 📦 Бандл Premium+VIP")
 
         kb = InlineKeyboardBuilder()
-        kb.button(text="🔍 Купить поиски", callback_data="shop_buy_searches")
         kb.button(text="💎 Premium", callback_data="shop_premium")
         kb.button(text="🌟 VIP", callback_data="shop_vip")
         kb.button(text="📦 Бандл Premium+VIP", callback_data="shop_bundle")
-        kb.button(text="🏷 Промокод", callback_data="shop_promo")
-        kb.button(text="⚡ webly.su", url="https://webly.su")
         kb.button(text="🔙 Меню", callback_data="cmd_menu")
         kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
 
     @dp.callback_query(F.data == "shop_buy_searches")
     async def cb_shop_buy(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        bal = get_balance(uid)
-
-        text = (f"🔍 <b>Купить поиски</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"Цена: <code>{SEARCH_PRICE_STARS}⭐</code>/<code>{int(SEARCH_PRICE_STARS*STAR_TO_RUB)}₽</code> за 1 поиск\n\n"
-                f"💰 Баланс: <code>{bal:.1f}⭐</code>\n"
-                f"💳 Рубли — @{PAY_CONTACT}\n\n"
-                f"Введите количество (1-1000):")
-
-        user_states[uid] = {"action":"shop_custom_amount"}
-        kb = InlineKeyboardBuilder()
-        kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
-        kb.button(text="❌ Отмена", callback_data="cmd_shop")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
+        await cb_shop(cb)
 
     @dp.callback_query(F.data == "shop_premium")
     async def cb_shop_prem(cb: CallbackQuery):
@@ -3925,7 +3303,6 @@ async def register_handlers(dp: Dispatcher):
                 f"• Все режимы\n"
                 f"• Шаблон + Похожие\n"
                 f"• Мониторинг {MONITOR_MAX_PREMIUM} юзов\n"
-                f"• Рулетка\n\n"
                 f"<b>Цены:</b>\n\n")
 
         for p in PRICES.values():
@@ -4007,12 +3384,8 @@ async def register_handlers(dp: Dispatcher):
 
     @dp.callback_query(F.data == "shop_promo")
     async def cb_shop_promo(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        user_states[uid] = {"action": "shop_activate_promo"}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌ Отмена", callback_data="cmd_shop"); kb.adjust(1)
-        await edit_msg(cb.message,
-            "🏷 <b>Активация промокода</b>\n\n"
-            "Введите промокод:", kb.as_markup())
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
+        await cb_shop(cb)
 
     # ═══ ВЫБОР ОПЛАТЫ: БАЛАНС ═══
 
@@ -4213,7 +3586,6 @@ async def register_handlers(dp: Dispatcher):
         else: status = "⛔️ Лимит"
 
         cnt = get_search_count(uid); mx = get_max_searches(uid)
-        ar_on,ar_plan = get_auto_renew(uid)
         bal = u.get("balance",0.0); uname = u.get("uname","")
         mons = get_monitor_count(uid); mon_limit = get_monitor_limit(uid)
         custom_header = config.get("text_profile_header","")
@@ -4226,68 +3598,36 @@ async def register_handlers(dp: Dispatcher):
                  f"📊 Всего: <code>{u.get('searches',0)}</code>\n"
                  f"👥 Рефералов: <code>{u.get('ref_count',0)}</code>\n"
                  f"👁 Мониторинг: <code>{mons}/{mon_limit}</code>\n"
-                 f"💰 Баланс: <code>{bal:.1f}</code> ⭐ (<code>{bal*STAR_TO_RUB:.0f}₽</code>)\n\n"
-                 f"🔄 Авто: {'<b>ВКЛ</b> ('+ar_plan+')' if ar_on else 'ВЫКЛ'}")
+                 f"💰 Баланс: <code>{bal:.1f}</code> ⭐ (<code>{bal*STAR_TO_RUB:.0f}₽</code>)")
 
         kb = InlineKeyboardBuilder()
-        if ar_on: kb.button(text="🔄 Выкл авто", callback_data="toggle_renew")
-        else: kb.button(text="🔄 Вкл авто", callback_data="toggle_renew")
         kb.button(text="📜 История", callback_data="util_hist")
-        kb.button(text="⭐ Избранное", callback_data="cmd_favorites")
         kb.button(text="🔑 Ключ", callback_data="cmd_activate")
-        kb.button(text="🎁 Подарить", callback_data="gift_prem")
         if bal>=MIN_WITHDRAW: kb.button(text=f"💸 Вывести ({bal:.1f}⭐)", callback_data="cmd_withdraw")
-        if is_prem and is_button_enabled("roulette"): kb.button(text="🎰 Рулетка", callback_data="cmd_roulette")
         kb.button(text="🔙 Меню", callback_data="cmd_menu"); kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
 
     @dp.callback_query(F.data == "cmd_favorites")
     async def cb_favorites(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        favs = get_favorites(uid)
-        text = f"⭐ <b>Избранное</b> ({len(favs)})\n\n"
-        kb = InlineKeyboardBuilder()
-        for f in favs[:15]:
-            text += f"• <code>@{f['username']}</code> — {f['added_at'][:10]}\n"
-            kb.button(text=f"🗑 {f['username']}", callback_data=f"remfav_{f['username']}")
-        if not favs: text += "<i>Пусто</i>"
-        kb.button(text="🔙 Профиль", callback_data="cmd_profile"); kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "cmd_thematic")
-    async def cb_thematic(cb: CallbackQuery):
-        await answer_cb(cb)
-        await edit_msg(cb.message, "❌ Режим 'По слову' удалён.")
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
+        await cb_profile(cb)
 
     @dp.callback_query(F.data.startswith("remfav_"))
     async def cb_rem_fav(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        un = cb.data[7:]; remove_favorite(uid, un)
-        await cb_favorites(cb)
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
 
     @dp.callback_query(F.data.startswith("addfav_"))
     async def cb_add_fav(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        un = cb.data[7:]; add_favorite(uid, un)
-        await answer_cb(cb, "⭐ Добавлено в избранное", show_alert=True)
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
 
     @dp.callback_query(F.data == "toggle_renew")
     async def cb_tr(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        ar_on,_ = get_auto_renew(uid)
-        if ar_on: set_auto_renew(uid,False,""); await cb_profile(cb)
-        else:
-            kb = InlineKeyboardBuilder()
-            for k,p in PRICES.items():
-                if p["days"]<99999: kb.button(text=f"{p['label']} ({p['stars']}⭐)", callback_data=f"sr_{k}")
-            kb.button(text="❌", callback_data="cmd_profile"); kb.adjust(1)
-            await edit_msg(cb.message, "🔄 <b>Тариф:</b>", kb.as_markup())
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
+        await cb_profile(cb)
 
     @dp.callback_query(F.data.startswith("sr_"))
     async def cb_sr(cb: CallbackQuery):
-        plan = cb.data[3:]; await answer_cb(cb)
-        if plan not in PRICES: return
-        set_auto_renew(cb.from_user.id,True,plan); await cb_profile(cb)
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
 
     @dp.callback_query(F.data == "cmd_activate")
     async def cb_act(cb: CallbackQuery):
@@ -4305,57 +3645,62 @@ async def register_handlers(dp: Dispatcher):
         await edit_msg(cb.message, f"💸 <b>Вывод</b>\n\n💰 {bal:.1f}⭐ ({bal*STAR_TO_RUB:.0f}₽)\nМин: {MIN_WITHDRAW}⭐\n\nСумма:", kb.as_markup())
 
 
-    # ═══════════════════════ CALLBACKS: Рулетка ═══════════════════════
+    # ═══════════════════════ CALLBACKS: Рулетка отключена ═══════════════════════
 
     @dp.callback_query(F.data == "cmd_roulette")
     async def cb_roulette(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        if not has_subscription(uid) and uid not in ADMIN_IDS: return
-        if not can_roulette(uid):
-            kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_profile")
-            await edit_msg(cb.message, "⏳ Через неделю", kb.as_markup()); return
-        kb = InlineKeyboardBuilder()
-        kb.button(text="🎰 Крутить!", callback_data="roulette_spin")
-        kb.button(text="🔙", callback_data="cmd_profile"); kb.adjust(1)
-        await edit_msg(cb.message, "🎰 <b>Рулетка</b>\n\nРаз в неделю 🍀", kb.as_markup())
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
+        await cb_profile(cb)
 
     @dp.callback_query(F.data == "roulette_spin")
     async def cb_rspin(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        if not has_subscription(uid) and uid not in ADMIN_IDS: return
-        if not can_roulette(uid): return
-        set_last_roulette(uid); log_action(uid,"roulette","spin")
-        for e in ["🎰","🔄","💫","🌟","✨","🎯"]:
-            await edit_msg(cb.message, f"{e} Крутим..."); await asyncio.sleep(0.4)
-        roll = random.randint(1,100)
-        if roll<=40: days=random.choice([1,2]); give_subscription(uid,days); prize=f"💎 +{days} дн!"
-        elif roll<=70: s=random.choice([1,2,3,5]); add_extra_searches(uid,s); prize=f"🔍 +{s} поисков!"
-        elif roll<=90: st=random.choice([5,10,15]); add_balance(uid,st); prize=f"⭐ +{st} звёзд!"
-        else: days=random.choice([3,5,7]); give_subscription(uid,days); prize=f"🎉 ДЖЕКПОТ! +{days} дн!"
-        kb = InlineKeyboardBuilder(); kb.button(text="👤", callback_data="cmd_profile"); kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(cb.message, f"🎉 <b>Поздравляем!</b>\n\n{prize}\n\nЧерез 7 дней 🍀", kb.as_markup())
-
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
 
     # ═══════════════════════ CALLBACKS: Рефералы / Подарить / Донат ═══════════════════════
 
     @dp.callback_query(F.data == "cmd_referral")
     async def cb_ref(cb: CallbackQuery):
         uid = cb.from_user.id; await answer_cb(cb)
-        u = get_user(uid); bu = bot_info.username if bot_info else "bot"
+        u = get_user(uid)
+        invited = int(u.get("ref_count", 0) or 0)
+        approved = get_tiktok_approved_count(uid)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🔗 Реферальная программа", callback_data="ref_link_program")
+        kb.button(text="🎵 TikTok-программа", callback_data="ref_tiktok")
+        kb.button(text="Назад", callback_data="cmd_menu")
+        kb.adjust(1)
+        await edit_msg(cb.message,
+            "Выберите раздел:\n\n"
+            "🔗 <b>Реферальная программа</b>\n"
+            "Приглашайте друзей и получайте бесплатные дни Premium\n"
+            f"Приглашено друзей: <code>{invited}</code>\n\n"
+            "🎵 <b>TikTok-программа</b>\n"
+            "Снимайте видео с нашим ботом и получайте 50 ₽ за каждые 1000 просмотров\n"
+            f"Одобрено видео: <code>{approved}</code>",
+            kb.as_markup())
+
+    @dp.callback_query(F.data == "ref_link_program")
+    async def cb_ref_link_program(cb: CallbackQuery):
+        uid = cb.from_user.id; await answer_cb(cb)
+        u = get_user(uid)
+        invited = int(u.get("ref_count", 0) or 0)
+        to_next = get_referrals_until_next_bonus(invited)
+        bu = bot_info.username if bot_info else "bot"
         link = f"https://t.me/{bu}?start=ref_{uid}"
         kb = InlineKeyboardBuilder()
-        place, my_refs = get_my_ref_place(uid)
         kb.button(text="📤 Поделиться", url=f"https://t.me/share/url?url={link}&text=🔍 Найди юзернейм!")
-        kb.button(text="👥 Мои рефералы", callback_data="my_refs")
-        kb.button(text="🏆 Топ рефералов", callback_data="ref_top")
-        kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
+        kb.button(text="Назад", callback_data="cmd_referral")
+        kb.adjust(1)
         await edit_msg(cb.message,
-            f"👥 <b>Рефералы</b>\n\n"
-            f"👥 Приглашено: <code>{u.get('ref_count',0)}</code>\n"
-            f"🏆 Место: <b>#{place}</b>\n"
-            f"💰 Баланс: <code>{u.get('balance',0):.1f}</code> ⭐ (4% с покупок)\n"
-            f"+{REF_BONUS} поиска за каждого друга\n\n"
-            f"🔗 <code>{link}</code>",
+            "🔗 <b>Рефералы по ссылке</b>\n\n\n"
+            f"🔘 Приглашено: <code>{invited}</code>\n"
+            f"📈 До следующего бонуса: <code>{to_next}</code> рефералов\n\n"
+            "Бонусы:\n"
+            "• 5 друзей → +1 день Premium\n"
+            "• 10 друзей → +3 дня\n"
+            "• 15 друзей → +8 дней\n"
+            "• 30 друзей → +14 дней\n\n"
+            f"Ваша ссылка:\n<code>{link}</code>",
             kb.as_markup())
 
     @dp.callback_query(F.data == "my_refs")
@@ -4367,7 +3712,7 @@ async def register_handlers(dp: Dispatcher):
             name = f"@{r['uname']}" if r['uname'] else f"ID:{r['uid']}"
             text += f"• {name} — {r['created']}\n"
         if not refs: text += "<i>Пусто</i>"
-        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_referral"); kb.adjust(1)
+        kb = InlineKeyboardBuilder(); kb.button(text="Назад", callback_data="ref_link_program"); kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
 
     @dp.callback_query(F.data == "ref_top")
@@ -4384,23 +3729,17 @@ async def register_handlers(dp: Dispatcher):
         if not top: text += "<i>Пока пусто</i>"
         place, my = get_my_ref_place(uid)
         text += f"\n\n📍 Ты: <b>#{place}</b> | 👥 <code>{my}</code>"
-        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_referral"); kb.adjust(1)
+        kb = InlineKeyboardBuilder(); kb.button(text="Назад", callback_data="ref_link_program"); kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
 
     @dp.callback_query(F.data == "gift_prem")
     async def cb_gift(cb: CallbackQuery):
-        await answer_cb(cb); kb = InlineKeyboardBuilder()
-        for k,p in PRICES.items(): kb.button(text=f"{p['label']} — {p['stars']}⭐", callback_data=f"gp_{k}")
-        kb.button(text="🔙", callback_data="cmd_profile"); kb.adjust(1)
-        await edit_msg(cb.message, "🎁 <b>Подарить Premium</b>", kb.as_markup())
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
+        await cb_profile(cb)
 
     @dp.callback_query(F.data.startswith("gp_"))
     async def cb_gp(cb: CallbackQuery):
-        plan = cb.data[3:]; await answer_cb(cb)
-        if plan not in PRICES: return
-        user_states[cb.from_user.id] = {"action":"gift_username","plan":plan}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="gift_prem")
-        await edit_msg(cb.message, f"🎁 <b>{PRICES[plan]['label']}</b>\n\n@username получателя:", kb.as_markup())
+        await answer_cb(cb, "Раздел отключён", show_alert=True)
 
     @dp.callback_query(F.data == "cmd_support")
     async def cb_support(cb: CallbackQuery):
@@ -4455,64 +3794,86 @@ async def register_handlers(dp: Dispatcher):
         await edit_msg(cb.message, text, kb.as_markup())
 
 
-    # ═══════════════════════ CALLBACKS: TikTok ═══════════════════════
+    # ═══════════════════════ CALLBACKS: TikTok / Рефералы ═══════════════════════
+
+    def tiktok_referral_text(uid):
+        approved = get_tiktok_approved_count(uid)
+        return (
+            "🎵 <b>TikTok рефералы</b>\n\n"
+            "📱 <b>Как заработать:</b>\n"
+            "1. Сними видео с нашим ботом (покажи поиск ников)\n"
+            "2. Выложи в TikTok\n"
+            "3. Нажми «Отправить на проверку» — пришли ссылку\n"
+            "4. После одобрения введи реквизиты СБП для выплаты\n\n"
+            "💰 <b>Вознаграждение:</b> 50₽ за каждые 1000 просмотров\n"
+            "Пример: 4 000 просмотров = 200₽\n\n"
+            "⚠️ Накрутка = бан навсегда\n\n"
+            "🎬 Примеры видео: @SwordUserVideo\n\n"
+            "💡 Нужны попытки для съёмки? Напишите в @Soveqk\n\n"
+            f"✅ Одобрено видео: <code>{approved}</code>"
+        )
+
+    @dp.callback_query(F.data == "ref_tiktok")
+    async def cb_ref_tiktok(cb: CallbackQuery):
+        await answer_cb(cb)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="Отправить на проверку🗳", callback_data="tt_go")
+        kb.button(text="Назад", callback_data="cmd_referral")
+        kb.adjust(1)
+        await edit_msg(cb.message, tiktok_referral_text(cb.from_user.id), kb.as_markup())
 
     @dp.callback_query(F.data == "cmd_tiktok")
     async def cb_tt(cb: CallbackQuery):
-        await answer_cb(cb)
-        kb = InlineKeyboardBuilder()
-        kb.button(text="📸 Начать", callback_data="tt_go")
-        kb.button(text="📹 Видео", callback_data="tt_video")
-        kb.button(text="🔙", callback_data="cmd_menu"); kb.adjust(1)
-        await edit_msg(cb.message,
-            f"🎁 <b>TikTok</b>\n\n1️⃣ Найди видео\n2️⃣ {TIKTOK_SCREENSHOTS_NEEDED} комментов\n💬 <code>{TIKTOK_COMMENT_TEXT}</code>\n3️⃣ Скрины\n4️⃣ 🎁 {TIKTOK_REWARD_GIFT}",
-            kb.as_markup())
+        await cb_ref_tiktok(cb)
 
     @dp.callback_query(F.data == "tt_video")
     async def cb_ttv(cb: CallbackQuery):
-        await answer_cb(cb); kb = InlineKeyboardBuilder()
-        kb.button(text="📲 @SwordUserTiktok", url="https://t.me/SwordUserTiktok")
-        kb.button(text="🔙", callback_data="cmd_tiktok"); kb.adjust(1)
-        await edit_msg(cb.message, "📹 <b>Снимай видео!</b>\n\n💸 1000 просмотров = 1$", kb.as_markup())
+        await answer_cb(cb)
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🎬 @SwordUserVideo", url="https://t.me/SwordUserVideo")
+        kb.button(text="🔙", callback_data="ref_tiktok")
+        kb.adjust(1)
+        await edit_msg(cb.message, "🎬 <b>Примеры видео:</b> @SwordUserVideo", kb.as_markup())
 
     @dp.callback_query(F.data == "tt_go")
     async def cb_tg_tt(cb: CallbackQuery):
         uid = cb.from_user.id; await answer_cb(cb)
         if not tiktok_can_submit(uid):
-            kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="cmd_tiktok")
-            await edit_msg(cb.message, "❌ Лимит на сегодня", kb.as_markup()); return
+            kb = InlineKeyboardBuilder(); kb.button(text="Назад", callback_data="ref_tiktok")
+            await edit_msg(cb.message, "❌ Лимит заявок на сегодня исчерпан", kb.as_markup()); return
         tid = task_create(uid)
-        user_states[uid] = {"action":"tiktok_proof","task_id":tid,"photos":0}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌", callback_data="tt_cancel")
-        await edit_msg(cb.message, f"📸 <b>#{tid}</b>\n\n<code>0/{TIKTOK_SCREENSHOTS_NEEDED}</code>", kb.as_markup())
+        user_states[uid] = {"action":"tiktok_link_proof","task_id":tid}
+        kb = InlineKeyboardBuilder(); kb.button(text="Назад", callback_data="tt_cancel")
+        await edit_msg(cb.message, f"📤 <b>Заявка #{tid}</b>\n\nПришлите ссылку на TikTok-видео одним сообщением.", kb.as_markup())
 
     @dp.callback_query(F.data == "tt_cancel")
     async def cb_tc(cb: CallbackQuery):
         await answer_cb(cb); user_states.pop(cb.from_user.id, None)
-        t,k = build_menu(cb.from_user.id); t = with_main_branding(t); await edit_to_photo(cb.message, t, k)
+        kb = InlineKeyboardBuilder(); kb.button(text="Назад", callback_data="ref_tiktok"); kb.adjust(1)
+        await edit_msg(cb.message, "❌ Заявка отменена", kb.as_markup())
 
     @dp.callback_query(F.data.startswith("ta_"))
     async def cb_ta(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb); tid = int(cb.data[3:])
-        uid = task_approve(tid, cb.from_user.id)
-        if uid:
-            log_action(cb.from_user.id,"task_approve",str(tid))
-            try: await cb.message.edit_text(f"✅ #{tid} одобрено")
-            except: pass
-            try: await bot.send_message(uid, f"🎉 Одобрено! 🎁 {TIKTOK_REWARD_GIFT}")
-            except: pass
+        user_states[cb.from_user.id] = {"action":"tiktok_amount","task_id":tid}
+        kb = InlineKeyboardBuilder(); kb.button(text="Не одобрить", callback_data=f"tr_{tid}"); kb.adjust(1)
+        try:
+            await edit_msg(cb.message, f"✅ Заявка #{tid}\n\nУкажите сумму выплаты в рублях одним сообщением.", kb.as_markup())
+        except:
+            await cb.message.answer(f"✅ Заявка #{tid}\n\nУкажите сумму выплаты в рублях одним сообщением.")
 
     @dp.callback_query(F.data.startswith("tr_"))
     async def cb_tr(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb); tid = int(cb.data[3:])
+        user_states.pop(cb.from_user.id, None)
         uid = task_reject(tid, cb.from_user.id)
         if uid:
             log_action(cb.from_user.id, "task_reject", str(tid))
             try: await cb.message.edit_text(f"❌ #{tid} отклонено")
             except: pass
-            try: await bot.send_message(uid, "❌ Задание отклонено. Попробуйте снова.")
+            try: await bot.send_message(uid, "❌ Заявка отклонена. Проверьте правила и попробуйте снова.")
             except: pass
 
     # ═══════════════════════ ФОТО ═══════════════════════
@@ -4534,7 +3895,7 @@ async def register_handlers(dp: Dispatcher):
         for aid in ADMIN_IDS:
             try:
                 akb = InlineKeyboardBuilder()
-                akb.button(text="✅", callback_data=f"ta_{tid}"); akb.button(text="❌", callback_data=f"tr_{tid}"); akb.adjust(2)
+                akb.button(text="Одобрить", callback_data=f"ta_{tid}"); akb.button(text="Не одобрить", callback_data=f"tr_{tid}"); akb.adjust(2)
                 await bot.send_message(aid, f"📱 <b>#{tid}</b>\n👤 {display} (<code>{uid}</code>)\n📸 {photos}", reply_markup=akb.as_markup(), parse_mode="HTML")
                 for i in range(0,len(file_ids),10):
                     batch = file_ids[i:i+10]
@@ -4839,6 +4200,76 @@ async def register_handlers(dp: Dispatcher):
             else: await msg.answer("❌ Неверный ключ")
             t,k=build_menu(uid); t = with_main_branding(t); await send_menu_photo(uid, t, k); return
 
+        if action=="tiktok_amount":
+            if uid not in ADMIN_IDS:
+                user_states.pop(uid, None)
+                return
+            raw_amount = msg.text.strip().replace(",", ".")
+            try:
+                amount_rub = float(raw_amount)
+                if amount_rub <= 0:
+                    raise ValueError
+            except:
+                await msg.answer("❌ Укажите сумму числом, например: 200")
+                return
+            tid = state.get("task_id")
+            task_set_amount(tid, amount_rub)
+            approved_uid = task_approve(tid, uid)
+            user_states.pop(uid, None)
+            if approved_uid:
+                log_action(uid, "task_approve", f"{tid} amount={amount_rub}")
+                user_states[approved_uid] = {"action":"tiktok_sbp","task_id":tid}
+                amount_text = int(amount_rub) if amount_rub.is_integer() else amount_rub
+                await msg.answer(f"✅ Заявка #{tid} одобрена. Сумма: {amount_text}₽. Пользователю отправлен запрос реквизитов.")
+                try:
+                    await bot.send_message(
+                        approved_uid,
+                        f"✅ Видео одобрено.\n💰 Сумма выплаты: <b>{amount_text}₽</b>\n\nПришлите реквизиты СБП для выплаты одним сообщением.",
+                        parse_mode="HTML"
+                    )
+                except: pass
+            else:
+                await msg.answer("❌ Заявка не найдена или уже обработана.")
+            return
+
+        if action=="tiktok_link_proof":
+            proof_url = msg.text.strip()
+            if not re.match(r"^https?://", proof_url):
+                await msg.answer("❌ Пришлите корректную ссылку на TikTok-видео."); return
+            tid = state.get("task_id")
+            task_set_proof(tid, proof_url)
+            user_states.pop(uid, None)
+            safe_url = html.escape(proof_url)
+            display = f"@{msg.from_user.username}" if msg.from_user.username else f"ID:{uid}"
+            kb = InlineKeyboardBuilder(); kb.button(text="Одобрить", callback_data=f"ta_{tid}"); kb.button(text="Не одобрить", callback_data=f"tr_{tid}"); kb.adjust(2)
+            for aid in ADMIN_IDS:
+                try:
+                    await bot.send_message(aid,
+                        f"🎵 <b>TikTok заявка #{tid}</b>\n"
+                        f"👤 {display} (<code>{uid}</code>)\n"
+                        f"🔗 {safe_url}",
+                        reply_markup=kb.as_markup(), parse_mode="HTML", disable_web_page_preview=True)
+                except Exception as e: logger.error(f"TikTok link notify {aid}: {e}")
+            await msg.answer("✅ Ссылка отправлена на проверку. После одобрения бот запросит реквизиты СБП.")
+            return
+
+        if action=="tiktok_sbp":
+            sbp = msg.text.strip()
+            tid = state.get("task_id")
+            task_set_sbp(tid, sbp)
+            user_states.pop(uid, None)
+            safe_sbp = html.escape(sbp)
+            display = f"@{msg.from_user.username}" if msg.from_user.username else f"ID:{uid}"
+            for aid in ADMIN_IDS:
+                try:
+                    await bot.send_message(aid,
+                        f"💳 <b>СБП по TikTok заявке #{tid}</b>\n"
+                        f"👤 {display} (<code>{uid}</code>)\n"
+                        f"🏦 <code>{safe_sbp}</code>", parse_mode="HTML")
+                except Exception as e: logger.error(f"TikTok SBP notify {aid}: {e}")
+            await msg.answer("✅ Реквизиты СБП отправлены. Выплата будет обработана после финальной проверки просмотров.")
+            return
+
         if action=="evaluate":
             user_states.pop(uid,None); un=msg.text.strip().replace("@","").lower()
             if not validate_username(un): await msg.answer("❌ Мин 5 символов"); return
@@ -5061,12 +4492,8 @@ async def register_handlers(dp: Dispatcher):
             return
 
         if action=="gift_username":
-            user_states.pop(uid,None); tu=msg.text.strip().replace("@","")
-            tuid=find_user(tu)
-            if not tuid: await msg.answer("❌ Не найден"); return
-            plan=state.get("plan"); p=PRICES.get(plan)
-            if not p: return
-            await redirect_payment(uid, f"🎁 {p['label']} для @{tu}", p["stars"], p["rub"], "gift_prem")
+            user_states.pop(uid,None)
+            await msg.answer("❌ Раздел отключён")
             return
 
         if action=="shop_custom_amount":
@@ -5371,8 +4798,6 @@ async def register_handlers(dp: Dispatcher):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
         s = get_stats(); ps = pool.stats()
-        pending_m = len(market_get_pending())
-        disputes_m = len(market_get_disputes())
 
         sl = f"🟢{ps['active']-ps.get('warming',0)} 🟡{ps.get('warming',0)} 🟠{ps.get('cooldown',0)} 🔴{ps.get('dead',0)}"
 
@@ -5390,14 +4815,12 @@ async def register_handlers(dp: Dispatcher):
             f"💾 <b>Кэш:</b>\n"
             f"  🎲 Дефолт: <code>{s['cache_default']}</code>\n"
             f"  💎 Красивые: <code>{s['cache_beautiful']}</code>\n\n"
-            f"🔑 Сессии: {sl}\n"
-            f"🏪 Маркет: <code>{pending_m}</code> модерация | ⚠️ <code>{disputes_m}</code> споров"
+            f"🔑 Сессии: {sl}"
         )
 
         kb = InlineKeyboardBuilder()
         kb.button(text="👤 Юзеры", callback_data="adm_users")
         kb.button(text="💎 Подписки", callback_data="adm_subs")
-        kb.button(text="🏪 Маркет", callback_data="adm_market")
         kb.button(text="🔑 Сессии", callback_data="adm_sessions")
         kb.button(text="🗑 Очистить кэш", callback_data="clear_cache")
         kb.button(text="📢 Рассылка", callback_data="adm_broadcast")
@@ -5848,7 +5271,7 @@ async def register_handlers(dp: Dispatcher):
         text=f"📱 <b>({len(tasks)})</b>\n\n"; kb=InlineKeyboardBuilder()
         for t in tasks:
             text+=f"#{t['id']} | {t['uid']} | {t['created']}\n"
-            kb.button(text=f"✅#{t['id']}",callback_data=f"ta_{t['id']}"); kb.button(text=f"❌#{t['id']}",callback_data=f"tr_{t['id']}")
+            kb.button(text=f"Одобрить #{t['id']}",callback_data=f"ta_{t['id']}"); kb.button(text=f"Не одобрить #{t['id']}",callback_data=f"tr_{t['id']}")
         kb.button(text="🔙",callback_data="cmd_admin"); kb.adjust(2)
         await edit_msg(cb.message,text,kb.as_markup())
 
