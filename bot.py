@@ -4,6 +4,8 @@ USERNAME HUNTER v25.1 — VIP + Тематический поиск + краси
 Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
 """
 
+from __future__ import annotations
+
 import asyncio
 import random
 import logging
@@ -224,7 +226,7 @@ def log_event(category: str, message: str, level: int = logging.INFO) -> None:
     logger.log(level, f"{tag} {message}")
 
 
-def log_banner(lines: list[str]) -> None:
+def log_banner(lines) -> None:
     """Красивый стартовый баннер. Печатается напрямую, минуя formatter."""
     width = max(len(line) for line in lines) if lines else 0
     width = min(max(width, 36), 60)
