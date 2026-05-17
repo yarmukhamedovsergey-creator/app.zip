@@ -1,6 +1,6 @@
 """
 USERNAME HUNTER v25.0 — VIP + ТЕМАТИЧЕСКИЙ ПОИСК + ССЫЛКИ
-FIXED: working fast search v7-no-silent-hang
+FIXED: callback search + cache warmer v6-cache-warmer-real-search
 """
 
 import asyncio
@@ -753,7 +753,7 @@ def normalize_search_mode_callback(data):
 
 # ═══════════════════════ HARD CALLBACK FIX v5 ═══════════════════════
 # Маркер ниже должен появиться в консоли после запуска. Если его нет — запущен старый файл.
-SEARCH_CALLBACK_FIX_VERSION = "v7-working-fast-search"
+SEARCH_CALLBACK_FIX_VERSION = "v6-cache-warmer-real-search"
 
 def _cb_data(cb):
     return (getattr(cb, "data", "") or "").strip()
@@ -1065,197 +1065,137 @@ def evaluate_username(u):
     filled=min(score//20,10)
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
-SEARCH_LIVE_BATCH_SIZE = 80
-SEARCH_LIVE_MAX_ATTEMPTS = 5000
-SEARCH_LIVE_TIMEOUT = 75
-CACHE_WARMER_TARGETS = {
-    "default": 300,
-    "beautiful": 180,
-}
-CACHE_WARMER_BATCH_SIZE = 120
-
-async def fast_available_for_search(u: str, uid=None) -> bool:
-    """
-    Рабочий быстрый фильтр для поиска.
-    Он не зависает на Fragment/BotAPI по 10-30 секунд на каждый юз.
-    Основной критерий: публичная страница t.me явно показывает, что username не занят.
-    BotAPI используется только как быстрый стоп-фильтр: если он сразу видит чат — юз занят.
-    """
-    u = (u or "").strip().replace("@", "").lower()
-
-    if not is_valid_telegram_profile_username(u):
-        return False
-    if is_blacklisted(u):
-        return False
-    for w in INVALID_WORDS:
-        if w == u or w in u:
-            return False
-
-    try:
-        tme = await asyncio.wait_for(check_username_tme(u), timeout=7)
-    except Exception:
-        return False
-
-    if tme != "free":
-        return False
-
-    # Быстрый стоп-фильтр. Если Bot API тормозит или отвечает unknown — не держим поиск.
-    try:
-        botapi = await asyncio.wait_for(check_username_botapi(u), timeout=2.5)
-        if botapi == "taken":
-            return False
-    except Exception:
-        pass
-
-    return True
-
-
-def make_unique_candidates(gen_func, validate_func, checked, amount):
-    candidates = []
-    for _ in range(amount * 40):
-        if len(candidates) >= amount:
-            break
-        try:
-            c = gen_func()
-        except Exception:
-            continue
-        u = (c or "").strip().replace("@", "").lower()
-        if not u or u in checked:
-            continue
-        if not u.isalpha():
-            continue
-        if not validate_func(u):
-            continue
-        checked.add(u)
-        candidates.append(u)
-    return candidates
-
-
-async def check_candidates_fast(candidates, uid=None, stop_after=999999):
-    """Параллельно проверяет пачку кандидатов и возвращает найденные свободные username."""
-    found = []
-
-    async def one(u):
-        try:
-            ok = await fast_available_for_search(u, uid)
-            return u if ok else None
-        except Exception:
-            return None
-
-    tasks = [asyncio.create_task(one(u)) for u in candidates]
-    try:
-        for fut in asyncio.as_completed(tasks):
-            res = await fut
-            if res:
-                found.append(res)
-                if len(found) >= stop_after:
-                    break
-    finally:
-        for t in tasks:
-            if not t.done():
-                t.cancel()
-
-    return found
-
-
 async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     found = []
     start = time.time()
     last_update = 0
-    attempts = 0
 
-    validate_func = SEARCH_MODES.get(mode_key, {}).get("validate", is_valid_username)
+    validate_func = SEARCH_MODES.get(
+        mode_key,
+        {}
+    ).get("validate", is_valid_username)
 
-    # 1) Сначала отдаём JSON-кэш мгновенно. Никакой повторной долгой проверки тут нет.
-    cached = await get_cached_free(mode_key, count * 5)
+    # Шаг 1: сначала мгновенно отдаём username из JSON-кэша.
+    # ВАЖНО: кэш уже проверяется фоновым warmer-ом перед сохранением,
+    # поэтому тут НЕ делаем повторную долгую проверку t.me/BotAPI/Fragment.
+    # Иначе кнопка висит на SEARCH-START и кажется, что бот ничего не делает.
+    cache_before = await get_free_cache_count(mode_key)
+    print(
+        f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-TAKE uid={uid} mode={mode_key} need={count} before={cache_before}",
+        flush=True,
+    )
+
+    cached = await get_cached_free(mode_key, count * 4)
+
     for u in cached:
         if len(found) >= count:
             break
+
         u = (u or "").strip().replace("@", "").lower()
         if not validate_func(u):
+            logger.info(f"[search] cache stale ❌ @{u} - wrong format for {mode_key}")
             continue
+
         found.append({"username": u, "fragment": "unavailable"})
         save_history(uid, u, mode_name, len(u))
 
-    if len(found) >= count:
-        return found[:count], {"attempts": 0, "elapsed": int(time.time() - start)}
+    if found:
+        print(
+            f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-HIT uid={uid} mode={mode_key} found={len(found)}",
+            flush=True,
+        )
+    else:
+        print(
+            f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-MISS uid={uid} mode={mode_key}; live-search-start",
+            flush=True,
+        )
 
-    # 2) Если кэша не хватило — ищем прямо сейчас, параллельно, пачками.
+    if len(found) >= count:
+        return found[:count], {
+            "attempts": 0,
+            "elapsed": int(time.time() - start)
+        }
+
+    # Шаг 2: генерим на лету
+    attempts = 0
     checked = {item["username"] for item in found}
 
-    if msg:
-        try:
-            await edit_msg(
-                msg,
-                f"🔍 <b>{mode_name}</b>\n\n"
-                f"✅ Из кэша: <code>{len(found)}/{count}</code>\n"
-                f"⚙️ Кэша не хватило — запускаю быстрый поиск пачками.\n"
-                f"⏱ <code>0с</code>",
-            )
-        except Exception:
-            pass
+    while len(found) < count and attempts < 3000:
+        u = None
 
-    print(
-        f"[{SEARCH_CALLBACK_FIX_VERSION}] WORKING-SEARCH uid={uid} mode={mode_key} cache={len(found)} need={count}",
-        flush=True,
-    )
+        for _ in range(20):
+            c = gen_func()
+            if (
+                c.isalpha()
+                and c.lower() not in checked
+                and validate_func(c)
+            ):
+                u = c.lower()
+                break
 
-    while len(found) < count and attempts < SEARCH_LIVE_MAX_ATTEMPTS:
-        if time.time() - start > SEARCH_LIVE_TIMEOUT:
-            break
-
-        need = count - len(found)
-        batch_size = max(SEARCH_LIVE_BATCH_SIZE, need * 25)
-        candidates = make_unique_candidates(gen_func, validate_func, checked, batch_size)
-        if not candidates:
-            attempts += batch_size
+        if not u:
+            attempts += 1
             continue
 
-        attempts += len(candidates)
+        checked.add(u)
+        attempts += 1
 
         now = time.time()
-        if msg and now - last_update > 1.5:
-            last_update = now
-            try:
-                pct = min(len(found) / max(count, 1), 1.0)
-                filled = int(pct * 10)
-                bar = "█" * filled + "░" * (10 - filled)
-                await edit_msg(
-                    msg,
-                    f"🔍 <b>{mode_name}</b>\n\n"
-                    f"[{bar}] {int(pct * 100)}%\n\n"
-                    f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
-                    f"📊 Проверено кандидатов: <code>{attempts}</code>\n"
-                    f"⏱ <code>{int(now - start)}с</code>",
-                )
-            except Exception:
-                pass
-
-        batch_found = await check_candidates_fast(candidates, uid, stop_after=need)
-
-        for u in batch_found:
-            if len(found) >= count:
-                break
-            if u in {item["username"] for item in found}:
-                continue
-            found.append({"username": u, "fragment": "unavailable"})
-            save_history(uid, u, mode_name, len(u))
-
-        if batch_found:
+        if attempts == 1 or attempts % 10 == 0:
             print(
-                f"[{SEARCH_CALLBACK_FIX_VERSION}] FOUND uid={uid} mode={mode_key} batch={batch_found} total={len(found)}/{count}",
+                f"[{SEARCH_CALLBACK_FIX_VERSION}] LIVE-CHECK uid={uid} mode={mode_key} attempt={attempts} candidate=@{u} found={len(found)}/{count}",
                 flush=True,
             )
+        if msg and now - last_update > 2:
+            last_update = now
+            pct = min(len(found) / max(count, 1), 1.0)
+            filled = int(pct * 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            text = (
+                f"🔍 <b>{mode_name}</b>\n\n"
+                f"[{bar}] {int(pct * 100)}%\n\n"
+                f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                f"📊 Проверено: <code>{attempts}</code>\n"
+                f"⏱ <code>{int(now - start)}</code>с\n\n"
+                f"<i>Кэш пустой или не хватило юзов — ищу напрямую.</i>"
+            )
+            try:
+                await edit_msg(msg, text)
+            except Exception as e:
+                logger.debug(f"live progress edit error: {e}")
 
-        await asyncio.sleep(0.05)
+        try:
+            if not await is_username_free(u, uid):
+                await asyncio.sleep(0.2)
+                continue
+        except Exception as e:
+            logger.error(f"check error @{u}: {e}")
+            continue
 
-    elapsed = int(time.time() - start)
-    print(
-        f"[{SEARCH_CALLBACK_FIX_VERSION}] WORKING-SEARCH-END uid={uid} mode={mode_key} found={len(found)} attempts={attempts} elapsed={elapsed}s",
-        flush=True,
-    )
+        found.append({"username": u, "fragment": "unavailable"})
+        save_history(uid, u, mode_name, len(u))
 
-    return found[:count], {"attempts": attempts, "elapsed": elapsed}
+        now = time.time()
+        if msg and now - last_update > 2:
+            last_update = now
+            pct = min(len(found) / max(count, 1), 1.0)
+            filled = int(pct * 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            text = (
+                f"🔍 <b>{mode_name}</b>\n\n"
+                f"[{bar}] {int(pct * 100)}%\n\n"
+                f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                f"📊 Проверено: <code>{attempts}</code>\n"
+                f"⏱ <code>{int(now - start)}</code>с"
+            )
+            try:
+                await edit_msg(msg, text)
+            except:
+                pass
+
+        await asyncio.sleep(0.3)
+
+    return found, {"attempts": attempts, "elapsed": int(time.time() - start)}
 
 # ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
 
@@ -5697,66 +5637,122 @@ async def daily_report_loop():
         await asyncio.sleep(60)
 
 async def cache_warmer_check_username(u: str) -> bool:
-    """Кэш наполняется тем же быстрым рабочим фильтром, что и ручной поиск."""
-    return await fast_available_for_search(u)
+    """Быстрая проверка для наполнения кэша.
+    Основной поиск потом отдаёт уже проверенный кэш мгновенно.
+    """
+    u = (u or "").strip().replace("@", "").lower()
+    if not is_valid_telegram_profile_username(u):
+        return False
+    if is_blacklisted(u):
+        return False
+
+    # 1) t.me должен явно показать, что username не занят.
+    tme = await check_username_tme(u)
+    if tme != "free":
+        return False
+
+    # 2) Fragment не должен показывать продажу/аукцион/резерв.
+    fr = await check_fragment(u)
+    if fr != "unavailable":
+        return False
+
+    # 3) Bot API — дополнительный стоп-фильтр: если видит чат, username занят.
+    botapi = await check_username_botapi(u)
+    if botapi == "taken":
+        return False
+
+    return True
 
 
 async def free_cache_warmer_loop():
-    """
-    Фоновое наполнение JSON-кэша после запуска бота.
-    Не блокирует polling и не спамит консоль каждой проверкой.
-    """
-    await asyncio.sleep(1)
-    print(f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-START targets={CACHE_WARMER_TARGETS}", flush=True)
-    logger.info(f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-START targets={CACHE_WARMER_TARGETS}")
+    targets = {
+        "default": 500,
+        "beautiful": 400,
+    }
+    print(f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-BOOT targets={targets}", flush=True)
+    logger.info(f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-BOOT targets={targets}")
 
     while True:
         try:
-            for mode_key, target in CACHE_WARMER_TARGETS.items():
+            for mode_key, target in targets.items():
                 mode = SEARCH_MODES.get(mode_key)
                 if not mode or mode.get("disabled"):
+                    print(f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-SKIP mode={mode_key} disabled=1", flush=True)
                     continue
 
                 current = await get_free_cache_count(mode_key)
+                print(
+                    f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-MODE mode={mode_key} current={current} target={target}",
+                    flush=True,
+                )
+                logger.info(f"[warmer] mode={mode_key} current={current} target={target}")
+
                 if current >= target:
                     continue
 
-                validate_func = mode.get("validate", is_valid_username)
                 gen_func = mode["func"]
+                validate_func = mode.get("validate", is_valid_username)
+                batch_found = []
                 checked = set()
-                missing = target - current
-                candidates = make_unique_candidates(
-                    gen_func,
-                    validate_func,
-                    checked,
-                    min(CACHE_WARMER_BATCH_SIZE, max(40, missing * 3)),
+                max_attempts = 3000
+
+                for attempt in range(1, max_attempts + 1):
+                    if current + len(batch_found) >= target:
+                        break
+
+                    u = None
+                    for __ in range(30):
+                        c = gen_func()
+                        if c.isalpha() and c.lower() not in checked and validate_func(c):
+                            u = c.lower()
+                            break
+
+                    if not u:
+                        continue
+
+                    checked.add(u)
+
+                    if attempt == 1 or attempt % 10 == 0:
+                        print(
+                            f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-CHECK mode={mode_key} attempt={attempt}/{max_attempts} candidate=@{u} found_cycle={len(batch_found)} current={await get_free_cache_count(mode_key)}",
+                            flush=True,
+                        )
+
+                    try:
+                        if await cache_warmer_check_username(u):
+                            expected_length = 6 if mode_key == "default" else 5
+                            if len(u) != expected_length:
+                                logger.warning(f"[warmer] {mode_key}: skip @{u} - wrong length {len(u)} != {expected_length}")
+                                continue
+
+                            await add_free_cache([u], mode_key)
+                            batch_found.append(u)
+
+                            total_now = await get_free_cache_count(mode_key)
+                            print(
+                                f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-ADD mode={mode_key} username=@{u} total={total_now}",
+                                flush=True,
+                            )
+                            logger.info(f"[warmer] {mode_key}: ✅ @{u} total={total_now}")
+                    except Exception as e:
+                        print(
+                            f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-ERROR mode={mode_key} candidate=@{u} error={e}",
+                            flush=True,
+                        )
+                        logger.debug(f"[warmer] check error @{u}: {e}")
+
+                    await asyncio.sleep(0.15)
+
+                print(
+                    f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-CYCLE-END mode={mode_key} added={len(batch_found)} total={await get_free_cache_count(mode_key)}",
+                    flush=True,
                 )
 
-                if not candidates:
-                    continue
-
-                found = await check_candidates_fast(candidates, None, stop_after=min(missing, 20))
-                if found:
-                    await add_free_cache(found, mode_key)
-                    total_now = await get_free_cache_count(mode_key)
-                    print(
-                        f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-ADD mode={mode_key} added={len(found)} total={total_now}",
-                        flush=True,
-                    )
-                    logger.info(f"[cache-warmer] {mode_key}: added={len(found)} total={total_now}")
-                else:
-                    print(
-                        f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-PASS mode={mode_key} checked={len(candidates)} added=0 current={current}",
-                        flush=True,
-                    )
-
-                await asyncio.sleep(0.3)
-
         except Exception as e:
-            print(f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-ERROR {e}", flush=True)
-            logger.error(f"Cache warmer error: {e}")
+            print(f"[{SEARCH_CALLBACK_FIX_VERSION}] CACHE-WARMER-FATAL error={e}", flush=True)
+            logger.error(f"Cache warmer: {e}")
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
 
 # ═══════════════════════ SYSTEMD ═══════════════════════
 
@@ -5791,8 +5787,8 @@ async def main():
     await register_handlers(dp)
     logger.info("━"*30)
     logger.info(f"🚀 @{bot_info.username} v25.0")
-    print("SEARCH_CALLBACK_FIX_ACTIVE v7-working-fast-search", flush=True)
-    logger.info("SEARCH_CALLBACK_FIX_ACTIVE v7-working-fast-search")
+    print("SEARCH_CALLBACK_FIX_ACTIVE v6-cache-warmer-real-search", flush=True)
+    logger.info("SEARCH_CALLBACK_FIX_ACTIVE v6-cache-warmer-real-search")
     logger.info("🔄 Режим проверки: public_strict без user-сессий")
     logger.info("━"*30)
     asyncio.create_task(reminder_loop())
