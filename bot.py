@@ -1,6 +1,7 @@
 """
 USERNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
-Проверка занятости: GET https://t.me/<username>; улучшенная проверка после обновлений Telegram.
+Проверка занятости: GET https://t.me/<username>; нет tgme_page_title → free.
+Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
 """
 
 from __future__ import annotations
@@ -17,6 +18,8 @@ import html
 import os
 import sys
 import subprocess
+from concurrent.futures import ProcessPoolExecutor
+import multiprocessing
 from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
 
@@ -38,6 +41,9 @@ from aiogram.exceptions import TelegramBadRequest
 HAS_TELETHON = False
 
 pool = None
+process_pool = ProcessPoolExecutor(
+    max_workers=max(2, multiprocessing.cpu_count() - 1)
+)
 http_session = None
 bot_info = None
 
@@ -944,12 +950,11 @@ async def check_username_botapi(u: str) -> str:
 
 async def public_username_status(u: str, uid=None) -> str:
     """
-    Обновлённая проверка username через t.me.
-
-    Логика:
-    - 404 -> free
-    - "If you have Telegram" / og:title -> taken
-    - ошибки сети / Cloudflare / 429 -> unknown
+    Точная проверка по методу пользователя:
+    GET https://t.me/<username>
+    - если в HTML есть tgme_page_title -> username занят;
+    - если tgme_page_title нет -> username свободен;
+    - любая ошибка / таймаут / не-200 -> считаем занятым.
     """
     u = (u or "").strip().replace("@", "").lower()
 
@@ -1203,123 +1208,138 @@ def evaluate_username(u):
     filled=min(score//20,10)
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
+
+def generate_batch(mode_key: str, batch_size: int = 200):
+    """
+    Генерация username в отдельном процессе.
+    """
+
+    if mode_key == "beautiful":
+        gen_func = gen_beautiful
+        validate = is_valid_username_beautiful
+    else:
+        gen_func = gen_default
+        validate = is_valid_username_default
+
+    result = set()
+
+    while len(result) < batch_size:
+        u = gen_func()
+
+        if not validate(u):
+            continue
+
+        result.add(u.lower())
+
+    return list(result)
+
+
+async def bulk_check_usernames(usernames, concurrency=80):
+    """
+    Массовая async проверка t.me
+    """
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def worker(u):
+        async with sem:
+            try:
+                status = await check_username_tme(u)
+                return u, status
+            except Exception:
+                return u, "unknown"
+
+    tasks = [worker(u) for u in usernames]
+
+    return await asyncio.gather(*tasks)
+
+
 async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
-    """
-    Точный тихий поиск через GET https://t.me/<username>.
 
-    Правило проверки:
-    - tgme_page_title или already taken / available for purchase -> занят;
-    - нет признаков занятого username -> свободен;
-    - любая ошибка/таймаут/не-200 -> занят.
-
-    Консоль не спамит каждой проверкой. Пишет только:
-    - что взяло из кэша;
-    - что занесло в кэш;
-    - короткий итог, сколько не вошло в кэш/выдачу.
-    """
     found = []
+    checked = set()
+
     start = time.time()
     attempts = 0
     last_edit = 0
-    cache_used = 0
-    cache_rejected = 0
-    generated_rejected = 0
-    cached_new = 0
 
-    validate_func = SEARCH_MODES.get(mode_key, {}).get("validate", is_valid_username)
-    checked = set()
-    mode_label = "beautiful" if mode_key == "beautiful" else "default"
+    loop = asyncio.get_running_loop()
 
-    log_event("search", f"▶  start mode={mode_label} uid={uid} need={count}")
+    while len(found) < count:
 
-    # 1) Берём старый кэш, но перед выдачей перепроверяем через t.me.
-    cached = await get_cached_free(mode_key, max(count * 5, 20))
-    for raw in cached:
-        if len(found) >= count:
-            break
+        # ===== ГЕНЕРАЦИЯ В ПРОЦЕССЕ =====
+        batch = await loop.run_in_executor(
+            process_pool,
+            generate_batch,
+            mode_key,
+            300
+        )
 
-        u = (raw or "").strip().replace("@", "").lower()
-        if not validate_func(u) or u in checked:
-            cache_rejected += 1
-            continue
+        batch = [u for u in batch if u not in checked]
 
-        checked.add(u)
-        attempts += 1
+        for u in batch:
+            checked.add(u)
 
-        status = await check_username_tme(u)
-        if status == "free":
-            found.append({"username": u, "fragment": "unavailable"})
-            save_history(uid, u, mode_name, len(u))
-            cache_used += 1
-            log_event("cache", f"💾 hit  @{u} ({mode_label})")
-        else:
-            cache_rejected += 1
+        attempts += len(batch)
 
-        await asyncio.sleep(0.08)
+        # ===== ASYNC MASS CHECK =====
+        results = await bulk_check_usernames(batch)
 
-    if cache_rejected:
-        log_event("cache", f"🗑  stale dropped: {cache_rejected} ({mode_label})", logging.DEBUG)
+        for username, status in results:
 
-    # 2) Если кэша не хватило — генерируем и проверяем тем же методом.
-    max_attempts = 10000
-    while len(found) < count and attempts < max_attempts:
-        u = None
-        for _ in range(40):
-            c = gen_func()
-            c = (c or "").lower()
-            if c and c not in checked and USERNAME_RX.fullmatch(c) and validate_func(c):
-                u = c
+            if status != "free":
+                continue
+
+            found.append({
+                "username": username,
+                "fragment": "unavailable"
+            })
+
+            save_history(uid, username, mode_name, len(username))
+
+            await add_free_cache([username], mode_key)
+
+            if len(found) >= count:
                 break
 
-        if not u:
-            attempts += 1
-            generated_rejected += 1
-            continue
-
-        checked.add(u)
-        attempts += 1
-        status = await check_username_tme(u)
-
-        if status == "free":
-            found.append({"username": u, "fragment": "unavailable"})
-            save_history(uid, u, mode_name, len(u))
-            await add_free_cache([u], mode_key)
-            cached_new += 1
-            log_event("cache", f"✨ add  @{u} ({mode_label})")
-        else:
-            generated_rejected += 1
-
+        # ===== UI UPDATE =====
         now = time.time()
-        if msg and now - last_edit > 4:
+
+        if now - last_edit > 2:
+
             last_edit = now
-            pct = min(len(found) / max(count, 1), 1.0)
-            filled = int(pct * 10)
-            bar = "█" * filled + "░" * (10 - filled)
+
             try:
+                pct = min(len(found) / count, 1)
+
+                bar = "█" * int(pct * 10)
+                bar += "░" * (10 - int(pct * 10))
+
                 await edit_msg(
                     msg,
-                    f"🔍 <b>{mode_name}</b>\n\n"
-                    f"[{bar}] {int(pct * 100)}%\n\n"
-                    f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
-                    f"📊 Проверено: <code>{attempts}</code>\n"
-                    f"⏱ <code>{int(now - start)}с</code>"
+                    f"🔍 <b>{mode_name}</b>
+
+"
+                    f"[{bar}] {int(pct*100)}%
+
+"
+                    f"✅ Найдено: <code>{len(found)}/{count}</code>
+"
+                    f"📊 Проверено: <code>{attempts}</code>
+"
+                    f"⚡ Скоростной поиск
+"
+                    f"⏱ <code>{int(now-start)}с</code>"
                 )
             except Exception:
                 pass
 
-        await asyncio.sleep(random.uniform(0.45, 0.9))
-
     elapsed = int(time.time() - start)
-    if generated_rejected:
-        log_event("search", f"⏭  rejected (taken): {generated_rejected} ({mode_label})", logging.DEBUG)
-    log_event(
-        "search",
-        f"✅ done mode={mode_label} found={len(found)}/{count} "
-        f"checked={attempts} hit={cache_used} add={cached_new} "
-        f"elapsed={elapsed}s",
-    )
 
-    return found, {"attempts": attempts, "elapsed": elapsed}
+    return found, {
+        "attempts": attempts,
+        "elapsed": elapsed
+    }
 
 # ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
 
@@ -5833,7 +5853,7 @@ async def free_cache_warmer_loop():
                     for _ in range(40):
                         c = gen_func()
                         c = (c or "").lower()
-                        if c and c not in checked and USERNAME_RX.fullmatch(c) and validate_func(c):
+                        if c and c not in checked and c.isalpha() and validate_func(c):
                             u = c
                             break
                     if not u:
@@ -5850,7 +5870,7 @@ async def free_cache_warmer_loop():
                     except Exception:
                         pass
 
-                    await asyncio.sleep(random.uniform(0.45, 0.9))
+                    
 
                 if added:
                     total_now = await get_free_cache_count(mode_key)
@@ -5916,4 +5936,5 @@ async def main():
         await http_session.close(); await pool.disconnect()
 
 if __name__=="__main__":
+    if __name__ == "__main__":
     asyncio.run(main())
