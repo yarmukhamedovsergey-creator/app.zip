@@ -1,7 +1,6 @@
 """
 USERNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
-Проверка занятости: GET https://t.me/<username>; нет tgme_page_title → free.
-Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
+Проверка занятости: GET https://t.me/<username>; улучшенная проверка после обновлений Telegram.
 """
 
 from __future__ import annotations
@@ -945,11 +944,12 @@ async def check_username_botapi(u: str) -> str:
 
 async def public_username_status(u: str, uid=None) -> str:
     """
-    Точная проверка по методу пользователя:
-    GET https://t.me/<username>
-    - если в HTML есть tgme_page_title -> username занят;
-    - если tgme_page_title нет -> username свободен;
-    - любая ошибка / таймаут / не-200 -> считаем занятым.
+    Обновлённая проверка username через t.me.
+
+    Логика:
+    - 404 -> free
+    - "If you have Telegram" / og:title -> taken
+    - ошибки сети / Cloudflare / 429 -> unknown
     """
     u = (u or "").strip().replace("@", "").lower()
 
@@ -1267,7 +1267,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         for _ in range(40):
             c = gen_func()
             c = (c or "").lower()
-            if c and c not in checked and c.isalpha() and validate_func(c):
+            if c and c not in checked and USERNAME_RX.fullmatch(c) and validate_func(c):
                 u = c
                 break
 
@@ -1307,7 +1307,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             except Exception:
                 pass
 
-        await asyncio.sleep(0.12)
+        await asyncio.sleep(random.uniform(0.45, 0.9))
 
     elapsed = int(time.time() - start)
     if generated_rejected:
@@ -5833,7 +5833,7 @@ async def free_cache_warmer_loop():
                     for _ in range(40):
                         c = gen_func()
                         c = (c or "").lower()
-                        if c and c not in checked and c.isalpha() and validate_func(c):
+                        if c and c not in checked and USERNAME_RX.fullmatch(c) and validate_func(c):
                             u = c
                             break
                     if not u:
@@ -5850,7 +5850,7 @@ async def free_cache_warmer_loop():
                     except Exception:
                         pass
 
-                    await asyncio.sleep(0.12)
+                    await asyncio.sleep(random.uniform(0.45, 0.9))
 
                 if added:
                     total_now = await get_free_cache_count(mode_key)
