@@ -1,6 +1,7 @@
 """
 USERNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
-Проверка занятости: GET https://t.me/<username>; улучшенная проверка после обновлений Telegram.
+Проверка занятости: GET https://t.me/<username>; нет tgme_page_title → free.
+Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
 """
 
 from __future__ import annotations
@@ -761,7 +762,7 @@ async def do_word_search(word, count, msg, uid):
 
 def is_valid_username_default(u):
     """Валидация для дефолт режима (6 букв)"""
-    if len(u) != 6 or not u:
+    if len(u) != 6 or not u.isalpha():
         return False
     ul = u.lower()
     for w in INVALID_WORDS:
@@ -773,7 +774,7 @@ def is_valid_username_default(u):
 
 def is_valid_username_beautiful(u):
     """Валидация для красивых (5 букв)"""
-    if len(u) != 5 or not u:
+    if len(u) != 5 or not u.isalpha():
         return False
     ul = u.lower()
     for w in INVALID_WORDS:
@@ -785,7 +786,7 @@ def is_valid_username_beautiful(u):
 
 def is_valid_username(u):
     """Общая валидация (5 или 6 букв)"""
-    if len(u) not in [5, 6] or not u:
+    if len(u) not in [5, 6] or not u.isalpha():
         return False
     ul = u.lower()
     for w in INVALID_WORDS:
@@ -886,32 +887,15 @@ async def fast_check_username(u: str) -> str:
     """Быстрая проверка больше не отдаёт free по одному t.me-запросу."""
     return await check_username(u)
 
-USERNAME_RX = re.compile(r"^[a-z0-9_]{5,32}$", re.I)
-
-def normalize_username(u: str) -> str:
-    return (u or "").strip().lstrip("@").lower()
-
 def is_valid_telegram_profile_username(u: str) -> bool:
-    """
-    Telegram username validation.
-
-    Правила:
-    - только a-z 0-9 _
-    - длина 5-32
-    - без __
-    - не начинается/заканчивается _
-    """
-    u = normalize_username(u)
-
-    if not USERNAME_RX.fullmatch(u):
+    """Разрешены только буквенные username из рабочих режимов: 5 или 6 латинских букв."""
+    if not u:
         return False
-
-    if "__" in u:
+    u = u.strip().replace("@", "")
+    if len(u) not in (5, 6):
         return False
-
-    if u.startswith("_") or u.endswith("_"):
+    if not re.match(r"^[a-zA-Z]+$", u):
         return False
-
     return True
 
 async def check_username_botapi(u: str) -> str:
@@ -944,17 +928,16 @@ async def check_username_botapi(u: str) -> str:
 
 async def public_username_status(u: str, uid=None) -> str:
     """
-    Обновлённая проверка username через t.me.
-
-    Логика:
-    - 404 -> free
-    - "If you have Telegram" / og:title -> taken
-    - ошибки сети / Cloudflare / 429 -> unknown
+    Точная проверка по методу пользователя:
+    GET https://t.me/<username>
+    - если в HTML есть tgme_page_title -> username занят;
+    - если tgme_page_title нет -> username свободен;
+    - любая ошибка / таймаут / не-200 -> считаем занятым.
     """
     u = (u or "").strip().replace("@", "").lower()
 
     if not is_valid_telegram_profile_username(u):
-        return "invalid"
+        return "taken"
     if is_blacklisted(u):
         return "taken"
     for w in INVALID_WORDS:
@@ -1067,30 +1050,26 @@ _TME_USER_AGENTS = [
 
 async def check_username_tme(u: str) -> str:
     """
-    Проверка username через t.me
+    Точная проверка занятости через GET ``https://t.me/<username>``.
 
-    Возвращает:
-      free
-      taken
-      invalid
-      unknown
+    Логика именно такая, как просил пользователь:
+      • в HTML есть ``tgme_page_title``           → **taken** (есть карточка);
+      • элемента нет → страница-заглушка          → **free** (свободен);
+      • любая ошибка / таймаут / не-200 / не-html → **taken** (страховка).
+
+    Возвращает строку "free" или "taken".
     """
-
-    u = normalize_username(u)
-
-    # ===== ВАЛИДАЦИЯ ДО ЗАПРОСА =====
+    u = (u or "").strip().replace("@", "").lower()
     if not is_valid_telegram_profile_username(u):
-        return "invalid"
-
+        return "taken"
     if http_session is None:
-        return "unknown"
+        return "taken"
 
     url = f"https://t.me/{u}"
-
     headers = {
         "User-Agent": random.choice(_TME_USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
     }
@@ -1098,75 +1077,22 @@ async def check_username_tme(u: str) -> str:
     try:
         async with http_session.get(
             url,
-            timeout=aiohttp.ClientTimeout(total=8),
+            timeout=aiohttp.ClientTimeout(total=10),
             headers=headers,
             allow_redirects=True,
         ) as resp:
-
-            # ===== 404 = FREE =====
-            if resp.status == 404:
-                return "free"
-
-            # ===== 429 / 5xx =====
-            if resp.status in (429, 500, 502, 503, 504):
-                log_event("tme", f"@{u} HTTP {resp.status} → unknown")
-                return "unknown"
-
-            # ===== ЛЮБОЙ НЕ-200 =====
             if resp.status != 200:
-                log_event("tme", f"@{u} HTTP {resp.status} → taken")
+                log_event("tme", f"@{u} HTTP {resp.status} → taken", logging.DEBUG)
                 return "taken"
-
-            body = await resp.text(errors="ignore")
-
+            html_text = await resp.text(errors="ignore")
     except asyncio.TimeoutError:
-        log_event("tme", f"@{u} timeout → unknown")
-        return "unknown"
-
+        log_event("tme", f"@{u} timeout → taken", logging.DEBUG)
+        return "taken"
     except Exception as e:
-        log_event("tme", f"@{u} error: {e}")
-        return "unknown"
-
-    body_low = body.lower()
-
-    # ===== TELEGRAM USER EXISTS =====
-    # На существующих username Telegram почти всегда отдаёт:
-    # profile/channel/group preview + og:title
-    if (
-        'tgme_page_title' in body_low
-        or 'tgme_page_extra' in body_low
-        or 'property="og:title"' in body_low
-        or 'telegram:' in body_low
-    ):
+        log_event("tme", f"@{u} error {e} → taken", logging.DEBUG)
         return "taken"
 
-    # ===== FREE / NOT FOUND =====
-    free_signs = [
-        "username not found",
-        "sorry, this page",
-        "this channel cannot be displayed",
-        "the page you are looking for does not exist",
-    ]
-
-    if any(x in body_low for x in free_signs):
-        return "free"
-
-    # ===== CLOUDLFARE / ANTIBOT =====
-    antibot = [
-        "captcha",
-        "cloudflare",
-        "attention required",
-        "too many requests",
-    ]
-
-    if any(x in body_low for x in antibot):
-        log_event("tme", f"@{u} antibot")
-        return "unknown"
-
-    # ===== FALLBACK =====
-    # Если Telegram отдал непонятный HTML — не считаем free
-    log_event("tme", f"@{u} fallback taken")
-    return "taken"
+    return "taken" if 'tgme_page_title' in html_text else "free"
 
 
 async def is_username_free(u: str, uid=None) -> bool:
@@ -1211,7 +1137,7 @@ def evaluate_username(u):
     if ln!=5: score+=0
     if len(set(ul))==1: score+=90; factors.append("🔥 Моно")
     if ul==ul[::-1]: score+=40; factors.append("🪞 Палиндром")
-    if ul: score+=15; factors.append("🔤 Чистые буквы")
+    if ul.isalpha(): score+=15; factors.append("🔤 Чистые буквы")
     vc=sum(1 for c in ul if c in _V)
     if 0.3<=vc/max(len(ul),1)<=0.6: score+=15; factors.append("🗣 Произносимый")
     score=min(score,200)
@@ -1287,7 +1213,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         for _ in range(40):
             c = gen_func()
             c = (c or "").lower()
-            if c and c not in checked and USERNAME_RX.fullmatch(c) and validate_func(c):
+            if c and c not in checked and c.isalpha() and validate_func(c):
                 u = c
                 break
 
@@ -1327,7 +1253,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             except Exception:
                 pass
 
-        await asyncio.sleep(random.uniform(1.0, 2.2))
+        await asyncio.sleep(0.12)
 
     elapsed = int(time.time() - start)
     if generated_rejected:
@@ -1746,7 +1672,7 @@ def estimate_username_stars(username):
     elif ln <= 7: base = 30
     elif ln <= 8: base = 20
     else: base = 12
-    if username: base += 10
+    if username.isalpha(): base += 10
     if "_" not in username: base += 5
     base += random.randint(-5, 8)
     return max(5, base)
@@ -5853,7 +5779,7 @@ async def free_cache_warmer_loop():
                     for _ in range(40):
                         c = gen_func()
                         c = (c or "").lower()
-                        if c and c not in checked and USERNAME_RX.fullmatch(c) and validate_func(c):
+                        if c and c not in checked and c.isalpha() and validate_func(c):
                             u = c
                             break
                     if not u:
@@ -5870,7 +5796,7 @@ async def free_cache_warmer_loop():
                     except Exception:
                         pass
 
-                    await asyncio.sleep(random.uniform(1.0, 2.2))
+                    await asyncio.sleep(0.12)
 
                 if added:
                     total_now = await get_free_cache_count(mode_key)
