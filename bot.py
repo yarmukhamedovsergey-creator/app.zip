@@ -887,15 +887,32 @@ async def fast_check_username(u: str) -> str:
     """Быстрая проверка больше не отдаёт free по одному t.me-запросу."""
     return await check_username(u)
 
+USERNAME_RX = re.compile(r"^[a-z0-9_]{5,32}$", re.I)
+
+def normalize_username(u: str) -> str:
+    return (u or "").strip().lstrip("@").lower()
+
 def is_valid_telegram_profile_username(u: str) -> bool:
-    """Разрешены только буквенные username из рабочих режимов: 5 или 6 латинских букв."""
-    if not u:
+    """
+    Telegram username validation.
+
+    Правила:
+    - только a-z 0-9 _
+    - длина 5-32
+    - без __
+    - не начинается/заканчивается _
+    """
+    u = normalize_username(u)
+
+    if not USERNAME_RX.fullmatch(u):
         return False
-    u = u.strip().replace("@", "")
-    if len(u) not in (5, 6):
+
+    if "__" in u:
         return False
-    if not re.match(r"^[a-zA-Z]+$", u):
+
+    if u.startswith("_") or u.endswith("_"):
         return False
+
     return True
 
 async def check_username_botapi(u: str) -> str:
@@ -937,7 +954,7 @@ async def public_username_status(u: str, uid=None) -> str:
     u = (u or "").strip().replace("@", "").lower()
 
     if not is_valid_telegram_profile_username(u):
-        return "taken"
+        return "invalid"
     if is_blacklisted(u):
         return "taken"
     for w in INVALID_WORDS:
@@ -1050,26 +1067,30 @@ _TME_USER_AGENTS = [
 
 async def check_username_tme(u: str) -> str:
     """
-    Точная проверка занятости через GET ``https://t.me/<username>``.
+    Проверка username через t.me
 
-    Логика именно такая, как просил пользователь:
-      • в HTML есть ``tgme_page_title``           → **taken** (есть карточка);
-      • элемента нет → страница-заглушка          → **free** (свободен);
-      • любая ошибка / таймаут / не-200 / не-html → **taken** (страховка).
-
-    Возвращает строку "free" или "taken".
+    Возвращает:
+      free
+      taken
+      invalid
+      unknown
     """
-    u = (u or "").strip().replace("@", "").lower()
+
+    u = normalize_username(u)
+
+    # ===== ВАЛИДАЦИЯ ДО ЗАПРОСА =====
     if not is_valid_telegram_profile_username(u):
-        return "taken"
+        return "invalid"
+
     if http_session is None:
-        return "taken"
+        return "unknown"
 
     url = f"https://t.me/{u}"
+
     headers = {
         "User-Agent": random.choice(_TME_USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
         "Cache-Control": "no-cache",
         "Pragma": "no-cache",
     }
@@ -1077,22 +1098,55 @@ async def check_username_tme(u: str) -> str:
     try:
         async with http_session.get(
             url,
-            timeout=aiohttp.ClientTimeout(total=10),
+            timeout=aiohttp.ClientTimeout(total=8),
             headers=headers,
             allow_redirects=True,
         ) as resp:
+
+            # ===== 404 = FREE =====
+            if resp.status == 404:
+                return "free"
+
+            # ===== 429 / 5xx =====
+            if resp.status in (429, 500, 502, 503, 504):
+                log_event("tme", f"@{u} HTTP {resp.status} → unknown")
+                return "unknown"
+
+            # ===== ЛЮБОЙ НЕ-200 =====
             if resp.status != 200:
-                log_event("tme", f"@{u} HTTP {resp.status} → taken", logging.DEBUG)
+                log_event("tme", f"@{u} HTTP {resp.status} → taken")
                 return "taken"
-            html_text = await resp.text(errors="ignore")
+
+            body = await resp.text(errors="ignore")
+
     except asyncio.TimeoutError:
-        log_event("tme", f"@{u} timeout → taken", logging.DEBUG)
-        return "taken"
+        log_event("tme", f"@{u} timeout → unknown")
+        return "unknown"
+
     except Exception as e:
-        log_event("tme", f"@{u} error {e} → taken", logging.DEBUG)
+        log_event("tme", f"@{u} error: {e}")
+        return "unknown"
+
+    body_low = body.lower()
+
+    # ===== USER EXISTS =====
+    if (
+        'tgme_page_title' in body_low
+        or 'property="og:title"' in body_low
+    ):
         return "taken"
 
-    return "taken" if 'tgme_page_title' in html_text else "free"
+    # ===== USER FREE =====
+    if (
+        "username not found" in body_low
+        or "sorry, this page" in body_low
+        or "if you have telegram" in body_low
+    ):
+        return "free"
+
+    # ===== НЕОЖИДАННЫЙ HTML =====
+    log_event("tme", f"@{u} unexpected html")
+    return "taken"
 
 
 async def is_username_free(u: str, uid=None) -> bool:
