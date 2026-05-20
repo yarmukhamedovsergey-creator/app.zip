@@ -1,7 +1,12 @@
 """
-USERNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
-Проверка занятости: GET https://t.me/<username>; нет tgme_page_title → free.
-Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
+USERNAME HUNTER v25.2 — VIP + Тематический поиск + красивые логи
+Проверка занятости (строгий многоисточниковый чекер):
+  • формат + длина + INVALID_WORDS + blacklist;
+  • GET https://t.me/<username> — нет tgme_page_title;
+  • Bot API getChat — обязан явно ответить chat not found;
+  • любая ошибка / таймаут / не-200 / неоднозначный ответ → taken.
+В кэш free попадают только юзы, прошедшие ВСЕ проверки — то есть те,
+которые реально можно поставить в профиль.
 """
 
 from __future__ import annotations
@@ -888,7 +893,7 @@ async def fast_check_username(u: str) -> str:
     return await check_username(u)
 
 def is_valid_telegram_profile_username(u: str) -> bool:
-    """Разрешены только буквенные username из рабочих режимов: 5 или 6 латинских букв."""
+    """Базовая проверка формата: 5 или 6 латинских букв, без цифр и подчёркиваний."""
     if not u:
         return False
     u = u.strip().replace("@", "")
@@ -896,6 +901,42 @@ def is_valid_telegram_profile_username(u: str) -> bool:
         return False
     if not re.match(r"^[a-zA-Z]+$", u):
         return False
+    return True
+
+
+def is_username_settable_in_profile(u: str) -> bool:
+    """
+    Строгая SYNC-проверка: можно ли в принципе ставить такой username в профиль.
+    Используется как первичный фильтр перед сетевыми проверками и как
+    последний рубеж перед записью в кэш — чтобы туда никогда не попадали
+    юзы, которые Telegram заведомо не примет.
+
+    Проверяет:
+      • формат (5 или 6 латинских букв);
+      • blacklist (внутренняя БД);
+      • INVALID_WORDS (зарезервированные/нежелательные слова).
+    """
+    if not u:
+        return False
+    u = u.strip().replace("@", "").lower()
+    if not is_valid_telegram_profile_username(u):
+        return False
+    try:
+        if is_blacklisted(u):
+            return False
+    except Exception:
+        # Если БД временно недоступна — лучше пропустить, чем дать ложный free.
+        return False
+    try:
+        for w in INVALID_WORDS:
+            if not w:
+                continue
+            if w == u or w in u:
+                return False
+    except NameError:
+        # INVALID_WORDS объявляется ниже по файлу; на момент импорта это ок —
+        # вызовы этой функции в рантайме INVALID_WORDS уже видят.
+        pass
     return True
 
 async def check_username_botapi(u: str) -> str:
@@ -928,23 +969,29 @@ async def check_username_botapi(u: str) -> str:
 
 async def public_username_status(u: str, uid=None) -> str:
     """
-    Точная проверка по методу пользователя:
-    GET https://t.me/<username>
-    - если в HTML есть tgme_page_title -> username занят;
-    - если tgme_page_title нет -> username свободен;
-    - любая ошибка / таймаут / не-200 -> считаем занятым.
+    Точная проверка статуса username (free / taken).
+
+    Алгоритм:
+      1) формат + blacklist + INVALID_WORDS → taken (не годится в профиль);
+      2) GET https://t.me/<username> — если есть tgme_page_title → taken;
+      3) Bot API getChat — обязан явно ответить chat not found, иначе → taken.
     """
     u = (u or "").strip().replace("@", "").lower()
 
-    if not is_valid_telegram_profile_username(u):
+    if not is_username_settable_in_profile(u):
         return "taken"
-    if is_blacklisted(u):
-        return "taken"
-    for w in INVALID_WORDS:
-        if w == u or w in u:
-            return "taken"
 
-    return await check_username_tme(u)
+    tme_status = await check_username_tme(u)
+    if tme_status != "free":
+        return "taken"
+
+    # Окончательное подтверждение через Bot API: t.me один не отличает свободный
+    # пользовательский username от занятого без публичной карточки.
+    api_status = await check_username_botapi(u)
+    if api_status != "free":
+        return "taken"
+
+    return "free"
 
 async def check_username(u: str) -> str:
     """Публичный строгий статус username без Telethon/user-сессий."""
@@ -1052,15 +1099,22 @@ async def check_username_tme(u: str) -> str:
     """
     Точная проверка занятости через GET ``https://t.me/<username>``.
 
-    Логика именно такая, как просил пользователь:
-      • в HTML есть ``tgme_page_title``           → **taken** (есть карточка);
-      • элемента нет → страница-заглушка          → **free** (свободен);
-      • любая ошибка / таймаут / не-200 / не-html → **taken** (страховка).
+    Логика:
+      • невалидный формат / blacklist / INVALID_WORDS → **taken** (не годится в профиль);
+      • в HTML есть ``tgme_page_title``               → **taken** (есть карточка);
+      • элемента нет → страница-заглушка               → **free** (предварительно);
+      • любая ошибка / таймаут / не-200 / не-html      → **taken** (страховка).
+
+    Важно: одного t.me-запроса недостаточно, чтобы гарантировать
+    «свободно и можно поставить в профиль» (t.me не различает
+    свободный/зарезервированный/занятый пользовательский username),
+    поэтому окончательное решение принимает ``is_username_truly_free``,
+    которое перепроверяет результат через Bot API.
 
     Возвращает строку "free" или "taken".
     """
     u = (u or "").strip().replace("@", "").lower()
-    if not is_valid_telegram_profile_username(u):
+    if not is_username_settable_in_profile(u):
         return "taken"
     if http_session is None:
         return "taken"
@@ -1095,9 +1149,47 @@ async def check_username_tme(u: str) -> str:
     return "taken" if 'tgme_page_title' in html_text else "free"
 
 
+async def is_username_truly_free(u: str, uid=None) -> bool:
+    """
+    Строгий многоисточниковый ответ на вопрос «можно ли поставить username в профиль».
+
+    True только если ВСЕ источники подтверждают свободу:
+      1) формат корректен (5/6 латинских букв);
+      2) username не в blacklist и не в INVALID_WORDS;
+      3) t.me не содержит ``tgme_page_title`` (нет публичной карточки);
+      4) Bot API getChat явно отвечает «chat not found» (free).
+
+    Если Bot API недоступен или вернул unknown — username помечается taken
+    (страховка от ложных free).
+    """
+    u = (u or "").strip().replace("@", "").lower()
+    if not is_username_settable_in_profile(u):
+        return False
+
+    # 1) t.me — быстрый предварительный отсев занятых.
+    tme_status = await check_username_tme(u)
+    if tme_status != "free":
+        return False
+
+    # 2) Bot API — авторитетный ответ для разделения free/taken пользовательских юзов.
+    try:
+        api_status = await check_username_botapi(u)
+    except Exception as e:
+        logger.debug(f"[truly_free] @{u} botapi exception: {e}")
+        return False
+    if api_status != "free":
+        # taken / unknown → не подтверждено как свободное, считаем занятым.
+        return False
+
+    return True
+
+
 async def is_username_free(u: str, uid=None) -> bool:
-    """True только когда t.me-страница не содержит ``tgme_page_title``."""
-    return await check_username_tme(u) == "free"
+    """
+    Обратная совместимость: True только когда username действительно можно
+    поставить в профиль (строгая проверка, см. ``is_username_truly_free``).
+    """
+    return await is_username_truly_free(u, uid)
 
 
 async def get_rechecked_cached_free(mode, count):
@@ -1107,7 +1199,11 @@ async def get_rechecked_cached_free(mode, count):
     rejected = []
     for u in cached:
         u = (u or "").strip().replace("@", "").lower()
-        if validate_func(u) and await is_username_free(u):
+        if (
+            validate_func(u)
+            and is_username_settable_in_profile(u)
+            and await is_username_truly_free(u)
+        ):
             found.append({"username": u, "fragment": "unavailable"})
             if len(found) >= count:
                 break
@@ -1178,22 +1274,26 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
     log_event("search", f"▶  start mode={mode_label} uid={uid} need={count}")
 
-    # 1) Берём старый кэш, но перед выдачей перепроверяем через t.me.
+    # 1) Берём старый кэш, но перед выдачей строго перепроверяем
+    # (формат + blacklist + INVALID_WORDS + t.me + Bot API).
     cached = await get_cached_free(mode_key, max(count * 5, 20))
     for raw in cached:
         if len(found) >= count:
             break
 
         u = (raw or "").strip().replace("@", "").lower()
-        if not validate_func(u) or u in checked:
+        if (
+            not validate_func(u)
+            or not is_username_settable_in_profile(u)
+            or u in checked
+        ):
             cache_rejected += 1
             continue
 
         checked.add(u)
         attempts += 1
 
-        status = await check_username_tme(u)
-        if status == "free":
+        if await is_username_truly_free(u, uid):
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
             cache_used += 1
@@ -1206,14 +1306,20 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     if cache_rejected:
         log_event("cache", f"🗑  stale dropped: {cache_rejected} ({mode_label})", logging.DEBUG)
 
-    # 2) Если кэша не хватило — генерируем и проверяем тем же методом.
+    # 2) Если кэша не хватило — генерируем и проверяем тем же строгим методом.
     max_attempts = 10000
     while len(found) < count and attempts < max_attempts:
         u = None
         for _ in range(40):
             c = gen_func()
             c = (c or "").lower()
-            if c and c not in checked and c.isalpha() and validate_func(c):
+            if (
+                c
+                and c not in checked
+                and c.isalpha()
+                and validate_func(c)
+                and is_username_settable_in_profile(c)
+            ):
                 u = c
                 break
 
@@ -1224,9 +1330,8 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
         checked.add(u)
         attempts += 1
-        status = await check_username_tme(u)
 
-        if status == "free":
+        if await is_username_truly_free(u, uid):
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
             await add_free_cache([u], mode_key)
@@ -1469,6 +1574,21 @@ async def add_free_cache(usernames, mode):
     if not usernames:
         return
 
+    # Финальный рубеж: в кэш «свободных» попадают только те юзы,
+    # которые в принципе можно поставить в профиль (формат, blacklist,
+    # INVALID_WORDS). Сетевые проверки уже были сделаны выше по стеку,
+    # здесь — последний синхронный фильтр от мусора.
+    filtered = []
+    for u in usernames:
+        if not u:
+            continue
+        u = u.strip().replace("@", "").lower()
+        if is_username_settable_in_profile(u):
+            filtered.append(u)
+
+    if not filtered:
+        return
+
     data = await load_cache()
 
     if mode not in data:
@@ -1476,9 +1596,7 @@ async def add_free_cache(usernames, mode):
 
     existing = set(data[mode])
 
-    for u in usernames:
-        u = u.lower()
-
+    for u in filtered:
         if u not in existing:
             data[mode].append(u)
             existing.add(u)
@@ -5741,13 +5859,15 @@ async def daily_report_loop():
         await asyncio.sleep(60)
 
 async def cache_warmer_check_username(u: str) -> bool:
-    """Кэш наполняется только username, которые прошли строгий t.me-check."""
+    """
+    Кэш наполняется только username, которые прошли полную строгую проверку:
+    формат + blacklist + INVALID_WORDS + t.me (нет tgme_page_title)
+    + Bot API getChat (явное chat not found).
+    """
     u = (u or "").strip().replace("@", "").lower()
-    if not is_valid_telegram_profile_username(u):
+    if not is_username_settable_in_profile(u):
         return False
-    if is_blacklisted(u):
-        return False
-    return await check_username_tme(u) == "free"
+    return await is_username_truly_free(u)
 
 
 async def free_cache_warmer_loop():
