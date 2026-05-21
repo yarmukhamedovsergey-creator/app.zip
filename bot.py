@@ -656,7 +656,7 @@ class AccountPool:
 
         except Exception as e:
             self._err(idx)
-            log_event("bot", f"⚠️  session #{idx} @{u}: {e}", logging.WARNING)
+            # frozen/flood errors hidden
             return "skip"
 
     async def check(self, u, uid=None):
@@ -1405,11 +1405,16 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
     if pool and pool.has_sessions():
         session_status = await pool.check_username_via_session(u)
 
-        # Любой ответ кроме free = reject.
-        if session_status != "free":
-            log_event("tme", f"⚠️ session rejected @{u}: {session_status}")
+        # taken = точно занят
+        if session_status == "taken":
+            log_event("tme", f"⚠️ session rejected @{u}: taken")
             return False
 
+        # free = подтверждённо свободен
+        if session_status == "free":
+            return True
+
+        # skip/flood/frozen -> доверяем t.me + botapi
         return True
 
     return True
@@ -1538,7 +1543,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         else:
             cache_rejected += 1
 
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(0.20)
 
     if cache_rejected:
         log_event("cache", f"🗑  stale dropped: {cache_rejected} ({mode_label})", logging.DEBUG)
@@ -1598,7 +1603,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             except Exception:
                 pass
 
-        await asyncio.sleep(0.12)
+        await asyncio.sleep(0.35)
 
     elapsed = int(time.time() - start)
     if generated_rejected:
@@ -6326,7 +6331,7 @@ async def free_cache_warmer_loop():
                     except Exception:
                         pass
 
-                    await asyncio.sleep(0.12)
+                    await asyncio.sleep(0.35)
 
                 if added:
                     total_now = await get_free_cache_count(mode_key)
