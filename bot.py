@@ -927,7 +927,10 @@ async def do_word_search(word, count, msg, uid):
             attempts += 1
 
             if await is_username_free(u, uid):
-                found.append({"username": u, "fragment": "unavailable"})
+                fragment_status = await check_fragment(u)
+            if fragment_status != "unavailable":
+                continue
+            found.append({"username": u, "fragment": fragment_status})
                 save_history(uid, u, f"По слову: {word}", len(u))
 
             await asyncio.sleep(0.3)
@@ -1368,20 +1371,22 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
     if api_status != "free":
         return False
 
-    # 3) Telethon session — финальная проверка через account.CheckUsernameRequest.
-    #    Это самый надёжный метод: Telegram API напрямую отвечает,
-    #    можно ли поставить этот username в профиль.
+    # 3) Fragment usernames никогда не считаем свободными.
+    fragment_status = await check_fragment(u)
+    if fragment_status != "unavailable":
+        log_event("fragment", f"🚫 @{u} rejected by fragment: {fragment_status}")
+        return False
+
+    # 4) Обязательная проверка через session.
     if pool and pool.has_sessions():
         session_status = await pool.check_username_via_session(u)
-        if session_status == "taken":
-            # Сессия точно сказала «занят» — значит t.me/BotAPI ошиблись.
-            pool.caught_by_recheck += 1
-            log_event("tme", f"🛡 session recheck caught @{u} as TAKEN")
+
+        # Любой ответ кроме free = reject.
+        if session_status != "free":
+            log_event("tme", f"⚠️ session rejected @{u}: {session_status}")
             return False
-        if session_status == "free":
-            # Все 3 источника подтвердили — точно свободен.
-            return True
-        # session_status == "skip" — сессии недоступны, доверяем t.me + Bot API.
+
+        return True
 
     return True
 
@@ -1406,7 +1411,10 @@ async def get_rechecked_cached_free(mode, count):
             and is_username_settable_in_profile(u)
             and await is_username_truly_free(u)
         ):
-            found.append({"username": u, "fragment": "unavailable"})
+            fragment_status = await check_fragment(u)
+            if fragment_status != "unavailable":
+                continue
+            found.append({"username": u, "fragment": fragment_status})
             if len(found) >= count:
                 break
         else:
@@ -1496,7 +1504,10 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
 
         if await is_username_truly_free(u, uid):
-            found.append({"username": u, "fragment": "unavailable"})
+            fragment_status = await check_fragment(u)
+            if fragment_status != "unavailable":
+                continue
+            found.append({"username": u, "fragment": fragment_status})
             save_history(uid, u, mode_name, len(u))
             cache_used += 1
             log_event("cache", f"💾 hit  @{u} ({mode_label})")
@@ -1534,7 +1545,10 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
 
         if await is_username_truly_free(u, uid):
-            found.append({"username": u, "fragment": "unavailable"})
+            fragment_status = await check_fragment(u)
+            if fragment_status != "unavailable":
+                continue
+            found.append({"username": u, "fragment": fragment_status})
             save_history(uid, u, mode_name, len(u))
             await add_free_cache([u], mode_key)
             cached_new += 1
