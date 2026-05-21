@@ -1,9 +1,10 @@
 """
-USERNAME HUNTER v25.2 — VIP + Тематический поиск + красивые логи
+USERNAME HUNTER v25.3 — VIP + Тематический поиск + проверка через сессии
 Проверка занятости (строгий многоисточниковый чекер):
   • формат + длина + INVALID_WORDS + blacklist;
   • GET https://t.me/<username> — нет tgme_page_title;
   • Bot API getChat — обязан явно ответить chat not found;
+  • Telethon account.CheckUsernameRequest — финальная проверка через сессии;
   • любая ошибка / таймаут / не-200 / неоднозначный ответ → taken.
 В кэш free попадают только юзы, прошедшие ВСЕ проверки — то есть те,
 которые реально можно поставить в профиль.
@@ -40,8 +41,12 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
-# Telethon полностью отключён: бот работает без user-сессий.
-HAS_TELETHON = False
+# Telethon для проверки юзернеймов через account.CheckUsernameRequest
+try:
+    from telethon import TelegramClient, functions, errors
+    HAS_TELETHON = True
+except ImportError:
+    HAS_TELETHON = False
 
 pool = None
 http_session = None
@@ -53,7 +58,11 @@ MAIN_TOKEN = "8325751391:AAGoIqb0YvnXmFFjJCB0kX_wZ8HUvD53-Bg"
 ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "emeuw"
 
-ACCOUNTS = []  # режим без user-сессий
+# Список аккаунтов для Telethon-сессий: [("session_name", api_id, "api_hash"), ...]
+# session_name — имя файла .session в папке sessions/
+# Можно добавлять через админ-панель
+ACCOUNTS = []  # заполняется через админку или вручную
+SESSIONS_DIR = "sessions"
 
 
 FREE_SEARCHES = 2
@@ -248,7 +257,7 @@ user_states = {}
 http_session = None
 bot_info = None
 DB = "hunter.db"
-# os.makedirs("sessions", exist_ok=True)  # user-сессии отключены
+os.makedirs(SESSIONS_DIR, exist_ok=True)  # папка для .session файлов
 searching_users = set()
 user_search_cooldown = {}
 _fragment_cache = {}
@@ -399,18 +408,33 @@ def apply_config(config):
             if k in PRICES:
                 PRICES[k]["stars"] = v
 
+SESSIONS_CONFIG_FILE = "sessions_config.json"
+
 def load_saved_sessions():
-    """User-сессии удалены. Возвращаем пустой список для совместимости админ-панели."""
+    """Загрузить список сессий из JSON-конфига."""
+    if os.path.exists(SESSIONS_CONFIG_FILE):
+        try:
+            with open(SESSIONS_CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
     return []
+
+def save_sessions_config(sessions):
+    """Сохранить список сессий в JSON-конфиг."""
+    with open(SESSIONS_CONFIG_FILE, "w") as f:
+        json.dump(sessions, f, indent=2, ensure_ascii=False)
 
 def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
 
 def get_checker_mode():
+    if pool and pool.has_sessions():
+        return "sessions"
     return "public_strict"
 
 def is_sessions_checker():
-    return False
+    return pool is not None and pool.has_sessions()
 
 # ═══════════════════════ RATE LIMITER (ОТКЛЮЧЁН) ═══════════════════════
 
@@ -482,29 +506,152 @@ def get_action_log(limit=50):
 # ═══════════════════════ ПУЛ АККАУНТОВ ═══════════════════════
 
 class AccountPool:
-    """Заглушка вместо Telethon-пула. В проекте нет user-сессий вообще."""
+    """
+    Пул Telethon-сессий для проверки юзернеймов через account.CheckUsernameRequest.
+    Если сессий нет — работает как заглушка (только публичные методы).
+    """
 
     def __init__(self):
         self.clients = []
-        self.status = {}
-        self.cooldown_until = {}
+        self.accounts = []
+        self.status = {}          # i -> 'active' | 'cooldown' | 'dead' | 'warming'
+        self.cooldown_until = {}   # i -> timestamp
+        self.last_used = {}        # i -> timestamp
+        self.error_streak = {}     # i -> int
         self.total_checks = 0
+        self.session_checks = 0
         self.caught_by_botapi = 0
         self.caught_by_recheck = 0
         self.reconnect_count = 0
+        self._lock = asyncio.Lock()
+        self._rr_index = 0        # round-robin индекс
 
     async def init(self, accounts=None):
-        logger.info("Public strict mode: Telethon sessions are disabled")
+        """Подключить все сессии из ACCOUNTS."""
+        if not HAS_TELETHON:
+            log_event("bot", "⚠️  Telethon не установлен — сессии отключены")
+            return
+        accounts = accounts or ACCOUNTS
+        if not accounts:
+            log_event("bot", "ℹ️  Нет аккаунтов — работаем без сессий (только t.me + Bot API)")
+            return
+
+        os.makedirs(SESSIONS_DIR, exist_ok=True)
+        for idx, acc in enumerate(accounts):
+            session_name, api_id, api_hash = acc[0], int(acc[1]), str(acc[2])
+            session_path = os.path.join(SESSIONS_DIR, session_name)
+            try:
+                client = TelegramClient(session_path, api_id, api_hash)
+                await client.connect()
+                if not await client.is_user_authorized():
+                    log_event("bot", f"⚠️  Сессия {session_name} не авторизована — пропуск", logging.WARNING)
+                    self.clients.append(client)
+                    self.accounts.append(acc)
+                    self.status[idx] = "dead"
+                    continue
+                self.clients.append(client)
+                self.accounts.append(acc)
+                self.status[idx] = "active"
+                self.cooldown_until[idx] = 0
+                self.error_streak[idx] = 0
+                self.last_used[idx] = 0
+                me = await client.get_me()
+                uname = me.username or me.phone or "?"
+                log_event("bot", f"✅ Сессия #{idx} подключена: {uname}")
+            except Exception as e:
+                log_event("bot", f"❌ Сессия {session_name} ошибка: {e}", logging.ERROR)
+                self.clients.append(None)
+                self.accounts.append(acc)
+                self.status[idx] = "dead"
+
+        active = sum(1 for s in self.status.values() if s == "active")
+        log_event("bot", f"🔌 Сессий подключено: {active}/{len(self.clients)}")
 
     def has_sessions(self):
-        return False
+        return any(s == "active" for s in self.status.values())
+
+    async def _acquire(self, uid=None, timeout=5):
+        """Получить свободную сессию (round-robin с учётом cooldown)."""
+        async with self._lock:
+            now = time.time()
+            n = len(self.clients)
+            if n == 0:
+                return None, None
+            for _ in range(n):
+                i = self._rr_index % n
+                self._rr_index += 1
+                if self.status.get(i) != "active":
+                    continue
+                if now < self.cooldown_until.get(i, 0):
+                    continue
+                self.last_used[i] = now
+                return self.clients[i], i
+        return None, None
+
+    def _ok(self, i):
+        """Сессия успешно выполнила запрос."""
+        self.error_streak[i] = 0
+
+    def _err(self, i, flood=False, secs=0):
+        """Сессия получила ошибку."""
+        self.error_streak[i] = self.error_streak.get(i, 0) + 1
+        if flood and secs > 0:
+            self.cooldown_until[i] = time.time() + secs + 5
+            self.status[i] = "cooldown"
+            log_event("bot", f"⏳ Сессия #{i} flood-wait {secs}s", logging.WARNING)
+        elif self.error_streak[i] >= 5:
+            self.status[i] = "dead"
+            log_event("bot", f"💀 Сессия #{i} мертва (5 ошибок подряд)", logging.ERROR)
+
+    async def check_username_via_session(self, u: str) -> str:
+        """
+        Проверка юзернейма через Telethon: account.CheckUsernameRequest.
+        Возвращает: 'free' | 'taken' | 'skip' (нет доступных сессий).
+        """
+        if not HAS_TELETHON or not self.has_sessions():
+            return "skip"
+
+        u = (u or "").strip().replace("@", "").lower()
+        if not u:
+            return "skip"
+
+        client, idx = await self._acquire()
+        if client is None:
+            return "skip"
+
+        try:
+            result = await client(functions.account.CheckUsernameRequest(username=u))
+            self._ok(idx)
+            self.session_checks += 1
+            if result:
+                log_event("tme", f"✅ session #{idx}: @{u} → FREE", logging.DEBUG)
+                return "free"
+            else:
+                log_event("tme", f"❌ session #{idx}: @{u} → TAKEN", logging.DEBUG)
+                return "taken"
+        except errors.FloodWaitError as e:
+            self._err(idx, flood=True, secs=e.seconds)
+            return "skip"
+        except errors.UsernameInvalidError:
+            self._ok(idx)
+            return "taken"
+        except errors.UsernameOccupiedError:
+            self._ok(idx)
+            return "taken"
+        except errors.UsernamePurchaseAvailableError:
+            self._ok(idx)
+            return "taken"
+        except Exception as e:
+            self._err(idx)
+            log_event("bot", f"⚠️  session #{idx} @{u}: {e}", logging.WARNING)
+            return "skip"
 
     async def check(self, u, uid=None):
         self.total_checks += 1
         try:
             return "free" if await is_username_free(u, uid) else "taken"
         except Exception as e:
-            logger.debug(f"[public-check] @{u}: {e}")
+            logger.debug(f"[pool-check] @{u}: {e}")
             return "skip"
 
     async def strong_check(self, u, uid=None):
@@ -517,36 +664,76 @@ class AccountPool:
         return None
 
     def stats(self):
+        active = sum(1 for s in self.status.values() if s == "active")
+        cooldown = sum(1 for s in self.status.values() if s == "cooldown")
+        dead = sum(1 for s in self.status.values() if s == "dead")
+        warming = sum(1 for s in self.status.values() if s == "warming")
         return {
-            "total": 0,
-            "active": 0,
-            "warming": 0,
-            "cooldown": 0,
-            "dead": 0,
+            "total": len(self.clients),
+            "active": active,
+            "warming": warming,
+            "cooldown": cooldown,
+            "dead": dead,
             "checks": self.total_checks,
-            "errors": 0,
+            "session_checks": self.session_checks,
+            "errors": sum(self.error_streak.values()),
             "botapi_saves": self.caught_by_botapi,
             "recheck_saves": self.caught_by_recheck,
             "reconnects": self.reconnect_count,
         }
 
     def detailed_status(self):
-        return "User-сессии отключены. Проверка работает только публичными методами: t.me + Bot API + Fragment."
+        if not self.clients:
+            return "Нет сессий. Проверка: t.me + Bot API + Fragment."
+        lines = []
+        for i, client in enumerate(self.clients):
+            st = self.status.get(i, "?")
+            emoji = {"active": "🟢", "cooldown": "🟠", "dead": "🔴", "warming": "🟡"}.get(st, "⚪")
+            name = self.accounts[i][0] if i < len(self.accounts) else f"#{i}"
+            cd = ""
+            if st == "cooldown":
+                remaining = max(0, int(self.cooldown_until.get(i, 0) - time.time()))
+                cd = f" ({remaining}s)"
+            lines.append(f"{emoji} #{i} {name}: {st}{cd}")
+        lines.append(f"\n📊 Проверок через сессии: {self.session_checks}")
+        return "\n".join(lines)
 
     async def _try_reconnect(self, i):
-        return False
-
-    async def _acquire(self, uid=None, timeout=0):
-        return None, None
-
-    def _ok(self, i):
-        return None
-
-    def _err(self, i, flood=False, secs=0):
-        return None
+        if not HAS_TELETHON or i >= len(self.accounts):
+            return False
+        acc = self.accounts[i]
+        session_name, api_id, api_hash = acc[0], int(acc[1]), str(acc[2])
+        session_path = os.path.join(SESSIONS_DIR, session_name)
+        try:
+            if self.clients[i]:
+                try:
+                    await self.clients[i].disconnect()
+                except Exception:
+                    pass
+            client = TelegramClient(session_path, api_id, api_hash)
+            await client.connect()
+            if not await client.is_user_authorized():
+                self.status[i] = "dead"
+                return False
+            self.clients[i] = client
+            self.status[i] = "active"
+            self.cooldown_until[i] = 0
+            self.error_streak[i] = 0
+            self.reconnect_count += 1
+            log_event("bot", f"🔄 Сессия #{i} переподключена")
+            return True
+        except Exception as e:
+            log_event("bot", f"❌ Реконнект #{i}: {e}", logging.ERROR)
+            self.status[i] = "dead"
+            return False
 
     async def disconnect(self):
-        return None
+        for client in self.clients:
+            if client:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
 
 
 # ═══════════════════════ ГЕНЕРАТОРЫ v5 ═══════════════════════
@@ -1157,7 +1344,8 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
       1) формат корректен (5/6 латинских букв);
       2) username не в blacklist и не в INVALID_WORDS;
       3) t.me не содержит ``tgme_page_title`` (нет публичной карточки);
-      4) Bot API getChat явно отвечает «chat not found» (free).
+      4) Bot API getChat явно отвечает «chat not found» (free);
+      5) Telethon account.CheckUsernameRequest подтверждает свободу (если есть сессии).
 
     Если Bot API недоступен или вернул unknown — username помечается taken
     (страховка от ложных free).
@@ -1178,8 +1366,22 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
         logger.debug(f"[truly_free] @{u} botapi exception: {e}")
         return False
     if api_status != "free":
-        # taken / unknown → не подтверждено как свободное, считаем занятым.
         return False
+
+    # 3) Telethon session — финальная проверка через account.CheckUsernameRequest.
+    #    Это самый надёжный метод: Telegram API напрямую отвечает,
+    #    можно ли поставить этот username в профиль.
+    if pool and pool.has_sessions():
+        session_status = await pool.check_username_via_session(u)
+        if session_status == "taken":
+            # Сессия точно сказала «занят» — значит t.me/BotAPI ошиблись.
+            pool.caught_by_recheck += 1
+            log_event("tme", f"🛡 session recheck caught @{u} as TAKEN")
+            return False
+        if session_status == "free":
+            # Все 3 источника подтвердили — точно свободен.
+            return True
+        # session_status == "skip" — сессии недоступны, доверяем t.me + Bot API.
 
     return True
 
@@ -4649,9 +4851,144 @@ async def register_handlers(dp: Dispatcher):
                 await msg.answer("❌ Код уже существует")
             return
 
-        if action in ("admin_add_session_api_id", "admin_add_session_api_hash", "admin_add_session_phone"):
+        if action == "admin_add_session_api_id":
+            try:
+                api_id = int(msg.text.strip())
+            except ValueError:
+                await msg.answer("❌ API ID должен быть числом. Попробуйте ещё раз:")
+                return
+            user_states[uid] = {"action": "admin_add_session_api_hash", "api_id": api_id}
+            await msg.answer("✅ API ID принят.\n\nШаг 2/3: Отправьте <b>API Hash</b>", parse_mode="HTML")
+            return
+
+        if action == "admin_add_session_api_hash":
+            api_hash = msg.text.strip()
+            if len(api_hash) < 10:
+                await msg.answer("❌ API Hash слишком короткий. Попробуйте ещё раз:")
+                return
+            user_states[uid] = {
+                "action": "admin_add_session_phone",
+                "api_id": state["api_id"],
+                "api_hash": api_hash
+            }
+            await msg.answer("✅ API Hash принят.\n\nШаг 3/3: Отправьте <b>номер телефона</b> (с +)", parse_mode="HTML")
+            return
+
+        if action == "admin_add_session_phone":
+            phone = msg.text.strip()
+            api_id = state["api_id"]
+            api_hash = state["api_hash"]
             user_states.pop(uid, None)
-            await msg.answer("⚡ User-сессии удалены. Бот работает только в публичном строгом режиме.")
+            session_name = f"session_{phone.replace('+', '').replace(' ', '')}"
+            session_path = os.path.join(SESSIONS_DIR, session_name)
+            if not HAS_TELETHON:
+                await msg.answer("❌ Telethon не установлен.")
+                return
+            try:
+                client = TelegramClient(session_path, api_id, api_hash)
+                await client.connect()
+                if not await client.is_user_authorized():
+                    await client.send_code_request(phone)
+                    user_states[uid] = {
+                        "action": "admin_add_session_code",
+                        "api_id": api_id,
+                        "api_hash": api_hash,
+                        "phone": phone,
+                        "session_name": session_name,
+                        "client": client,
+                    }
+                    await msg.answer("📲 Код отправлен! Введите код авторизации:")
+                else:
+                    # Уже авторизована
+                    sessions = load_saved_sessions()
+                    sessions.append([session_name, api_id, api_hash])
+                    save_sessions_config(sessions)
+                    ACCOUNTS.append((session_name, api_id, api_hash))
+                    pool.clients.append(client)
+                    pool.accounts.append((session_name, api_id, api_hash))
+                    idx = len(pool.clients) - 1
+                    pool.status[idx] = "active"
+                    pool.cooldown_until[idx] = 0
+                    pool.error_streak[idx] = 0
+                    pool.last_used[idx] = 0
+                    me = await client.get_me()
+                    uname = me.username or me.phone or "?"
+                    log_action(uid, "add_session", session_name)
+                    await msg.answer(f"✅ Сессия <b>{uname}</b> добавлена и активна!", parse_mode="HTML")
+            except Exception as e:
+                await msg.answer(f"❌ Ошибка: {e}")
+            return
+
+        if action == "admin_add_session_code":
+            code = msg.text.strip().replace(" ", "").replace("-", "")
+            client = state.get("client")
+            phone = state.get("phone")
+            api_id = state.get("api_id")
+            api_hash = state.get("api_hash")
+            session_name = state.get("session_name")
+            user_states.pop(uid, None)
+            if not client:
+                await msg.answer("❌ Сессия потеряна, начните заново.")
+                return
+            try:
+                await client.sign_in(phone, code)
+                sessions = load_saved_sessions()
+                sessions.append([session_name, api_id, api_hash])
+                save_sessions_config(sessions)
+                ACCOUNTS.append((session_name, api_id, api_hash))
+                pool.clients.append(client)
+                pool.accounts.append((session_name, api_id, api_hash))
+                idx = len(pool.clients) - 1
+                pool.status[idx] = "active"
+                pool.cooldown_until[idx] = 0
+                pool.error_streak[idx] = 0
+                pool.last_used[idx] = 0
+                me = await client.get_me()
+                uname = me.username or me.phone or "?"
+                log_action(uid, "add_session", session_name)
+                await msg.answer(f"✅ Сессия <b>{uname}</b> авторизована и добавлена!", parse_mode="HTML")
+            except errors.SessionPasswordNeededError:
+                user_states[uid] = {
+                    "action": "admin_add_session_2fa",
+                    "client": client,
+                    "api_id": api_id,
+                    "api_hash": api_hash,
+                    "session_name": session_name,
+                }
+                await msg.answer("🔐 Аккаунт с 2FA. Введите пароль:")
+            except Exception as e:
+                await msg.answer(f"❌ Ошибка авторизации: {e}")
+            return
+
+        if action == "admin_add_session_2fa":
+            password = msg.text.strip()
+            client = state.get("client")
+            api_id = state.get("api_id")
+            api_hash = state.get("api_hash")
+            session_name = state.get("session_name")
+            user_states.pop(uid, None)
+            if not client:
+                await msg.answer("❌ Сессия потеряна, начните заново.")
+                return
+            try:
+                await client.sign_in(password=password)
+                sessions = load_saved_sessions()
+                sessions.append([session_name, api_id, api_hash])
+                save_sessions_config(sessions)
+                ACCOUNTS.append((session_name, api_id, api_hash))
+                pool.clients.append(client)
+                pool.accounts.append((session_name, api_id, api_hash))
+                idx = len(pool.clients) - 1
+                pool.status[idx] = "active"
+                pool.cooldown_until[idx] = 0
+                pool.error_streak[idx] = 0
+                pool.last_used[idx] = 0
+                me = await client.get_me()
+                uname = me.username or me.phone or "?"
+                log_action(uid, "add_session", session_name)
+                await msg.answer(f"✅ Сессия <b>{uname}</b> авторизована и добавлена!", parse_mode="HTML")
+            except Exception as e:
+                await msg.answer(f"❌ Ошибка 2FA: {e}")
             return
 
         if action=="admin_refs_check_input":
@@ -4811,15 +5148,17 @@ async def register_handlers(dp: Dispatcher):
         ps = pool.stats()
         detail = pool.detailed_status()
 
+        mode = "🟢 Сессии + t.me + Bot API" if pool.has_sessions() else "🔴 t.me + Bot API (без сессий)"
         text = (
-            "⚡ <b>Публичная строгая проверка</b>\n\n"
-            "User-сессии и Telethon-пул отключены полностью.\n"
-            "Поиск использует только t.me, Bot API getChat и Fragment.\n\n"
-            f"🔢 Проверок: <code>{ps['checks']}</code>\n\n"
+            f"⚡ <b>{mode}</b>\n\n"
+            f"🔢 Проверок: <code>{ps['checks']}</code>\n"
+            f"🔑 Через сессии: <code>{ps.get('session_checks', 0)}</code>\n"
+            f"🛡 Перехвачено ложных: <code>{ps.get('recheck_saves', 0)}</code>\n\n"
             f"<pre>{detail}</pre>"
         )
 
         kb = InlineKeyboardBuilder()
+        kb.button(text="➕ Добавить сессию", callback_data="a_add_session")
         kb.button(text="🔄 Обновить", callback_data="adm_sessions")
         kb.button(text="🔙 Админ", callback_data="cmd_admin")
         kb.adjust(1)
@@ -5033,13 +5372,19 @@ async def register_handlers(dp: Dispatcher):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
         ps = pool.stats(); detail = pool.detailed_status()
+        mode = "🟢 Сессии" if pool.has_sessions() else "🔴 Без сессий"
         text = (
-            "⚡ <b>Без user-сессий</b>\n\n"
-            f"📊 Проверок: <code>{ps['checks']}</code>\n\n"
+            f"⚡ <b>{mode}</b>\n\n"
+            f"📊 Проверок: <code>{ps['checks']}</code>\n"
+            f"🔑 Через сессии: <code>{ps.get('session_checks', 0)}</code>\n"
+            f"🛡 Перехвачено: <code>{ps.get('recheck_saves', 0)}</code>\n\n"
             f"<pre>{detail}</pre>"
         )
         kb = InlineKeyboardBuilder()
+        kb.button(text="➕ Добавить сессию", callback_data="a_add_session")
         kb.button(text="🔄 Обновить", callback_data="a_sessions")
+        if pool.has_sessions():
+            kb.button(text="🔄 Переподключить все", callback_data="a_reconnect_all")
         kb.button(text="🔙", callback_data="cmd_admin")
         kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
@@ -5080,8 +5425,18 @@ async def register_handlers(dp: Dispatcher):
     async def cb_add_sess(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
-        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="a_sessions")
-        await edit_msg(cb.message, "⚡ <b>User-сессии удалены. Добавление аккаунтов отключено.</b>", kb.as_markup())
+        if not HAS_TELETHON:
+            kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="a_sessions")
+            await edit_msg(cb.message, "⚠️ <b>Telethon не установлен.</b>\n\nВыполните: <code>pip install telethon</code>", kb.as_markup())
+            return
+        user_states[cb.from_user.id] = {"action": "admin_add_session_api_id"}
+        kb = InlineKeyboardBuilder(); kb.button(text="❌ Отмена", callback_data="a_sessions")
+        await edit_msg(cb.message,
+            "➕ <b>Добавление сессии</b>\n\n"
+            "Шаг 1/3: Отправьте <b>API ID</b>\n"
+            "(получить на https://my.telegram.org)",
+            kb.as_markup()
+        )
 
     @dp.callback_query(F.data == "a_keys")
     async def cb_akeys(cb: CallbackQuery):
@@ -5835,9 +6190,25 @@ async def monitor_loop():
         await asyncio.sleep(MONITOR_CHECK_INTERVAL)
 
 async def session_watchdog():
-    # User-сессии удалены; watchdog оставлен как пустой фоновой таск для совместимости.
+    """Периодическая проверка здоровья сессий и автореконнект."""
     while True:
-        await asyncio.sleep(3600)
+        try:
+            if pool and pool.clients:
+                now = time.time()
+                for i in range(len(pool.clients)):
+                    st = pool.status.get(i)
+                    # Снять cooldown если время прошло
+                    if st == "cooldown" and now >= pool.cooldown_until.get(i, 0):
+                        pool.status[i] = "active"
+                        pool.cooldown_until[i] = 0
+                        log_event("bot", f"🔄 Сессия #{i} вышла из cooldown")
+                    # Попробовать переподключить мёртвые
+                    if st == "dead":
+                        await pool._try_reconnect(i)
+                        await asyncio.sleep(5)
+        except Exception as e:
+            logger.debug(f"[watchdog] {e}")
+        await asyncio.sleep(300)  # каждые 5 минут
 
 async def daily_report_loop():
     while True:
@@ -5862,7 +6233,8 @@ async def cache_warmer_check_username(u: str) -> bool:
     """
     Кэш наполняется только username, которые прошли полную строгую проверку:
     формат + blacklist + INVALID_WORDS + t.me (нет tgme_page_title)
-    + Bot API getChat (явное chat not found).
+    + Bot API getChat (явное chat not found)
+    + Telethon session CheckUsernameRequest (если сессии доступны).
     """
     u = (u or "").strip().replace("@", "").lower()
     if not is_username_settable_in_profile(u):
@@ -5959,12 +6331,21 @@ async def main():
         for k,v in config["prices"].items():
             if k in PRICES: PRICES[k]["stars"]=v
     bot_info=await bot.get_me(); http_session=aiohttp.ClientSession()
-    # User-сессии не подключаются: проверка работает через t.me + Bot API getChat + Fragment.
+
+    # Загружаем сохранённые сессии и подключаем Telethon
+    saved = load_saved_sessions()
+    for s in saved:
+        if isinstance(s, (list, tuple)) and len(s) >= 3:
+            ACCOUNTS.append(tuple(s[:3]))
+    await pool.init(ACCOUNTS)
+
     await register_handlers(dp)
+    check_mode = "sessions + t.me + Bot API" if pool.has_sessions() else "t.me + Bot API (без сессий)"
     log_banner([
-        "USERNAME HUNTER  ·  v25.1",
+        "USERNAME HUNTER  ·  v25.2",
         f"bot: @{bot_info.username}",
-        "check: GET t.me + tgme_page_title",
+        f"check: {check_mode}",
+        f"sessions: {pool.stats()['active']}/{pool.stats()['total']}",
         f"db:    {DB}",
         f"cache: {CACHE_FILE}",
     ])
