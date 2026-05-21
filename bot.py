@@ -620,28 +620,39 @@ class AccountPool:
             return "skip"
 
         try:
-            result = await client(functions.account.CheckUsernameRequest(username=u))
-            self._ok(idx)
-            self.session_checks += 1
-            if result:
+            # Проверка username через updateUsername:
+            # Telegram кидает USERNAME_NOT_MODIFIED если юз свободен для установки.
+            try:
+                await client(functions.account.UpdateUsernameRequest(username=u))
+                # Если удалось установить — сразу откатываем обратно.
+                me = await client.get_me()
+                old_username = getattr(me, "username", None)
+
+                if old_username and old_username.lower() != u:
+                    try:
+                        await client(functions.account.UpdateUsernameRequest(username=old_username))
+                    except Exception:
+                        pass
+
+                self._ok(idx)
+                self.session_checks += 1
                 log_event("tme", f"✅ session #{idx}: @{u} → FREE", logging.DEBUG)
                 return "free"
-            else:
-                log_event("tme", f"❌ session #{idx}: @{u} → TAKEN", logging.DEBUG)
+
+            except errors.UsernameOccupiedError:
+                self._ok(idx)
+                return "taken"
+
+            except errors.UsernameInvalidError:
+                self._ok(idx)
+                return "taken"
+
+            except errors.UsernamePurchaseAvailableError:
+                self._ok(idx)
                 return "taken"
         except errors.FloodWaitError as e:
             self._err(idx, flood=True, secs=e.seconds)
-            return "skip"
-        except errors.UsernameInvalidError:
-            self._ok(idx)
-            return "taken"
-        except errors.UsernameOccupiedError:
-            self._ok(idx)
-            return "taken"
-        except errors.UsernamePurchaseAvailableError:
-            self._ok(idx)
-            return "taken"
-        except Exception as e:
+            return "skip"        except Exception as e:
             self._err(idx)
             log_event("bot", f"⚠️  session #{idx} @{u}: {e}", logging.WARNING)
             return "skip"
