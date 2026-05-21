@@ -652,7 +652,9 @@ class AccountPool:
                 return "taken"
         except errors.FloodWaitError as e:
             self._err(idx, flood=True, secs=e.seconds)
-            return "skip"        except Exception as e:
+            return "skip"
+
+        except Exception as e:
             self._err(idx)
             log_event("bot", f"⚠️  session #{idx} @{u}: {e}", logging.WARNING)
             return "skip"
