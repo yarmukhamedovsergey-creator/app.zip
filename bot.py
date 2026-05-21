@@ -1154,15 +1154,10 @@ def is_natural_username(u: str) -> bool:
             return False
 
     # начало должно быть читаемым
-    if u[:2] not in GOOD_STARTS:
-        return False
+    # relaxed readable filter
 
     # избегаем теневых invalid usernames
-    weird = ("q","x","j")
-    weird_count = sum(ch in weird for ch in u)
-
-    if weird_count >= 3:
-        return False
+# weird chars allowed
 
     return True
 
@@ -1454,21 +1449,20 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
         log_event("fragment", f"🚫 @{u} rejected by fragment: {fragment_status}")
         return False
 
-    # 4) Обязательная проверка через session.
+    # 4) Session-check используем только как дополнительную защиту.
+    # Frozen/limited sessions часто врут и режут реальные free usernames.
     if pool and pool.has_sessions():
-        session_status = await pool.check_username_via_session(u)
 
-        # taken = точно занят
-        if session_status == "taken":
-            log_event("tme", f"⚠️ session rejected @{u}: taken")
-            return False
+        # Проверяем только часть username чтобы не убивать сессии.
+        if random.randint(1, 100) <= 15:
+            session_status = await pool.check_username_via_session(u)
 
-        # free = подтверждённо свободен
-        if session_status == "free":
-            return True
+            # Только явный taken считаем проблемой.
+            if session_status == "taken":
+                log_event("tme", f"🛡 session caught taken @{u}")
+                return False
 
-        # skip/flood/frozen -> доверяем t.me + botapi
-        return True
+            # skip/frozen/invalid/free -> не блокируем username
 
     return True
 
