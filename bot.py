@@ -1429,9 +1429,19 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
     if not is_natural_username(u):
         return False
 
-    # 1) t.me — быстрый предварительный отсев занятых.
+    # t.me check
     tme_status = await check_username_tme(u)
+
     if tme_status != "free":
+        return False
+
+# delayed recheck против false-free
+    await asyncio.sleep(0.7)
+
+    tme_status2 = await check_username_tme(u)
+
+    if tme_status2 != "free":
+        log_event("tme", f"🛡 delayed recheck caught @{u}")
         return False
 
     # 2) Bot API — авторитетный ответ для разделения free/taken пользовательских юзов.
@@ -1451,19 +1461,21 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
 
     # 4) Session-check используем только как дополнительную защиту.
     # Frozen/limited sessions часто врут и режут реальные free usernames.
+# Session-check только как доп. защита
     if pool and pool.has_sessions():
 
-        # Проверяем только часть username чтобы не убивать сессии.
+    # Проверяем только часть username
+    # чтобы не убивать сессии.
         if random.randint(1, 100) <= 15:
+
             session_status = await pool.check_username_via_session(u)
 
-            # Только явный taken считаем проблемой.
+        # Только явный taken блокирует username
             if session_status == "taken":
                 log_event("tme", f"🛡 session caught taken @{u}")
                 return False
 
-            # skip/frozen/invalid/free -> не блокируем username
-
+# free/skip/frozen -> доверяем t.me + botapi
     return True
 
 
