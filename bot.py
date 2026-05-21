@@ -620,43 +620,37 @@ class AccountPool:
             return "skip"
 
         try:
-            # Проверка username через updateUsername:
-            # Telegram кидает USERNAME_NOT_MODIFIED если юз свободен для установки.
-            try:
-                await client(functions.account.UpdateUsernameRequest(username=u))
-                # Если удалось установить — сразу откатываем обратно.
-                me = await client.get_me()
-                old_username = getattr(me, "username", None)
+            # Безопасная проверка через CheckUsernameRequest.
+            # Не меняет username аккаунта и не убивает frozen sessions.
+            result = await client(functions.account.CheckUsernameRequest(username=u))
 
-                if old_username and old_username.lower() != u:
-                    try:
-                        await client(functions.account.UpdateUsernameRequest(username=old_username))
-                    except Exception:
-                        pass
+            self._ok(idx)
+            self.session_checks += 1
 
-                self._ok(idx)
-                self.session_checks += 1
-                log_event("tme", f"✅ session #{idx}: @{u} → FREE", logging.DEBUG)
+            if result:
                 return "free"
 
-            except errors.UsernameOccupiedError:
-                self._ok(idx)
-                return "taken"
+            return "taken"
 
-            except errors.UsernameInvalidError:
-                self._ok(idx)
-                return "taken"
+        except errors.UsernameOccupiedError:
+            self._ok(idx)
+            return "taken"
 
-            except errors.UsernamePurchaseAvailableError:
-                self._ok(idx)
-                return "taken"
+        except errors.UsernameInvalidError:
+            self._ok(idx)
+            return "taken"
+
+        except errors.UsernamePurchaseAvailableError:
+            self._ok(idx)
+            return "taken"
+
         except errors.FloodWaitError as e:
             self._err(idx, flood=True, secs=e.seconds)
             return "skip"
 
-        except Exception as e:
+        except Exception:
+            # frozen / limited / temporary errors
             self._err(idx)
-            # frozen/flood errors hidden
             return "skip"
 
     async def check(self, u, uid=None):
