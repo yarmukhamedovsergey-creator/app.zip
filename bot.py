@@ -1112,6 +1112,61 @@ def is_valid_telegram_profile_username(u: str) -> bool:
     return True
 
 
+
+GOOD_STARTS = (
+    "ka","ke","ki","ko","ku","la","le","li","lo","lu",
+    "na","ne","ni","no","ra","re","ri","ro","ta","te",
+    "va","ve","vi","vo","xa","xe","za","ze"
+)
+
+BAD_PARTS = (
+    "eh","yh","wu","yi","uu","yy","qq","wq","qw","zx",
+    "xz","vj","jq","qj","hh","sg","aeu","uou","ehu"
+)
+
+def is_natural_username(u: str) -> bool:
+    u = u.lower()
+
+    # только буквы
+    if not re.fullmatch(r"[a-z]{5,6}", u):
+        return False
+
+    # плохие сочетания
+    for b in BAD_PARTS:
+        if b in u:
+            return False
+
+    vowels = "aeiouy"
+
+    # не более 2 гласных/согласных подряд
+    v_run = 0
+    c_run = 0
+
+    for ch in u:
+        if ch in vowels:
+            v_run += 1
+            c_run = 0
+        else:
+            c_run += 1
+            v_run = 0
+
+        if v_run > 2 or c_run > 2:
+            return False
+
+    # начало должно быть читаемым
+    if u[:2] not in GOOD_STARTS:
+        return False
+
+    # избегаем теневых invalid usernames
+    weird = ("q","x","j")
+    weird_count = sum(ch in weird for ch in u)
+
+    if weird_count >= 3:
+        return False
+
+    return True
+
+
 def is_username_settable_in_profile(u: str) -> bool:
     """
     Строгая SYNC-проверка: можно ли в принципе ставить такой username в профиль.
@@ -1373,6 +1428,10 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
     """
     u = (u or "").strip().replace("@", "").lower()
     if not is_username_settable_in_profile(u):
+        return False
+
+    # Фильтр некорректных / shadowban username
+    if not is_natural_username(u):
         return False
 
     # 1) t.me — быстрый предварительный отсев занятых.
@@ -6275,6 +6334,10 @@ async def cache_warmer_check_username(u: str) -> bool:
     """
     u = (u or "").strip().replace("@", "").lower()
     if not is_username_settable_in_profile(u):
+        return False
+
+    # Фильтр некорректных / shadowban username
+    if not is_natural_username(u):
         return False
     return await is_username_truly_free(u)
 
