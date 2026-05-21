@@ -928,10 +928,21 @@ async def do_word_search(word, count, msg, uid):
 
             if await is_username_free(u, uid):
                 fragment_status = await check_fragment(u)
-            if fragment_status != "unavailable":
-                continue
-            found.append({"username": u, "fragment": fragment_status})
-                save_history(uid, u, f"По слову: {word}", len(u))
+
+                if fragment_status != "unavailable":
+                    continue
+
+                found.append({
+                    "username": u,
+                    "fragment": fragment_status
+                })
+
+                save_history(
+                    uid,
+                    u,
+                    f"По слову: {word}",
+                    len(u)
+                )
 
             await asyncio.sleep(0.3)
 
