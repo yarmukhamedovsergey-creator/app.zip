@@ -1,5 +1,5 @@
 """
-USERNAME HUNTER v25.3 — VIP + Тематический поиск + проверка через сессии
+USERNAME HUNTER v67 — VIP + Тематический поиск + проверка через сессии
 Проверка занятости (строгий многоисточниковый чекер):
   • формат + длина + INVALID_WORDS + blacklist;
   • GET https://t.me/<username> — нет tgme_page_title;
@@ -1598,8 +1598,14 @@ def evaluate_username(u):
     filled=min(score//20,10)
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
-async def do_search(query):
+async def do_search(query, *args, **kwargs):
+    """
+    Совместимая версия do_search.
+    Старый код вызывает do_search с 6 аргументами,
+    поэтому принимаем любые args/kwargs.
+    """
     session = get_search_session()
+
     if not session:
         return
 
@@ -1607,6 +1613,7 @@ async def do_search(query):
 
     for username in results:
         add_to_cache(username, "maybe")
+
 
 
 async def check_from_cache():
