@@ -5584,6 +5584,54 @@ def setup_systemd():
 
 # ═══════════════════════ MAIN ═══════════════════════
 
+
+
+
+def init_db():
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        uid INTEGER PRIMARY KEY,
+        uname TEXT DEFAULT '',
+        joined TEXT DEFAULT '',
+        free INTEGER DEFAULT 0,
+        searches INTEGER DEFAULT 0,
+        balance REAL DEFAULT 0
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid INTEGER,
+        username TEXT,
+        found_at TEXT,
+        mode TEXT
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS blacklist (
+        username TEXT PRIMARY KEY
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS action_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid INTEGER,
+        action TEXT,
+        details TEXT,
+        created TEXT
+    )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
 async def main():
     global http_session, bot_info, pool
     dp = Dispatcher()
