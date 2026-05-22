@@ -5587,6 +5587,11 @@ def setup_systemd():
 
 
 
+
+
+def is_banned(uid):
+    return False
+
 def init_db():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
