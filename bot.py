@@ -5592,6 +5592,86 @@ def setup_systemd():
 def is_banned(uid):
     return False
 
+
+
+def ensure_user(uid, uname=""):
+    conn = sqlite3.connect(DB)
+    c = conn.cursor()
+
+    c.execute(
+        "INSERT OR IGNORE INTO users (uid, uname, joined) VALUES (?, ?, ?)",
+        (
+            uid,
+            uname or "",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        )
+    )
+
+    conn.commit()
+    conn.close()
+
+
+
+# ===== SAFE FALLBACKS =====
+
+def is_banned(uid):
+    return False
+
+def ensure_user(uid, uname=""):
+    try:
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
+
+        c.execute("""
+        INSERT OR IGNORE INTO users (uid, uname, joined)
+        VALUES (?, ?, ?)
+        """, (
+            uid,
+            uname or "",
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ))
+
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+def setupsystemd():
+    return None
+
+def get_user(uid):
+    try:
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
+
+        c.execute("SELECT * FROM users WHERE uid=?", (uid,))
+        row = c.fetchone()
+
+        conn.close()
+        return row
+    except Exception:
+        return None
+
+def save_history(uid, username, mode="", length=5):
+    try:
+        conn = sqlite3.connect(DB)
+        c = conn.cursor()
+
+        c.execute("""
+        INSERT INTO history (uid, username, found_at, mode)
+        VALUES (?, ?, ?, ?)
+        """, (
+            uid,
+            username,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            mode
+        ))
+
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
 def init_db():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
