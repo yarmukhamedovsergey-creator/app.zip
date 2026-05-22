@@ -1389,126 +1389,87 @@ async def do_search(count, gen_func, msg, title, uid, mode):
 
     found = []
     checked = set()
-
     attempts = 0
-    max_attempts = 4000
+    max_attempts = 5000
 
     config = load_bot_config()
-
     strict_cache_enabled = config.get("strict_cache_enabled", False)
 
     # ===== КЭШ =====
     if strict_cache_enabled:
         try:
             cache_data = await load_cache()
-
             cached = cache_data.get(mode, [])
 
             while cached and len(found) < count:
                 username = cached.pop(0)
-
                 if not username:
                     continue
-
                 username = username.lower()
-
-                # БЕЗ ПОВТОРНОЙ ПРОВЕРКИ
-                found.append({
-                    "username": username,
-                    "fragment": "unavailable"
-                })
+                found.append({"username": username, "fragment": "unavailable"})
 
             cache_data[mode] = cached
             await save_cache(cache_data)
-
         except Exception as e:
             logger.error(f"[CACHE] {e}")
 
     # ===== ДОГЕНЕРАЦИЯ =====
     while len(found) < count and attempts < max_attempts:
-
         try:
             username = gen_func()
-
             if not username:
                 continue
-
             username = username.lower()
-
             if username in checked:
                 continue
-
             checked.add(username)
-
             attempts += 1
-
             if not is_valid_username(username):
                 continue
 
             # ===== TELEGRAM CHECK =====
             free = await is_username_free(username, uid)
-
             if not free:
                 continue
 
-            # ===== FRAGMENT =====
+            # ===== FRAGMENT CHECK =====
             fragment_status = await check_fragment(username)
-
             if fragment_status != "unavailable":
                 continue
 
-            found.append({
-                "username": username,
-                "fragment": fragment_status
-            })
+            found.append({"username": username, "fragment": fragment_status})
 
-            save_history(
-                uid,
-                username,
-                mode,
-                len(username)
-            )
+            save_history(uid, username, mode, len(username))
 
             # ===== ДОБАВЛЕНИЕ В КЭШ =====
             if strict_cache_enabled:
                 try:
                     cache_data = await load_cache()
-
                     if mode not in cache_data:
                         cache_data[mode] = []
-
                     if username not in cache_data[mode]:
                         cache_data[mode].append(username)
-
                     await save_cache(cache_data)
-
                 except Exception as e:
                     logger.error(f"[CACHE SAVE] {e}")
 
             # ===== ОБНОВЛЕНИЕ UI =====
             try:
                 await msg.edit_text(
-                    f"🔍 <b>{title}</b>\n\n"
-                    f"📊 Проверено: <code>{attempts}</code>\n"
-                    f"✅ Найдено: <code>{len(found)}/{count}</code>",
+                    f"🔍 <b>{title}</b>\n\n📊 Проверено: <code>{attempts}</code>\n✅ Найдено: <code>{len(found)}/{count}</code>",
                     parse_mode="HTML"
                 )
             except:
                 pass
 
             await asyncio.sleep(0.15)
-
         except Exception as e:
             logger.error(f"[SEARCH LOOP] {e}")
 
     elapsed = round(time.time() - start, 1)
-
-    stats = {
-        "attempts": attempts,
-        "elapsed": elapsed
-    }
-
+    stats = {"attempts": attempts, "elapsed": elapsed}
     return found, stats
+
 
 
 async def check_from_cache(*args, **kwargs):
