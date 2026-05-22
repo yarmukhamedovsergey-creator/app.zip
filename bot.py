@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections import deque
 import time
 
-CACHE_MAX = 50000
+CACHE_MAX_AGE = 1800  # 30 минут в секундах
 FRESH_TIMEOUT = 300
 BATCH_SIZE = 5
 
@@ -83,7 +83,7 @@ from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
 
 # BOT_TME_STRICT_CACHE_ACTIVE
-CACHE_FILE = "free_usernames_tme_strict.json"
+CACHE_FILE = 'free_usernames_tme_strict.json'
 cache_lock = asyncio.Lock()
 
 import aiohttp
@@ -1384,93 +1384,66 @@ def evaluate_username(u):
     filled=min(score//20,10)
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
-async def do_search(count, gen_func, msg, title, uid, mode):
-    start = time.time()
-    found = []
-    checked = set()
-    attempts = 0
-    max_attempts = 10000  # больше попыток для генерации
+async def do_search(count, gen_func, msg, title, uid, mode, session):
 
-    config = load_bot_config()
-    strict_cache_enabled = config.get("strict_cache_enabled", False)
+    # ===== Берём из кэша =====
+    while cached and len(found) < count:
+        user_entry = cached.pop(0)
+        username = user_entry['username']
+        found.append({'username': username, 'fragment':'unavailable'})
 
-    # ===== КЭШ =====
-    if strict_cache_enabled:
+    # ===== Догенерация =====
+    while len(found) < count and attempts < max_attempts:
+        username = gen_func()
+        if not username:
+            attempts += 1
+            continue
+
+        # Можно добавить префиксы/суффиксы
+        pre_suf_list = ['pro','x','yz','_','best','01','123']
+        username = (random.choice(pre_suf_list) + username).lower()
+
+        if username in checked:
+            attempts += 1
+            continue
+        checked.add(username)
+        attempts += 1
+
+        # ===== Telethon проверка =====
+        free = await session.is_username_free(username, uid)
+        if not free:
+            continue
+
+        # ===== Fragment проверка =====
+        fragment_status = await session.check_fragment(username)
+        if fragment_status != 'unavailable':
+            continue
+
+        # ===== Добавляем в результат и кэш =====
+        found.append({'username': username, 'fragment':'unavailable'})
+        cache_entry = {'username': username, 'ts': time.time()}
+        cache_data[mode].append(cache_entry)
+
+        # ===== Обновление UI =====
         try:
-            with open(f'free_usernames_tme_strict.json','r',encoding='utf-8') as f:
-                cache_data = json.load(f)
-        except:
-            cache_data = {}
-
-        cached = cache_data.get(mode, [])
-        while cached and len(found) < count:
-            username = cached.pop(0)
-            if not username:
-                continue
-            username = username.lower()
-            found.append({"username": username, "fragment": "unavailable"})
-
-        cache_data[mode] = cached
-        try:
-            with open(f'free_usernames_tme_strict.json','w',encoding='utf-8') as f:
-                json.dump(cache_data,f,ensure_ascii=False,indent=2)
+            await msg.edit_text(
+                f"🔍 <b>{title}</b>\n\n📊 Проверено: <code>{attempts}</code>\n✅ Найдено: <code>{len(found)}/{count}</code>",
+                parse_mode='HTML'
+            )
         except:
             pass
 
-    # ===== ДОГЕНЕРАЦИЯ =====
-    while len(found) < count and attempts < max_attempts:
-        try:
-            # Генерация через разные комбинации
-            u = gen_func()
-            # Добавляем префиксы/суффиксы и цифры
-            pre_suf_list = ['pro','x','yz','_','best','01','123']
-            c = random.choice(pre_suf_list) + u
-            username = c.lower()
+        await asyncio.sleep(0.1)
 
-            if username in checked or not username.isalpha():
-                attempts += 1
-                continue
-            checked.add(username)
-            attempts += 1
+    # Сохраняем кэш
+    try:
+        with open(CACHE_FILE,'w',encoding='utf-8') as f:
+            json.dump(cache_data,f,ensure_ascii=False,indent=2)
+    except Exception as e:
+        logging.error(f'[CACHE SAVE] {e}')
 
-            if not is_valid_username(username):
-                continue
-
-            free = await is_username_free(username, uid)
-            if not free:
-                continue
-
-            found.append({"username": username, "fragment": "unavailable"})
-            save_history(uid, username, mode, len(username))
-
-            # ===== ДОБАВЛЕНИЕ В КЭШ =====
-            if strict_cache_enabled:
-                try:
-                    cache_data = cache_data if 'cache_data' in locals() else {}
-                    if mode not in cache_data:
-                        cache_data[mode] = []
-                    if username not in cache_data[mode]:
-                        cache_data[mode].append(username)
-                    with open(f'free_usernames_tme_strict.json','w',encoding='utf-8') as f:
-                        json.dump(cache_data,f,ensure_ascii=False,indent=2)
-                except Exception as e:
-                    logging.error(f'[CACHE SAVE] {e}')
-
-            # ===== ОБНОВЛЕНИЕ UI =====
-            try:
-                await msg.edit_text(
-                    f"🔍 <b>{title}</b>\n\n📊 Проверено: <code>{attempts}</code>\n✅ Найдено: <code>{len(found)}/{count}</code>",
-                    parse_mode="HTML"
-                )
-            except:
-                pass
-
-            await asyncio.sleep(0.1)
-        except Exception as e:
-            logging.error(f"[SEARCH LOOP] {e}")
-
-    elapsed = round(time.time() - start, 1)
-    stats = {"attempts": attempts, "elapsed": elapsed}
+    elapsed = round(time.time() - start,1)
+    stats = {'attempts': attempts, 'elapsed': elapsed}
     return found, stats
 
 
