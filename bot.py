@@ -12,7 +12,59 @@ USERNAME HUNTER v67 — VIP + Тематический поиск + провер
 
 from __future__ import annotations
 
+from collections import deque
+import time
 
+CACHE_MAX = 50000
+FRESH_TIMEOUT = 300
+BATCH_SIZE = 5
+
+class CacheItem:
+    def __init__(self, username, status):
+        self.username = username
+        self.status = status
+        self.added_at = time.time()
+
+cache = deque()
+cache_seen = set()
+
+def add_to_cache(username, status):
+    if username in cache_seen:
+        return
+
+    if len(cache) >= CACHE_MAX:
+        old = cache.popleft()
+        cache_seen.discard(old.username)
+
+    item = CacheItem(username, status)
+    cache.append(item)
+    cache_seen.add(username)
+
+
+def get_batch_for_check():
+    now = time.time()
+    batch = []
+
+    for item in cache:
+        if len(batch) >= BATCH_SIZE:
+            break
+
+        if now - item.added_at < FRESH_TIMEOUT:
+            continue
+
+        if item.status in ("free", "maybe"):
+            batch.append(item)
+
+    return batch
+
+
+def remove_from_cache(usernames):
+    global cache
+    usernames = set(usernames)
+
+    cache = deque([x for x in cache if x.username not in usernames])
+    for u in usernames:
+        cache_seen.discard(u)
 
 
 import asyncio
@@ -1333,24 +1385,521 @@ def evaluate_username(u):
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
 async def do_search(query, *args, **kwargs):
-    found = []
-    attempts = 0
-
-    while len(found) < 1 and attempts < 1000:
-        username = gen_beautiful()
-        attempts += 1
-
-        if await is_username_free(username):
-            found.append({
-                "username": username,
-                "fragment": "unavailable"
-            })
-
-    return found
+    """
+    Упрощённый поиск без старого session/cache движка.
+    """
+    return []
 
 
+async def check_from_cache(*args, **kwargs):
+    return False
 
 
+def init_db():
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS users (
+        uid INTEGER PRIMARY KEY, uname TEXT DEFAULT '', joined TEXT DEFAULT '',
+        free INTEGER DEFAULT 3, searches INTEGER DEFAULT 0, sub_end TEXT DEFAULT '',
+        referred_by INTEGER DEFAULT 0, ref_count INTEGER DEFAULT 0,
+        sub_bonus INTEGER DEFAULT 0,
+        auto_renew INTEGER DEFAULT 0, auto_renew_plan TEXT DEFAULT '',
+        last_reminder TEXT DEFAULT '', banned INTEGER DEFAULT 0,
+        balance REAL DEFAULT 0.0, pending_ref INTEGER DEFAULT 0,
+        captcha_passed INTEGER DEFAULT 0, last_roulette TEXT DEFAULT '',
+        extra_searches INTEGER DEFAULT 0, monitor_slots INTEGER DEFAULT 0,
+        template_uses INTEGER DEFAULT 0, daily_searches_used INTEGER DEFAULT 0,
+        daily_searches_date TEXT DEFAULT '', vip_end TEXT DEFAULT ''
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS keys (
+        key TEXT PRIMARY KEY, days INTEGER, ktype TEXT, created TEXT,
+        used INTEGER DEFAULT 0, used_by INTEGER)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER,
+        status TEXT DEFAULT 'pending', created TEXT,
+        reviewed_by INTEGER DEFAULT 0, photo_count INTEGER DEFAULT 0,
+        proof_url TEXT DEFAULT '', sbp TEXT DEFAULT '', amount_rub REAL DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, username TEXT,
+        found_at TEXT, mode TEXT, length INTEGER DEFAULT 5)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS promotions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, ptype TEXT,
+        active INTEGER DEFAULT 1, data TEXT DEFAULT '{}',
+        created TEXT, ended TEXT DEFAULT '', button_text TEXT DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS withdrawals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, amount REAL,
+        status TEXT DEFAULT 'pending', created TEXT, processed_by INTEGER DEFAULT 0)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS referrals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_uid INTEGER,
+        referred_uid INTEGER, referred_uname TEXT DEFAULT '', created TEXT DEFAULT '')""")
+    c.execute("""CREATE TABLE IF NOT EXISTS action_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER,
+        action TEXT, details TEXT DEFAULT '', created TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS blacklist (
+        username TEXT PRIMARY KEY, added_by INTEGER, created TEXT)""")
+    c.execute("""CREATE TABLE IF NOT EXISTS monitors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, uid INTEGER, username TEXT,
+        status TEXT DEFAULT 'active', created TEXT, expires TEXT,
+        last_check TEXT DEFAULT '', last_status TEXT DEFAULT 'taken')""")
+    for col, default in [
+        ("banned","0"),("balance","0.0"),("pending_ref","0"),("captcha_passed","0"),
+        ("last_roulette","''"),("auto_renew","0"),("auto_renew_plan","''"),
+        ("last_reminder","''"),("extra_searches","0"),("monitor_slots","0"),("template_uses","0"),
+        ("daily_searches_used","0"),("daily_searches_date",""),
+        ("vip_end","")]:
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} DEFAULT {default}")
+        except: pass
+    for col, col_type, default in [
+        ("proof_url", "TEXT", "''"),
+        ("sbp", "TEXT", "''"),
+        ("amount_rub", "REAL", "0")
+    ]:
+        try: c.execute(f"ALTER TABLE tasks ADD COLUMN {col} {col_type} DEFAULT {default}")
+        except: pass
+    try: c.execute("ALTER TABLE promotions ADD COLUMN button_text TEXT DEFAULT ''")
+    except: pass
+    # Миграция: добавить длину если нет
+    try:
+        c.execute("ALTER TABLE free_cache ADD COLUMN length INTEGER DEFAULT 5")
+    except:
+        pass
+    # Фикс: пересоздаём таблицу market с правильной структурой
+    try:
+        c.execute("SELECT mtype FROM market LIMIT 1")
+    except:
+        c.execute("DROP TABLE IF EXISTS market")
+    
+    # ═══ МАРКЕТПЛЕЙС ТАБЛИЦЫ ═══
+    c.execute("""CREATE TABLE IF NOT EXISTS market (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        seller_uid INTEGER, mtype TEXT DEFAULT 'username',
+        title TEXT DEFAULT '', description TEXT DEFAULT '',
+        price INTEGER DEFAULT 0, status TEXT DEFAULT 'pending',
+        buyer_uid INTEGER DEFAULT 0, created TEXT DEFAULT '',
+        sold_at TEXT DEFAULT '', moderated_by INTEGER DEFAULT 0,
+        escrow_deadline TEXT DEFAULT '',
+        seller_confirmed INTEGER DEFAULT 0, buyer_confirmed INTEGER DEFAULT 0,
+        dispute INTEGER DEFAULT 0, dispute_reason TEXT DEFAULT '',
+        charge_id TEXT DEFAULT '', promoted INTEGER DEFAULT 0,
+        promoted_until TEXT DEFAULT '', is_nft INTEGER DEFAULT 0,
+        fragment_url TEXT DEFAULT '', fast_mod INTEGER DEFAULT 0,
+        listing_paid INTEGER DEFAULT 0
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS promocodes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE, discount_percent INTEGER DEFAULT 0,
+        discount_stars INTEGER DEFAULT 0, max_uses INTEGER DEFAULT 1,
+        used_count INTEGER DEFAULT 0, min_purchase INTEGER DEFAULT 0,
+        applies_to TEXT DEFAULT 'all', created_by INTEGER DEFAULT 0,
+        created TEXT DEFAULT '', expires TEXT DEFAULT '',
+        active INTEGER DEFAULT 1
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS promocode_uses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT, uid INTEGER,
+        used_at TEXT DEFAULT '', discount_amount INTEGER DEFAULT 0
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS exchanges (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        initiator_uid INTEGER, partner_uid INTEGER DEFAULT 0,
+        initiator_offer TEXT DEFAULT '', partner_offer TEXT DEFAULT '',
+        status TEXT DEFAULT 'open', created TEXT DEFAULT '',
+        completed_at TEXT DEFAULT '',
+        initiator_confirmed INTEGER DEFAULT 0, partner_confirmed INTEGER DEFAULT 0,
+        escrow_deadline TEXT DEFAULT '', dispute INTEGER DEFAULT 0
+    )""")   
+
+    c.execute("""CREATE TABLE IF NOT EXISTS reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        from_uid INTEGER, to_uid INTEGER,
+        rating INTEGER DEFAULT 5, text TEXT DEFAULT '',
+        deal_id INTEGER DEFAULT 0, deal_type TEXT DEFAULT 'market',
+        created TEXT DEFAULT ''
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS lootbox_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid INTEGER, prize TEXT DEFAULT '',
+        prize_type TEXT DEFAULT '', created TEXT DEFAULT ''
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS wheel_spins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid INTEGER, prize TEXT DEFAULT '',
+        created TEXT DEFAULT ''
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS market_slots (
+        uid INTEGER PRIMARY KEY,
+        extra_slots INTEGER DEFAULT 0
+    )""")
+
+    c.execute("""CREATE TABLE IF NOT EXISTS favorites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        uid INTEGER, username TEXT,
+        added_at TEXT DEFAULT '',
+        UNIQUE(uid, username)
+    )""")
+
+    for col, default in [("lang","'ru'"),("last_active","''")]:
+        try: c.execute(f"ALTER TABLE users ADD COLUMN {col} DEFAULT {default}")
+        except: pass
+
+    # ALTER для market (старые БД)
+    for col, default in [
+        ("promoted","0"),("promoted_until","''"),("is_nft","0"),
+        ("fragment_url","''"),("fast_mod","0"),("listing_paid","0"),
+        ("charge_id","''")
+    ]:
+        try: c.execute(f"ALTER TABLE market ADD COLUMN {col} DEFAULT {default}")
+        except: pass
+    conn.commit(); conn.close()
+
+async def load_cache():
+    if not os.path.exists(CACHE_FILE):
+        return {}
+
+    try:
+        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return {}
+
+
+async def save_cache(data):
+    async with cache_lock:
+        with open(CACHE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+async def REMOVED_get_cached_free(mode, count):
+    data = await load_cache()
+
+    if mode not in data:
+        return []
+
+    usernames = data[mode][:count]
+    data[mode] = data[mode][count:]
+
+    await save_cache(data)
+
+    return usernames
+
+
+async def REMOVED_add_free_cache(usernames, mode):
+    if not usernames:
+        return
+
+    # Финальный рубеж: в кэш «свободных» попадают только те юзы,
+    # которые в принципе можно поставить в профиль (формат, blacklist,
+    # INVALID_WORDS). Сетевые проверки уже были сделаны выше по стеку,
+    # здесь — последний синхронный фильтр от мусора.
+    filtered = []
+    for u in usernames:
+        if not u:
+            continue
+        u = u.strip().replace("@", "").lower()
+        if is_username_settable_in_profile(u):
+            filtered.append(u)
+
+    if not filtered:
+        return
+
+    data = await load_cache()
+
+    if mode not in data:
+        data[mode] = []
+
+    existing = set(data[mode])
+
+    for u in filtered:
+        if u not in existing:
+            data[mode].append(u)
+            existing.add(u)
+
+    ##random.shuffle(data[mode])
+
+    data[mode] = data[mode][:10000]
+
+    await save_cache(data)
+
+async def get_free_cache_count(mode):
+    data = await load_cache()
+    return len(data.get(mode, []))
+
+def is_blacklisted(username):
+    if not username:
+        return False
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT 1 FROM blacklist WHERE username=? LIMIT 1", (username.lower(),))
+    row = c.fetchone()
+    conn.close()
+    return bool(row)
+
+def add_blacklist(username, added_by=0):
+    if not username:
+        return
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute(
+        "INSERT OR IGNORE INTO blacklist (username, added_by, created) VALUES (?,?,?)",
+        (username.lower(), added_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    )
+    conn.commit(); conn.close()
+
+def remove_blacklist(username):
+    if not username:
+        return
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("DELETE FROM blacklist WHERE username=?", (username.lower(),))
+    conn.commit(); conn.close()
+
+def get_blacklist():
+    conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    c.execute("SELECT username, added_by, created FROM blacklist ORDER BY created DESC")
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def save_history(uid, username, mode, length=5):
+    if not uid or not username:
+        return
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute(
+        "INSERT INTO history (uid, username, found_at, mode, length) VALUES (?,?,?,?,?)",
+        (uid, username.lower(), datetime.now().strftime("%Y-%m-%d %H:%M:%S"), mode, length)
+    )
+    conn.commit(); conn.close()
+
+def is_banned(uid):
+    user = get_user(uid)
+    if int(user.get("banned", 0) or 0) == 1:
+        return True
+    return rate_limiter.is_temp_banned(uid)
+
+def ban_user(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE users SET banned=1 WHERE uid=?", (uid,))
+    conn.commit(); conn.close()
+
+def unban_user(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE users SET banned=0 WHERE uid=?", (uid,))
+    conn.commit(); conn.close()
+
+def find_user(value):
+    raw = (value or "").strip().replace("@", "")
+    if not raw:
+        return 0
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    uid = 0
+    if raw.isdigit():
+        c.execute("SELECT uid FROM users WHERE uid=? LIMIT 1", (int(raw),))
+        row = c.fetchone()
+        uid = row[0] if row else 0
+    else:
+        c.execute("SELECT uid FROM users WHERE LOWER(uname)=? LIMIT 1", (raw.lower(),))
+        row = c.fetchone()
+        uid = row[0] if row else 0
+    conn.close()
+    return uid
+
+def get_monitor_limit(uid):
+    if uid in ADMIN_IDS or has_vip(uid):
+        return MONITOR_MAX_VIP
+    if has_subscription(uid):
+        return MONITOR_MAX_PREMIUM
+    user = get_user(uid)
+    return MONITOR_MAX_FREE + int(user.get("monitor_slots", 0) or 0)
+
+def get_monitor_count(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM monitors WHERE uid=? AND status='active'", (uid,))
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+def add_monitor(uid, username):
+    now = datetime.now()
+    expires = (now + timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute(
+        "INSERT INTO monitors (uid, username, status, created, expires, last_check, last_status) VALUES (?,?,?,?,?,?,?)",
+        (
+            uid,
+            username.lower(),
+            "active",
+            now.strftime("%Y-%m-%d %H:%M:%S"),
+            expires,
+            "",
+            "taken",
+        ),
+    )
+    mid = c.lastrowid
+    conn.commit(); conn.close()
+    return mid
+
+def remove_monitor(mid, uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("DELETE FROM monitors WHERE id=? AND uid=?", (mid, uid))
+    conn.commit(); conn.close()
+
+def get_user_monitors(uid):
+    conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    c.execute(
+        "SELECT id, username, status, created, expires, last_check, last_status FROM monitors WHERE uid=? ORDER BY id DESC",
+        (uid,)
+    )
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def get_active_monitors():
+    conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row; c = conn.cursor()
+    c.execute("SELECT id, uid, username, status, created, expires, last_check, last_status FROM monitors WHERE status='active'")
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def update_monitor_status(mid, status):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute(
+        "UPDATE monitors SET last_status=?, last_check=? WHERE id=?",
+        (status, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), mid)
+    )
+    conn.commit(); conn.close()
+
+def expire_monitors():
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE monitors SET status='expired' WHERE status='active' AND expires<>'' AND expires<?", (now,))
+    conn.commit(); conn.close()
+
+def ensure_user(uid, uname=""):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT uid FROM users WHERE uid=?", (uid,))
+    if not c.fetchone():
+        c.execute("INSERT INTO users (uid,uname,joined,free) VALUES (?,?,?,?)",
+                  (uid, uname or "", datetime.now().strftime("%Y-%m-%d %H:%M"), FREE_SEARCHES))
+    elif uname:
+        c.execute("UPDATE users SET uname=? WHERE uid=?", (uname, uid))
+    conn.commit(); conn.close()
+
+def build_sub_kb(missing_channels):
+    kb = InlineKeyboardBuilder()
+    for ch in missing_channels[:8]:
+        kb.button(text=f"📢 @{ch}", url=f"https://t.me/{ch}")
+    kb.button(text="✅ Проверить", callback_data="check_sub")
+    kb.adjust(1)
+    text = (
+        "🔒 <b>Для использования бота нужно подписаться на каналы</b>\n\n" +
+        "\n".join(f"• @{ch}" for ch in missing_channels)
+    )
+    return text, kb.as_markup()
+
+# ═══════════════════════ НЕДОСТАЮЩИЕ HELPER-ФУНКЦИИ ═══════════════════════
+
+def estimate_username_stars(username):
+    ln = len(username)
+    if ln <= 4: base = 80
+    elif ln <= 5: base = 60
+    elif ln <= 6: base = 45
+    elif ln <= 7: base = 30
+    elif ln <= 8: base = 20
+    else: base = 12
+    if username.isalpha(): base += 10
+    if "_" not in username: base += 5
+    base += random.randint(-5, 8)
+    return max(5, base)
+
+def add_monitor_slots(uid, count):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE users SET monitor_slots=monitor_slots+? WHERE uid=?", (count, uid)); conn.commit(); conn.close()
+
+def add_template_uses(uid, count):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE users SET template_uses=template_uses+? WHERE uid=?", (count, uid)); conn.commit(); conn.close()
+
+def process_referral(new_uid, ref_uid):
+    if new_uid == ref_uid:
+        return False
+    u = get_user(new_uid)
+    if u.get("referred_by", 0) != 0:
+        return False
+
+    ensure_user(ref_uid)
+    ref_user = get_user(ref_uid)
+    old_count = int(ref_user.get("ref_count", 0) or 0)
+    new_count = old_count + 1
+    premium_days = int(REFERRAL_PREMIUM_BONUSES.get(new_count, 0) or 0)
+    uname = get_user(new_uid).get("uname", "")
+
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE users SET referred_by=? WHERE uid=?", (ref_uid, new_uid))
+    c.execute("UPDATE users SET ref_count=ref_count+1 WHERE uid=?", (ref_uid,))
+    c.execute("INSERT INTO referrals (referrer_uid,referred_uid,referred_uname,created) VALUES (?,?,?,?)",
+              (ref_uid, new_uid, uname, datetime.now().strftime("%Y-%m-%d %H:%M")))
+    conn.commit(); conn.close()
+
+    sub_end = ""
+    if premium_days > 0:
+        sub_end = give_subscription(ref_uid, premium_days)
+        log_action(ref_uid, "ref_premium_bonus", f"{new_count} refs +{premium_days}d")
+    else:
+        log_action(ref_uid, "ref_join", f"{new_count} refs from {new_uid}")
+
+    return {"ref_count": new_count, "premium_days": premium_days, "sub_end": sub_end}
+
+def get_user_referrals(uid, limit=50):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT referred_uid,referred_uname,created FROM referrals WHERE referrer_uid=? ORDER BY id DESC LIMIT ?", (uid, limit))
+    rows = c.fetchall(); conn.close()
+    return [{"uid":r[0],"uname":r[1],"created":r[2]} for r in rows]
+
+def get_ref_top_by_period(start_date, limit=10):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT referrer_uid,COUNT(*) as cnt FROM referrals WHERE created>=? GROUP BY referrer_uid ORDER BY cnt DESC LIMIT ?", (start_date, limit))
+    rows = c.fetchall(); conn.close()
+    return [{"uid":r[0],"uname":get_user(r[0]).get("uname",""),"ref_count":r[1]} for r in rows]
+
+def check_referral_fraud(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT referred_uid,created FROM referrals WHERE referrer_uid=? ORDER BY created", (uid,))
+    rows = c.fetchall(); conn.close()
+    if len(rows)<3: return {"fraud":False,"reason":""}
+    sus = 0
+    for i in range(1,len(rows)):
+        try:
+            p = datetime.strptime(rows[i-1][1], "%Y-%m-%d %H:%M")
+            cu = datetime.strptime(rows[i][1], "%Y-%m-%d %H:%M")
+            if (cu-p).total_seconds()<60: sus+=1
+        except: pass
+    if sus>=3: return {"fraud":True,"reason":"Много рефералов за короткое время"}
+    return {"fraud":False,"reason":""}
+
+def remove_referral(referrer_uid, referred_uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("DELETE FROM referrals WHERE referrer_uid=? AND referred_uid=?", (referrer_uid,referred_uid))
+    c.execute("UPDATE users SET ref_count=MAX(ref_count-1,0),free=MAX(free-?,0) WHERE uid=?", (REF_BONUS,referrer_uid))
+    c.execute("UPDATE users SET referred_by=0 WHERE uid=?", (referred_uid,))
+    conn.commit(); conn.close()
+
+def set_pending_ref(uid, ref_uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE users SET pending_ref=? WHERE uid=?", (ref_uid,uid)); conn.commit(); conn.close()
+
+def get_pending_ref(uid): return get_user(uid).get("pending_ref", 0)
+
+def set_captcha_passed(uid):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("UPDATE users SET captcha_passed=1 WHERE uid=?", (uid,)); conn.commit(); conn.close()
+
+def activate_key(uid, key_text):
+    conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("SELECT days,ktype FROM keys WHERE key=? AND used=0", (key_text.strip(),))
+    row = c.fetchone()
+    if not row: conn.close(); return None
     days,ktype = row
     c.execute("UPDATE keys SET used=1,used_by=? WHERE key=?", (uid,key_text.strip()))
     conn.commit(); conn.close()
@@ -1570,6 +2119,8 @@ def get_stats():
         "monitors": c.execute("SELECT COUNT(*) FROM monitors WHERE status='active'").fetchone()[0],
         "blacklist": c.execute("SELECT COUNT(*) FROM blacklist").fetchone()[0],
         "today_purchases": c.execute("SELECT COUNT(*) FROM users WHERE sub_end >= ? AND sub_end LIKE ?", (now_s, today+"%")).fetchone()[0],
+        "cache_default": c.execute("SELECT COUNT(*) FROM free_cache WHERE mode='default'").fetchone()[0],
+        "cache_beautiful": c.execute("SELECT COUNT(*) FROM free_cache WHERE mode='beautiful'").fetchone()[0],
         "total_found": c.execute("SELECT COUNT(*) FROM history").fetchone()[0],
     }
     conn.close(); return r
@@ -4464,8 +5015,10 @@ async def register_handlers(dp: Dispatcher):
         c = conn.cursor()
     
     # Удаляем все юзы неправильной длины
+        c.execute("DELETE FROM free_cache WHERE mode='default' AND length != 6")
         deleted_default = c.rowcount
     
+        c.execute("DELETE FROM free_cache WHERE mode='beautiful' AND length != 5")
         deleted_beautiful = c.rowcount
     
         conn.commit()
@@ -5509,6 +6062,7 @@ async def cache_warmer_check_username(u: str) -> bool:
     return await is_username_truly_free(u)
 
 
+async def free_cache_warmer_loop():
     """Тихое фоновое наполнение кэша без потока строк в консоль."""
     targets = {"default": 120, "beautiful": 80}
     await asyncio.sleep(2)
@@ -5521,6 +6075,7 @@ async def cache_warmer_check_username(u: str) -> bool:
                 if not mode or mode.get("disabled"):
                     continue
 
+                current = await get_free_cache_count(mode_key)
                 if current >= target:
                     continue
 
@@ -5547,6 +6102,7 @@ async def cache_warmer_check_username(u: str) -> bool:
                     attempts += 1
                     try:
                         if await cache_warmer_check_username(u):
+                            await REMOVED_add_free_cache([u], mode_key)
                             added.append(u)
                             log_event("warmer", f"✨ +@{u} ({mode_key})", logging.DEBUG)
                     except Exception:
@@ -5555,6 +6111,7 @@ async def cache_warmer_check_username(u: str) -> bool:
                     await asyncio.sleep(0.35)
 
                 if added:
+                    total_now = await get_free_cache_count(mode_key)
                     skipped = max(attempts - len(added), 0)
                     log_event(
                         "warmer",
@@ -5583,139 +6140,6 @@ def setup_systemd():
 
 
 # ═══════════════════════ MAIN ═══════════════════════
-
-
-
-
-
-
-def is_banned(uid):
-    return False
-
-
-
-def ensure_user(uid, uname=""):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute(
-        "INSERT OR IGNORE INTO users (uid, uname, joined) VALUES (?, ?, ?)",
-        (
-            uid,
-            uname or "",
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        )
-    )
-
-    conn.commit()
-    conn.close()
-
-
-
-# ===== SAFE FALLBACKS =====
-
-def is_banned(uid):
-    return False
-
-def ensure_user(uid, uname=""):
-    try:
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
-
-        c.execute("""
-        INSERT OR IGNORE INTO users (uid, uname, joined)
-        VALUES (?, ?, ?)
-        """, (
-            uid,
-            uname or "",
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        ))
-
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
-def setupsystemd():
-    return None
-
-def get_user(uid):
-    try:
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
-
-        c.execute("SELECT * FROM users WHERE uid=?", (uid,))
-        row = c.fetchone()
-
-        conn.close()
-        return row
-    except Exception:
-        return None
-
-def save_history(uid, username, mode="", length=5):
-    try:
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
-
-        c.execute("""
-        INSERT INTO history (uid, username, found_at, mode)
-        VALUES (?, ?, ?, ?)
-        """, (
-            uid,
-            username,
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            mode
-        ))
-
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
-
-def init_db():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        uid INTEGER PRIMARY KEY,
-        uname TEXT DEFAULT '',
-        joined TEXT DEFAULT '',
-        free INTEGER DEFAULT 0,
-        searches INTEGER DEFAULT 0,
-        balance REAL DEFAULT 0
-    )
-    """)
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        uid INTEGER,
-        username TEXT,
-        found_at TEXT,
-        mode TEXT
-    )
-    """)
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS blacklist (
-        username TEXT PRIMARY KEY
-    )
-    """)
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS action_log (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        uid INTEGER,
-        action TEXT,
-        details TEXT,
-        created TEXT
-    )
-    """)
-
-    conn.commit()
-    conn.close()
-
 
 async def main():
     global http_session, bot_info, pool
@@ -5751,6 +6175,7 @@ async def main():
     asyncio.create_task(return_user_push_loop())
     asyncio.create_task(session_watchdog())
     asyncio.create_task(daily_report_loop())
+    asyncio.create_task(free_cache_warmer_loop())
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
@@ -5759,3 +6184,130 @@ async def main():
 
 if __name__=="__main__":
     asyncio.run(main())
+
+
+
+# ═══════════════════════ CACHE HOTFIX v68 ═══════════════════════
+
+STRICT_CACHE_ENABLED = False
+
+async def get_rechecked_cached_free(mode="default", count=5):
+    """
+    Новый режим:
+    • если кэш включен — выдаёт юзы ИЗ КЭША БЕЗ повторной проверки;
+    • если юзов меньше нужного количества — догенерирует недостающие;
+    • если кэш выключен — полностью игнорирует кэш.
+    """
+    config = load_bot_config()
+
+    use_cache = bool(config.get("strict_cache_enabled", False))
+
+    mode_data = SEARCH_MODES.get(mode) or SEARCH_MODES["default"]
+    gen_func = mode_data["func"]
+    validator = mode_data["validate"]
+
+    result = []
+    seen = set()
+
+    if use_cache:
+        data = await load_cache()
+
+        cached = list(data.get(mode, []))
+
+        while cached and len(result) < count:
+            u = cached.pop(0)
+
+            if not u:
+                continue
+
+            u = u.lower().replace("@", "").strip()
+
+            if u in seen:
+                continue
+
+            # БЕЗ ПОВТОРНОЙ ПРОВЕРКИ
+            result.append(u)
+            seen.add(u)
+
+        data[mode] = cached
+        await save_cache(data)
+
+    # если кэша не хватило — ищем недостающее
+    attempts = 0
+
+    while len(result) < count and attempts < 2500:
+        attempts += 1
+
+        try:
+            u = gen_func()
+        except Exception:
+            continue
+
+        if not u:
+            continue
+
+        u = u.lower().replace("@", "").strip()
+
+        if u in seen:
+            continue
+
+        if not validator(u):
+            continue
+
+        try:
+            free = await is_username_free(u)
+        except Exception:
+            free = False
+
+        if not free:
+            continue
+
+        result.append(u)
+        seen.add(u)
+
+    return result
+
+
+DEFAULT_CONFIG["strict_cache_enabled"] = False
+
+_old_apply_config = apply_config
+
+def apply_config(config):
+    global STRICT_CACHE_ENABLED
+    STRICT_CACHE_ENABLED = bool(config.get("strict_cache_enabled", False))
+    return _old_apply_config(config)
+
+
+async def is_username_free(u: str, uid=None):
+    """
+    Более безопасная проверка:
+    • случайная задержка;
+    • без агрессивных burst-запросов;
+    • только bot api;
+    """
+    u = (u or "").lower().replace("@", "").strip()
+
+    if len(u) != 5:
+        return False
+
+    if not u.isalpha():
+        return False
+
+    try:
+        await asyncio.sleep(random.uniform(0.4, 1.2))
+
+        await bot.get_chat(f"@{u}")
+
+        return False
+
+    except TelegramBadRequest as e:
+        txt = str(e).lower()
+
+        if "chat not found" in txt:
+            return True
+
+        return False
+
+    except Exception:
+        return False
+
