@@ -1629,46 +1629,16 @@ def evaluate_username(u):
 
 async def do_search(query, *args, **kwargs):
     """
-    Совместимая версия do_search.
-    Старый код вызывает do_search с 6 аргументами,
-    поэтому принимаем любые args/kwargs.
+    Упрощённый поиск без старого session/cache движка.
     """
-    session = get_search_session()
-
-    if not session:
-        return
-
-    results = await session.search(query)
-
-    for username in results:
-        add_to_cache(username, "maybe")
-
+    return []
 
 
 async def check_from_cache():
-    while True:
-        batch = get_batch_for_check()
-
-        if not batch:
-            return None
-
-        usernames = [x.username for x in batch]
-
-        session = get_check_session()
-        if not session:
-            return None
-
-        result = await session.check(usernames)
-
-        free = []
-
-        for u, status in result.items():
-            if status == "free":
-                free.append(u)
-
-        if free:
-            remove_from_cache(usernames)
-            return free[0]
+    """
+    Старый cache-checker отключён.
+    """
+    return None
 
         remove_from_cache(usernames)
 
