@@ -1640,8 +1640,6 @@ async def check_from_cache():
     """
     return None
 
-        remove_from_cache(usernames)
-
 
 # ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
 
