@@ -1,5 +1,5 @@
 """
-USERNAME HUNTER v68 — VIP + Тематический поиск + проверка через сессии
+USERNAME HUNTER v67 — VIP + Тематический поиск + проверка через сессии
 Проверка занятости (строгий многоисточниковый чекер):
   • формат + длина + INVALID_WORDS + blacklist;
   • GET https://t.me/<username> — нет tgme_page_title;
@@ -117,25 +117,6 @@ ADMIN_CONTACT = "emeuw"
 # session_name — имя файла .session в папке sessions/
 # Можно добавлять через админ-панель
 ACCOUNTS = []  # заполняется через админку или вручную
-
-
-search_sessions = []
-check_sessions = []
-
-def get_search_session():
-    if not search_sessions:
-        return None
-    s = search_sessions.pop(0)
-    search_sessions.append(s)
-    return s
-
-
-def get_check_session():
-    if not check_sessions:
-        return None
-    s = check_sessions.pop(0)
-    check_sessions.append(s)
-    return s
 SESSIONS_DIR = "sessions"
 
 
@@ -852,14 +833,26 @@ def gen_dictionary():
     return random.choice(words).lower()
 
 def gen_beautiful():
-    """Красивые паттерны, 5 букв"""
+    consonants = "bcdfghklmnprst"
+    vowels = "aeiou"
+
     patterns = [
-        lambda: random.choice(_V)+random.choice(_C)+random.choice(_V)+random.choice(_C)+random.choice(_V),
-        lambda: random.choice(_C)+random.choice(_V)+random.choice(_C)+random.choice(_C)+random.choice(_V),
-        lambda: random.choice(_C)+random.choice(_V)+random.choice(_V)+random.choice(_C)+random.choice(_C),
-        lambda: random.choice(_V)+random.choice(_C)+random.choice(_V)+random.choice(_V)+random.choice(_C),
+        "cvcvc",
+        "cvccv",
+        "ccvcv",
     ]
-    return random.choice(patterns)()
+
+    pattern = random.choice(patterns)
+
+    result = ""
+
+    for ch in pattern:
+        if ch == "c":
+            result += random.choice(consonants)
+        else:
+            result += random.choice(vowels)
+
+    return result
 
 _pattern_template = ""
 def gen_pattern():
@@ -1025,7 +1018,7 @@ async def do_word_search(word, count, msg, uid):
                     len(u)
                 )
 
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.05)
 
             now = time.time()
             if now - last_update > 2.5:
@@ -1553,12 +1546,29 @@ async def is_username_truly_free(u: str, uid=None) -> bool:
     return True
 
 
-async def is_username_free(u: str, uid=None) -> bool:
-    """
-    Обратная совместимость: True только когда username действительно можно
-    поставить в профиль (строгая проверка, см. ``is_username_truly_free``).
-    """
-    return await is_username_truly_free(u, uid)
+async def is_username_free(u: str, uid=None):
+    u = u.lower().replace("@", "").strip()
+
+    if len(u) != 5:
+        return False
+
+    if not u.isalpha():
+        return False
+
+    try:
+        await bot.get_chat(f"@{u}")
+        return False
+
+    except TelegramBadRequest as e:
+        text = str(e).lower()
+
+        if "chat not found" in text:
+            return True
+
+        return False
+
+    except:
+        return False
 
 
 async def get_rechecked_cached_free(mode, count):
@@ -4410,7 +4420,7 @@ async def register_handlers(dp: Dispatcher):
             for e in ["🎡","🔄","💫","🌟","✨","🎯"]:
                 try: await bot.send_message(uid, f"{e} Крутим...")
                 except: break
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.05)
             await msg.answer(f"🎡 <b>{prize}</b>", parse_mode="HTML")
             await notify_admins(f"🎡 <b>КОЛЕСО</b>\n👤 {display}\n🎁 {prize}\n⭐ {WHEEL_EXTRA_PRICE}⭐")
 
@@ -4421,7 +4431,7 @@ async def register_handlers(dp: Dispatcher):
             for e in ["📦","🔍","🎰","🌟","✨"]:
                 try: await bot.send_message(uid, f"{e}")
                 except: break
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.05)
             await msg.answer(f"🎉 <b>{prize}</b>", parse_mode="HTML")
             await notify_admins(f"📦 <b>ЛУТБОКС</b>\n👤 {display}\n🎁 {prize}\n⭐ {LOOTBOX_PRICE}⭐")
 
