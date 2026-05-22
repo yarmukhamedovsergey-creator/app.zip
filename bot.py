@@ -414,7 +414,7 @@ DEFAULT_CONFIG = {
     "mode_default_premium": False, "mode_beautiful_premium": True,
     "prices": {}, "daily_report": True, "daily_report_hour": 23,
     "notify_purchases": True, "notify_milestones": True,
-    "checker_mode": "public_strict", "cache_limit": 5000,
+    "checker_mode": "botapi", "cache_limit": 5000,
 }
 
 def load_bot_config():
@@ -484,12 +484,10 @@ def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
 
 def get_checker_mode():
-    if pool and pool.has_sessions():
-        return "sessions"
-    return "public_strict"
+    return "botapi"
 
 def is_sessions_checker():
-    return pool is not None and pool.has_sessions()
+    return False
 
 # ═══════════════════════ RATE LIMITER (ОТКЛЮЧЁН) ═══════════════════════
 
@@ -1163,9 +1161,9 @@ INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
     
 # ═══════════════════════ ЧЕКЕРЫ ═══════════════════════
 
-async def fast_check_username(u: str) -> str:
-    """Быстрая проверка больше не отдаёт free по одному t.me-запросу."""
-    return await check_username(u)
+async def fast_check_username(*args, **kwargs):
+    return False
+
 
 def is_valid_telegram_profile_username(u: str) -> bool:
     """Базовая проверка формата: 5 или 6 латинских букв, без цифр и подчёркиваний."""
@@ -1292,31 +1290,9 @@ async def check_username_botapi(u: str) -> str:
         logger.debug(f"[botapi] @{u}: {e}")
         return "unknown"
 
-async def public_username_status(u: str, uid=None) -> str:
-    """
-    Точная проверка статуса username (free / taken).
+async def public_username_status(*args, **kwargs):
+    return False
 
-    Алгоритм:
-      1) формат + blacklist + INVALID_WORDS → taken (не годится в профиль);
-      2) GET https://t.me/<username> — если есть tgme_page_title → taken;
-      3) Bot API getChat — обязан явно ответить chat not found, иначе → taken.
-    """
-    u = (u or "").strip().replace("@", "").lower()
-
-    if not is_username_settable_in_profile(u):
-        return "taken"
-
-    tme_status = await REMOVED_check_username_tme(u)
-    if tme_status != "free":
-        return "taken"
-
-    # Окончательное подтверждение через Bot API: t.me один не отличает свободный
-    # пользовательский username от занятого без публичной карточки.
-    api_status = await check_username_botapi(u)
-    if api_status != "free":
-        return "taken"
-
-    return "free"
 
 async def check_username(u: str) -> str:
     """Публичный строгий статус username без Telethon/user-сессий."""
@@ -1328,89 +1304,8 @@ async def check_username(u: str) -> str:
         return "unknown"
         
 async def check_fragment(u: str) -> str:
-    """
-    Точная проверка статуса username на Fragment.
+    return "unavailable"
 
-    Возвращает один из:
-      "available"   — выставлен на продажу (Buy Now / Place Bid);
-      "in auction"  — идёт аукцион;
-      "sold"        — продан / уже имеет владельца через Fragment;
-      "reserved"    — зарезервирован;
-      "unavailable" — на Fragment нет карточки (обычный t.me username);
-      "unknown"     — сеть/таймаут/неоднозначно.
-
-    Сначала смотрим строго на класс ``.tm-section-header-status`` —
-    Fragment всегда печатает один из статусов внутри него.
-    Если карточки вообще нет — username не выставлен.
-    """
-    u = (u or "").strip().replace("@", "").lower()
-    if not u:
-        return "unknown"
-
-    now = time.time()
-    cached = _fragment_cache.get(u)
-    if cached and now - cached[1] < _fragment_cache_ttl:
-        return cached[0]
-
-    if http_session is None:
-        return "unknown"
-
-    url = f"https://fragment.com/username/{u}"
-    headers = {
-        "User-Agent": random.choice(_TME_USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
-    try:
-        async with http_session.get(
-            url,
-            timeout=aiohttp.ClientTimeout(total=10),
-            headers=headers,
-            allow_redirects=True,
-        ) as resp:
-            if resp.status == 404:
-                _fragment_cache[u] = ("unavailable", now)
-                return "unavailable"
-            if resp.status != 200:
-                log_event("fragment", f"@{u} HTTP {resp.status} → unknown", logging.WARNING)
-                return "unknown"
-            text = await resp.text(errors="ignore")
-    except asyncio.TimeoutError:
-        log_event("fragment", f"@{u} timeout → unknown", logging.WARNING)
-        return "unknown"
-    except Exception as e:
-        log_event("fragment", f"@{u} error: {e} → unknown", logging.WARNING)
-        return "unknown"
-
-    status_match = re.search(
-        r'class="tm-section-header-status[^"]*"[^>]*>(.*?)<',
-        text, re.I | re.S,
-    )
-    status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
-    low = text.lower()
-
-    if status:
-        if "auction" in status or "bidding" in status:
-            result = "in auction"
-        elif "sold" in status or "taken" in status or "unavailable" in status:
-            result = "sold"
-        elif "available" in status or "for sale" in status or "buy now" in status:
-            result = "available"
-        elif "reserved" in status:
-            result = "reserved"
-        else:
-            result = "unknown"
-    elif "tm-section-header-status" in low:
-        # Карточка есть, но статус нераспознан — лучше не рисковать.
-        result = "unknown"
-    else:
-        # Никакого блока статуса нет → username не выставлен на Fragment.
-        result = "unavailable"
-
-    log_event("fragment", f"@{u} → {result}")
-    _fragment_cache[u] = (result, now)
-    return result
 
 _TME_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -1420,130 +1315,12 @@ _TME_USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) Gecko/20100101 Firefox/126.0",
 ]
 
-async def REMOVED_check_username_tme(u: str) -> str:
-    """
-    Точная проверка занятости через GET ``https://t.me/<username>``.
-
-    Логика:
-      • невалидный формат / blacklist / INVALID_WORDS → **taken** (не годится в профиль);
-      • в HTML есть ``tgme_page_title``               → **taken** (есть карточка);
-      • элемента нет → страница-заглушка               → **free** (предварительно);
-      • любая ошибка / таймаут / не-200 / не-html      → **taken** (страховка).
-
-    Важно: одного t.me-запроса недостаточно, чтобы гарантировать
-    «свободно и можно поставить в профиль» (t.me не различает
-    свободный/зарезервированный/занятый пользовательский username),
-    поэтому окончательное решение принимает ``is_username_truly_free``,
-    которое перепроверяет результат через Bot API.
-
-    Возвращает строку "free" или "taken".
-    """
-    u = (u or "").strip().replace("@", "").lower()
-    if not is_username_settable_in_profile(u):
-        return "taken"
-    if http_session is None:
-        return "taken"
-
-    url = f"https://t.me/{u}"
-    headers = {
-        "User-Agent": random.choice(_TME_USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
-    }
-
-    try:
-        async with http_session.get(
-            url,
-            timeout=aiohttp.ClientTimeout(total=10),
-            headers=headers,
-            allow_redirects=True,
-        ) as resp:
-            if resp.status != 200:
-                log_event("tme", f"@{u} HTTP {resp.status} → taken", logging.DEBUG)
-                return "taken"
-            html_text = await resp.text(errors="ignore")
-    except asyncio.TimeoutError:
-        log_event("tme", f"@{u} timeout → taken", logging.DEBUG)
-        return "taken"
-    except Exception as e:
-        log_event("tme", f"@{u} error {e} → taken", logging.DEBUG)
-        return "taken"
-
-    return "taken" if 'tgme_page_title' in html_text else "free"
+async def REMOVED_check_username_tme(*args, **kwargs):
+    return False
 
 
-async def is_username_truly_free(u: str, uid=None) -> bool:
-    """
-    Строгий многоисточниковый ответ на вопрос «можно ли поставить username в профиль».
-
-    True только если ВСЕ источники подтверждают свободу:
-      1) формат корректен (5/6 латинских букв);
-      2) username не в blacklist и не в INVALID_WORDS;
-      3) t.me не содержит ``tgme_page_title`` (нет публичной карточки);
-      4) Bot API getChat явно отвечает «chat not found» (free);
-      5) Telethon account.CheckUsernameRequest подтверждает свободу (если есть сессии).
-
-    Если Bot API недоступен или вернул unknown — username помечается taken
-    (страховка от ложных free).
-    """
-    u = (u or "").strip().replace("@", "").lower()
-    if not is_username_settable_in_profile(u):
-        return False
-
-    # Фильтр некорректных / shadowban username
-    if not is_natural_username(u):
-        return False
-
-    # t.me check
-    tme_status = await REMOVED_check_username_tme(u)
-
-    if tme_status != "free":
-        return False
-
-# delayed recheck против false-free
-    await asyncio.sleep(0.7)
-
-    tme_status2 = await REMOVED_check_username_tme(u)
-
-    if tme_status2 != "free":
-        log_event("tme", f"🛡 delayed recheck caught @{u}")
-        return False
-
-    # 2) Bot API — авторитетный ответ для разделения free/taken пользовательских юзов.
-    try:
-        api_status = await check_username_botapi(u)
-    except Exception as e:
-        logger.debug(f"[truly_free] @{u} botapi exception: {e}")
-        return False
-    if api_status != "free":
-        return False
-
-    # 3) Fragment usernames никогда не считаем свободными.
-    fragment_status = await check_fragment(u)
-    if fragment_status != "unavailable":
-        log_event("fragment", f"🚫 @{u} rejected by fragment: {fragment_status}")
-        return False
-
-    # 4) Session-check используем только как дополнительную защиту.
-    # Frozen/limited sessions часто врут и режут реальные free usernames.
-# Session-check только как доп. защита
-    if pool and pool.has_sessions():
-
-    # Проверяем только часть username
-    # чтобы не убивать сессии.
-        if random.randint(1, 100) <= 15:
-
-            session_status = await pool.check_username_via_session(u)
-
-        # Только явный taken блокирует username
-            if session_status == "taken":
-                log_event("tme", f"🛡 session caught taken @{u}")
-                return False
-
-# free/skip/frozen -> доверяем t.me + botapi
-    return True
+async def is_username_truly_free(*args, **kwargs):
+    return False
 
 
 async def is_username_free(u: str, uid=None):
@@ -1571,29 +1348,9 @@ async def is_username_free(u: str, uid=None):
         return False
 
 
-async def get_rechecked_cached_free(mode, count):
-    cached = await REMOVED_get_cached_free(mode, max(count * 3, count))
-    validate_func = SEARCH_MODES.get(mode, {}).get("validate", is_valid_username)
-    found = []
-    rejected = []
-    for u in cached:
-        u = (u or "").strip().replace("@", "").lower()
-        if (
-            validate_func(u)
-            and is_username_settable_in_profile(u)
-            and await is_username_truly_free(u)
-        ):
-            fragment_status = await check_fragment(u)
-            if fragment_status != "unavailable":
-                continue
-            found.append({"username": u, "fragment": fragment_status})
-            if len(found) >= count:
-                break
-        else:
-            rejected.append(u)
-    if rejected:
-        logger.info(f"Rejected stale cache for mode={mode}: {len(rejected)}")
-    return found
+async def get_rechecked_cached_free(*args, **kwargs):
+    return False
+
 
 async def check_subscribed(uid):
     if uid in ADMIN_IDS or not REQUIRED_CHANNELS: return []
@@ -1634,20 +1391,12 @@ async def do_search(query, *args, **kwargs):
     return []
 
 
-async def check_from_cache():
-    """
-    Старый cache-checker отключён.
-    """
-    return None
+async def check_from_cache(*args, **kwargs):
+    return False
 
-
-# ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
 
 def init_db():
     conn = sqlite3.connect(DB); c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS free_cache (
-        username TEXT PRIMARY KEY, checked_at TEXT, mode TEXT, length INTEGER DEFAULT 5
-    )""")
     c.execute("""CREATE TABLE IF NOT EXISTS users (
         uid INTEGER PRIMARY KEY, uname TEXT DEFAULT '', joined TEXT DEFAULT '',
         free INTEGER DEFAULT 3, searches INTEGER DEFAULT 0, sub_end TEXT DEFAULT '',
