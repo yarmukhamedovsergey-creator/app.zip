@@ -1384,11 +1384,131 @@ def evaluate_username(u):
     filled=min(score//20,10)
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
-async def do_search(query, *args, **kwargs):
-    """
-    Упрощённый поиск без старого session/cache движка.
-    """
-    return []
+async def do_search(count, gen_func, msg, title, uid, mode):
+    start = time.time()
+
+    found = []
+    checked = set()
+
+    attempts = 0
+    max_attempts = 4000
+
+    config = load_bot_config()
+
+    strict_cache_enabled = config.get("strict_cache_enabled", False)
+
+    # ===== КЭШ =====
+    if strict_cache_enabled:
+        try:
+            cache_data = await load_cache()
+
+            cached = cache_data.get(mode, [])
+
+            while cached and len(found) < count:
+                username = cached.pop(0)
+
+                if not username:
+                    continue
+
+                username = username.lower()
+
+                # БЕЗ ПОВТОРНОЙ ПРОВЕРКИ
+                found.append({
+                    "username": username,
+                    "fragment": "unavailable"
+                })
+
+            cache_data[mode] = cached
+            await save_cache(cache_data)
+
+        except Exception as e:
+            logger.error(f"[CACHE] {e}")
+
+    # ===== ДОГЕНЕРАЦИЯ =====
+    while len(found) < count and attempts < max_attempts:
+
+        try:
+            username = gen_func()
+
+            if not username:
+                continue
+
+            username = username.lower()
+
+            if username in checked:
+                continue
+
+            checked.add(username)
+
+            attempts += 1
+
+            if not is_valid_username(username):
+                continue
+
+            # ===== TELEGRAM CHECK =====
+            free = await is_username_free(username, uid)
+
+            if not free:
+                continue
+
+            # ===== FRAGMENT =====
+            fragment_status = await check_fragment(username)
+
+            if fragment_status != "unavailable":
+                continue
+
+            found.append({
+                "username": username,
+                "fragment": fragment_status
+            })
+
+            save_history(
+                uid,
+                username,
+                mode,
+                len(username)
+            )
+
+            # ===== ДОБАВЛЕНИЕ В КЭШ =====
+            if strict_cache_enabled:
+                try:
+                    cache_data = await load_cache()
+
+                    if mode not in cache_data:
+                        cache_data[mode] = []
+
+                    if username not in cache_data[mode]:
+                        cache_data[mode].append(username)
+
+                    await save_cache(cache_data)
+
+                except Exception as e:
+                    logger.error(f"[CACHE SAVE] {e}")
+
+            # ===== ОБНОВЛЕНИЕ UI =====
+            try:
+                await msg.edit_text(
+                    f"🔍 <b>{title}</b>\n\n"
+                    f"📊 Проверено: <code>{attempts}</code>\n"
+                    f"✅ Найдено: <code>{len(found)}/{count}</code>",
+                    parse_mode="HTML"
+                )
+            except:
+                pass
+
+            await asyncio.sleep(0.15)
+
+        except Exception as e:
+            logger.error(f"[SEARCH LOOP] {e}")
+
+    elapsed = round(time.time() - start, 1)
+
+    stats = {
+        "attempts": attempts,
+        "elapsed": elapsed
+    }
+
+    return found, stats
 
 
 async def check_from_cache(*args, **kwargs):
@@ -6184,130 +6304,4 @@ async def main():
 
 if __name__=="__main__":
     asyncio.run(main())
-
-
-
-# ═══════════════════════ CACHE HOTFIX v68 ═══════════════════════
-
-STRICT_CACHE_ENABLED = False
-
-async def get_rechecked_cached_free(mode="default", count=5):
-    """
-    Новый режим:
-    • если кэш включен — выдаёт юзы ИЗ КЭША БЕЗ повторной проверки;
-    • если юзов меньше нужного количества — догенерирует недостающие;
-    • если кэш выключен — полностью игнорирует кэш.
-    """
-    config = load_bot_config()
-
-    use_cache = bool(config.get("strict_cache_enabled", False))
-
-    mode_data = SEARCH_MODES.get(mode) or SEARCH_MODES["default"]
-    gen_func = mode_data["func"]
-    validator = mode_data["validate"]
-
-    result = []
-    seen = set()
-
-    if use_cache:
-        data = await load_cache()
-
-        cached = list(data.get(mode, []))
-
-        while cached and len(result) < count:
-            u = cached.pop(0)
-
-            if not u:
-                continue
-
-            u = u.lower().replace("@", "").strip()
-
-            if u in seen:
-                continue
-
-            # БЕЗ ПОВТОРНОЙ ПРОВЕРКИ
-            result.append(u)
-            seen.add(u)
-
-        data[mode] = cached
-        await save_cache(data)
-
-    # если кэша не хватило — ищем недостающее
-    attempts = 0
-
-    while len(result) < count and attempts < 2500:
-        attempts += 1
-
-        try:
-            u = gen_func()
-        except Exception:
-            continue
-
-        if not u:
-            continue
-
-        u = u.lower().replace("@", "").strip()
-
-        if u in seen:
-            continue
-
-        if not validator(u):
-            continue
-
-        try:
-            free = await is_username_free(u)
-        except Exception:
-            free = False
-
-        if not free:
-            continue
-
-        result.append(u)
-        seen.add(u)
-
-    return result
-
-
-DEFAULT_CONFIG["strict_cache_enabled"] = False
-
-_old_apply_config = apply_config
-
-def apply_config(config):
-    global STRICT_CACHE_ENABLED
-    STRICT_CACHE_ENABLED = bool(config.get("strict_cache_enabled", False))
-    return _old_apply_config(config)
-
-
-async def is_username_free(u: str, uid=None):
-    """
-    Более безопасная проверка:
-    • случайная задержка;
-    • без агрессивных burst-запросов;
-    • только bot api;
-    """
-    u = (u or "").lower().replace("@", "").strip()
-
-    if len(u) != 5:
-        return False
-
-    if not u.isalpha():
-        return False
-
-    try:
-        await asyncio.sleep(random.uniform(0.4, 1.2))
-
-        await bot.get_chat(f"@{u}")
-
-        return False
-
-    except TelegramBadRequest as e:
-        txt = str(e).lower()
-
-        if "chat not found" in txt:
-            return True
-
-        return False
-
-    except Exception:
-        return False
 
