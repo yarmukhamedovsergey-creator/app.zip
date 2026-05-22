@@ -1,71 +1,10 @@
 """
-USERNAME HUNTER v67 — VIP + Тематический поиск + проверка через сессии
-Проверка занятости (строгий многоисточниковый чекер):
-  • формат + длина + INVALID_WORDS + blacklist;
-  • GET https://t.me/<username> — нет tgme_page_title;
-  • Bot API getChat — обязан явно ответить chat not found;
-  • Telethon account.CheckUsernameRequest — финальная проверка через сессии;
-  • любая ошибка / таймаут / не-200 / неоднозначный ответ → taken.
-В кэш free попадают только юзы, прошедшие ВСЕ проверки — то есть те,
-которые реально можно поставить в профиль.
+USERNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
+Проверка занятости: GET https://t.me/<username>; нет tgme_page_title → free.
+Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
 """
 
 from __future__ import annotations
-
-from collections import deque
-import time
-
-CACHE_MAX_AGE = 1800  # 30 минут в секундах
-FRESH_TIMEOUT = 300
-BATCH_SIZE = 5
-
-class CacheItem:
-    def __init__(self, username, status):
-        self.username = username
-        self.status = status
-        self.added_at = time.time()
-
-cache = deque()
-cache_seen = set()
-
-def add_to_cache(username, status):
-    if username in cache_seen:
-        return
-
-    if len(cache) >= CACHE_MAX:
-        old = cache.popleft()
-        cache_seen.discard(old.username)
-
-    item = CacheItem(username, status)
-    cache.append(item)
-    cache_seen.add(username)
-
-
-def get_batch_for_check():
-    now = time.time()
-    batch = []
-
-    for item in cache:
-        if len(batch) >= BATCH_SIZE:
-            break
-
-        if now - item.added_at < FRESH_TIMEOUT:
-            continue
-
-        if item.status in ("free", "maybe"):
-            batch.append(item)
-
-    return batch
-
-
-def remove_from_cache(usernames):
-    global cache
-    usernames = set(usernames)
-
-    cache = deque([x for x in cache if x.username not in usernames])
-    for u in usernames:
-        cache_seen.discard(u)
-
 
 import asyncio
 import random
@@ -83,7 +22,7 @@ from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
 
 # BOT_TME_STRICT_CACHE_ACTIVE
-CACHE_FILE = 'free_usernames_tme_strict.json'
+CACHE_FILE = "free_usernames_tme_strict.json"
 cache_lock = asyncio.Lock()
 
 import aiohttp
@@ -96,12 +35,8 @@ from aiogram.types import (
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
-# Telethon для проверки юзернеймов через account.CheckUsernameRequest
-try:
-    from telethon import TelegramClient, functions, errors
-    HAS_TELETHON = True
-except ImportError:
-    HAS_TELETHON = False
+# Telethon полностью отключён: бот работает без user-сессий.
+HAS_TELETHON = False
 
 pool = None
 http_session = None
@@ -109,15 +44,11 @@ bot_info = None
 
 # ═══════════════════════ НАСТРОЙКИ ═══════════════════════
 
-MAIN_TOKEN = "8325751391:AAGoIqb0YvnXmFFjJCB0kX_wZ8HUvD53-Bg"
+MAIN_TOKEN = "8325751391:AAFGB3KV34DiOp_Z0HXg5nErgxwOk6XR3C4"
 ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "emeuw"
 
-# Список аккаунтов для Telethon-сессий: [("session_name", api_id, "api_hash"), ...]
-# session_name — имя файла .session в папке sessions/
-# Можно добавлять через админ-панель
-ACCOUNTS = []  # заполняется через админку или вручную
-SESSIONS_DIR = "sessions"
+ACCOUNTS = []  # режим без user-сессий
 
 
 FREE_SEARCHES = 2
@@ -312,7 +243,7 @@ user_states = {}
 http_session = None
 bot_info = None
 DB = "hunter.db"
-os.makedirs(SESSIONS_DIR, exist_ok=True)  # папка для .session файлов
+# os.makedirs("sessions", exist_ok=True)  # user-сессии отключены
 searching_users = set()
 user_search_cooldown = {}
 _fragment_cache = {}
@@ -414,7 +345,7 @@ DEFAULT_CONFIG = {
     "mode_default_premium": False, "mode_beautiful_premium": True,
     "prices": {}, "daily_report": True, "daily_report_hour": 23,
     "notify_purchases": True, "notify_milestones": True,
-    "checker_mode": "botapi", "cache_limit": 5000,
+    "checker_mode": "public_strict", "cache_limit": 5000,
 }
 
 def load_bot_config():
@@ -463,31 +394,18 @@ def apply_config(config):
             if k in PRICES:
                 PRICES[k]["stars"] = v
 
-SESSIONS_CONFIG_FILE = "sessions_config.json"
-
 def load_saved_sessions():
-    """Загрузить список сессий из JSON-конфига."""
-    if os.path.exists(SESSIONS_CONFIG_FILE):
-        try:
-            with open(SESSIONS_CONFIG_FILE, "r") as f:
-                return json.load(f)
-        except Exception:
-            pass
+    """User-сессии удалены. Возвращаем пустой список для совместимости админ-панели."""
     return []
-
-def save_sessions_config(sessions):
-    """Сохранить список сессий в JSON-конфиг."""
-    with open(SESSIONS_CONFIG_FILE, "w") as f:
-        json.dump(sessions, f, indent=2, ensure_ascii=False)
 
 def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
 
 def get_checker_mode():
-    return CHECKER_MODE
+    return "public_strict"
 
 def is_sessions_checker():
-    return CHECKER_MODE == "session"
+    return False
 
 # ═══════════════════════ RATE LIMITER (ОТКЛЮЧЁН) ═══════════════════════
 
@@ -559,159 +477,29 @@ def get_action_log(limit=50):
 # ═══════════════════════ ПУЛ АККАУНТОВ ═══════════════════════
 
 class AccountPool:
-    """
-    Пул Telethon-сессий для проверки юзернеймов через account.CheckUsernameRequest.
-    Если сессий нет — работает как заглушка (только публичные методы).
-    """
+    """Заглушка вместо Telethon-пула. В проекте нет user-сессий вообще."""
 
     def __init__(self):
         self.clients = []
-        self.accounts = []
-        self.status = {}          # i -> 'active' | 'cooldown' | 'dead' | 'warming'
-        self.cooldown_until = {}   # i -> timestamp
-        self.last_used = {}        # i -> timestamp
-        self.error_streak = {}     # i -> int
+        self.status = {}
+        self.cooldown_until = {}
         self.total_checks = 0
-        self.session_checks = 0
         self.caught_by_botapi = 0
         self.caught_by_recheck = 0
         self.reconnect_count = 0
-        self._lock = asyncio.Lock()
-        self._rr_index = 0        # round-robin индекс
 
     async def init(self, accounts=None):
-        """Подключить все сессии из ACCOUNTS."""
-        if not HAS_TELETHON:
-            log_event("bot", "⚠️  Telethon не установлен — сессии отключены")
-            return
-        accounts = accounts or ACCOUNTS
-        if not accounts:
-            log_event("bot", "ℹ️  Нет аккаунтов — работаем без сессий (только t.me + Bot API)")
-            return
-
-        os.makedirs(SESSIONS_DIR, exist_ok=True)
-        for idx, acc in enumerate(accounts):
-            session_name, api_id, api_hash = acc[0], int(acc[1]), str(acc[2])
-            session_path = os.path.join(SESSIONS_DIR, session_name)
-            try:
-                client = TelegramClient(session_path, api_id, api_hash)
-                await client.connect()
-                if not await client.is_user_authorized():
-                    log_event("bot", f"⚠️  Сессия {session_name} не авторизована — пропуск", logging.WARNING)
-                    self.clients.append(client)
-                    self.accounts.append(acc)
-                    self.status[idx] = "dead"
-                    continue
-                self.clients.append(client)
-                self.accounts.append(acc)
-                self.status[idx] = "active"
-                self.cooldown_until[idx] = 0
-                self.error_streak[idx] = 0
-                self.last_used[idx] = 0
-                me = await client.get_me()
-                uname = me.username or me.phone or "?"
-                log_event("bot", f"✅ Сессия #{idx} подключена: {uname}")
-            except Exception as e:
-                log_event("bot", f"❌ Сессия {session_name} ошибка: {e}", logging.ERROR)
-                self.clients.append(None)
-                self.accounts.append(acc)
-                self.status[idx] = "dead"
-
-        active = sum(1 for s in self.status.values() if s == "active")
-        log_event("bot", f"🔌 Сессий подключено: {active}/{len(self.clients)}")
+        logger.info("Public strict mode: Telethon sessions are disabled")
 
     def has_sessions(self):
-        return any(s == "active" for s in self.status.values())
-
-    async def _acquire(self, uid=None, timeout=5):
-        """Получить свободную сессию (round-robin с учётом cooldown)."""
-        async with self._lock:
-            now = time.time()
-            n = len(self.clients)
-            if n == 0:
-                return None, None
-            for _ in range(n):
-                i = self._rr_index % n
-                self._rr_index += 1
-                if self.status.get(i) != "active":
-                    continue
-                if now < self.cooldown_until.get(i, 0):
-                    continue
-                self.last_used[i] = now
-                return self.clients[i], i
-        return None, None
-
-    def _ok(self, i):
-        """Сессия успешно выполнила запрос."""
-        self.error_streak[i] = 0
-
-    def _err(self, i, flood=False, secs=0):
-        """Сессия получила ошибку."""
-        self.error_streak[i] = self.error_streak.get(i, 0) + 1
-        if flood and secs > 0:
-            self.cooldown_until[i] = time.time() + secs + 5
-            self.status[i] = "cooldown"
-            log_event("bot", f"⏳ Сессия #{i} flood-wait {secs}s", logging.WARNING)
-        elif self.error_streak[i] >= 5:
-            self.status[i] = "dead"
-            log_event("bot", f"💀 Сессия #{i} мертва (5 ошибок подряд)", logging.ERROR)
-
-    async def check_username_via_session(self, u: str) -> str:
-        """
-        Проверка юзернейма через Telethon: account.CheckUsernameRequest.
-        Возвращает: 'free' | 'taken' | 'skip' (нет доступных сессий).
-        """
-        if not HAS_TELETHON or not self.has_sessions():
-            return "skip"
-
-        u = (u or "").strip().replace("@", "").lower()
-        if not u:
-            return "skip"
-
-        client, idx = await self._acquire()
-        if client is None:
-            return "skip"
-
-        try:
-            # Безопасная проверка через CheckUsernameRequest.
-            # Не меняет username аккаунта и не убивает frozen sessions.
-            result = await client(functions.account.CheckUsernameRequest(username=u))
-
-            self._ok(idx)
-            self.session_checks += 1
-
-            if result:
-                return "free"
-
-            return "taken"
-
-        except errors.UsernameOccupiedError:
-            self._ok(idx)
-            return "taken"
-
-        except errors.UsernameInvalidError:
-            self._ok(idx)
-            return "taken"
-
-        except errors.UsernamePurchaseAvailableError:
-            self._ok(idx)
-            return "taken"
-
-        except errors.FloodWaitError as e:
-            self._err(idx, flood=True, secs=e.seconds)
-            return "skip"
-
-        except Exception:
-            # frozen / limited / temporary errors
-            self._err(idx)
-            return "skip"
+        return False
 
     async def check(self, u, uid=None):
         self.total_checks += 1
         try:
             return "free" if await is_username_free(u, uid) else "taken"
         except Exception as e:
-            logger.debug(f"[pool-check] @{u}: {e}")
+            logger.debug(f"[public-check] @{u}: {e}")
             return "skip"
 
     async def strong_check(self, u, uid=None):
@@ -724,76 +512,36 @@ class AccountPool:
         return None
 
     def stats(self):
-        active = sum(1 for s in self.status.values() if s == "active")
-        cooldown = sum(1 for s in self.status.values() if s == "cooldown")
-        dead = sum(1 for s in self.status.values() if s == "dead")
-        warming = sum(1 for s in self.status.values() if s == "warming")
         return {
-            "total": len(self.clients),
-            "active": active,
-            "warming": warming,
-            "cooldown": cooldown,
-            "dead": dead,
+            "total": 0,
+            "active": 0,
+            "warming": 0,
+            "cooldown": 0,
+            "dead": 0,
             "checks": self.total_checks,
-            "session_checks": self.session_checks,
-            "errors": sum(self.error_streak.values()),
+            "errors": 0,
             "botapi_saves": self.caught_by_botapi,
             "recheck_saves": self.caught_by_recheck,
             "reconnects": self.reconnect_count,
         }
 
     def detailed_status(self):
-        if not self.clients:
-            return "Нет сессий. Проверка: t.me + Bot API + Fragment."
-        lines = []
-        for i, client in enumerate(self.clients):
-            st = self.status.get(i, "?")
-            emoji = {"active": "🟢", "cooldown": "🟠", "dead": "🔴", "warming": "🟡"}.get(st, "⚪")
-            name = self.accounts[i][0] if i < len(self.accounts) else f"#{i}"
-            cd = ""
-            if st == "cooldown":
-                remaining = max(0, int(self.cooldown_until.get(i, 0) - time.time()))
-                cd = f" ({remaining}s)"
-            lines.append(f"{emoji} #{i} {name}: {st}{cd}")
-        lines.append(f"\n📊 Проверок через сессии: {self.session_checks}")
-        return "\n".join(lines)
+        return "User-сессии отключены. Проверка работает только публичными методами: t.me + Bot API + Fragment."
 
     async def _try_reconnect(self, i):
-        if not HAS_TELETHON or i >= len(self.accounts):
-            return False
-        acc = self.accounts[i]
-        session_name, api_id, api_hash = acc[0], int(acc[1]), str(acc[2])
-        session_path = os.path.join(SESSIONS_DIR, session_name)
-        try:
-            if self.clients[i]:
-                try:
-                    await self.clients[i].disconnect()
-                except Exception:
-                    pass
-            client = TelegramClient(session_path, api_id, api_hash)
-            await client.connect()
-            if not await client.is_user_authorized():
-                self.status[i] = "dead"
-                return False
-            self.clients[i] = client
-            self.status[i] = "active"
-            self.cooldown_until[i] = 0
-            self.error_streak[i] = 0
-            self.reconnect_count += 1
-            log_event("bot", f"🔄 Сессия #{i} переподключена")
-            return True
-        except Exception as e:
-            log_event("bot", f"❌ Реконнект #{i}: {e}", logging.ERROR)
-            self.status[i] = "dead"
-            return False
+        return False
+
+    async def _acquire(self, uid=None, timeout=0):
+        return None, None
+
+    def _ok(self, i):
+        return None
+
+    def _err(self, i, flood=False, secs=0):
+        return None
 
     async def disconnect(self):
-        for client in self.clients:
-            if client:
-                try:
-                    await client.disconnect()
-                except Exception:
-                    pass
+        return None
 
 
 # ═══════════════════════ ГЕНЕРАТОРЫ v5 ═══════════════════════
@@ -831,26 +579,14 @@ def gen_dictionary():
     return random.choice(words).lower()
 
 def gen_beautiful():
-    consonants = "bcdfghklmnprst"
-    vowels = "aeiou"
-
+    """Красивые паттерны, 5 букв"""
     patterns = [
-        "cvcvc",
-        "cvccv",
-        "ccvcv",
+        lambda: random.choice(_V)+random.choice(_C)+random.choice(_V)+random.choice(_C)+random.choice(_V),
+        lambda: random.choice(_C)+random.choice(_V)+random.choice(_C)+random.choice(_C)+random.choice(_V),
+        lambda: random.choice(_C)+random.choice(_V)+random.choice(_V)+random.choice(_C)+random.choice(_C),
+        lambda: random.choice(_V)+random.choice(_C)+random.choice(_V)+random.choice(_V)+random.choice(_C),
     ]
-
-    pattern = random.choice(patterns)
-
-    result = ""
-
-    for ch in pattern:
-        if ch == "c":
-            result += random.choice(consonants)
-        else:
-            result += random.choice(vowels)
-
-    return result
+    return random.choice(patterns)()
 
 _pattern_template = ""
 def gen_pattern():
@@ -970,7 +706,7 @@ def gen_word_combinations(word):
                 and not ul.startswith("_") and not ul.endswith("_")):
             valid.append(ul); seen.add(ul)
 
-    ##random.shuffle(valid)
+    random.shuffle(valid)
     return valid
 
 async def do_word_search(word, count, msg, uid):
@@ -998,27 +734,11 @@ async def do_word_search(word, count, msg, uid):
 
             attempts += 1
 
-            status = await check_username_selected(u, uid)
+            if await is_username_free(u, uid):
+                found.append({"username": u, "fragment": "unavailable"})
+                save_history(uid, u, f"По слову: {word}", len(u))
 
-            if status == "free":
-                fragment_status = await check_fragment(u)
-
-                if fragment_status != "unavailable":
-                    continue
-
-                found.append({
-                    "username": u,
-                    "fragment": fragment_status
-                })
-
-                save_history(
-                    uid,
-                    u,
-                    f"По слову: {word}",
-                    len(u)
-                )
-
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.3)
 
             now = time.time()
             if now - last_update > 2.5:
@@ -1163,12 +883,12 @@ INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
     
 # ═══════════════════════ ЧЕКЕРЫ ═══════════════════════
 
-async def fast_check_username(*args, **kwargs):
-    return False
-
+async def fast_check_username(u: str) -> str:
+    """Быстрая проверка больше не отдаёт free по одному t.me-запросу."""
+    return await check_username(u)
 
 def is_valid_telegram_profile_username(u: str) -> bool:
-    """Базовая проверка формата: 5 или 6 латинских букв, без цифр и подчёркиваний."""
+    """Разрешены только буквенные username из рабочих режимов: 5 или 6 латинских букв."""
     if not u:
         return False
     u = u.strip().replace("@", "")
@@ -1176,92 +896,6 @@ def is_valid_telegram_profile_username(u: str) -> bool:
         return False
     if not re.match(r"^[a-zA-Z]+$", u):
         return False
-    return True
-
-
-
-GOOD_STARTS = (
-    "ka","ke","ki","ko","ku","la","le","li","lo","lu",
-    "na","ne","ni","no","ra","re","ri","ro","ta","te",
-    "va","ve","vi","vo","xa","xe","za","ze"
-)
-
-BAD_PARTS = (
-    "eh","yh","wu","yi","uu","yy","qq","wq","qw","zx",
-    "xz","vj","jq","qj","hh","sg","aeu","uou","ehu"
-)
-
-def is_natural_username(u: str) -> bool:
-    u = u.lower()
-
-    # только буквы
-    if not re.fullmatch(r"[a-z]{5,6}", u):
-        return False
-
-    # плохие сочетания
-    for b in BAD_PARTS:
-        if b in u:
-            return False
-
-    vowels = "aeiouy"
-
-    # не более 2 гласных/согласных подряд
-    v_run = 0
-    c_run = 0
-
-    for ch in u:
-        if ch in vowels:
-            v_run += 1
-            c_run = 0
-        else:
-            c_run += 1
-            v_run = 0
-
-        if v_run > 2 or c_run > 2:
-            return False
-
-    # начало должно быть читаемым
-    # relaxed readable filter
-
-    # избегаем теневых invalid usernames
-# weird chars allowed
-
-    return True
-
-
-def is_username_settable_in_profile(u: str) -> bool:
-    """
-    Строгая SYNC-проверка: можно ли в принципе ставить такой username в профиль.
-    Используется как первичный фильтр перед сетевыми проверками и как
-    последний рубеж перед записью в кэш — чтобы туда никогда не попадали
-    юзы, которые Telegram заведомо не примет.
-
-    Проверяет:
-      • формат (5 или 6 латинских букв);
-      • blacklist (внутренняя БД);
-      • INVALID_WORDS (зарезервированные/нежелательные слова).
-    """
-    if not u:
-        return False
-    u = u.strip().replace("@", "").lower()
-    if not is_valid_telegram_profile_username(u):
-        return False
-    try:
-        if is_blacklisted(u):
-            return False
-    except Exception:
-        # Если БД временно недоступна — лучше пропустить, чем дать ложный free.
-        return False
-    try:
-        for w in INVALID_WORDS:
-            if not w:
-                continue
-            if w == u or w in u:
-                return False
-    except NameError:
-        # INVALID_WORDS объявляется ниже по файлу; на момент импорта это ок —
-        # вызовы этой функции в рантайме INVALID_WORDS уже видят.
-        pass
     return True
 
 async def check_username_botapi(u: str) -> str:
@@ -1292,62 +926,119 @@ async def check_username_botapi(u: str) -> str:
         logger.debug(f"[botapi] @{u}: {e}")
         return "unknown"
 
-async def public_username_status(*args, **kwargs):
-    return False
+async def public_username_status(u: str, uid=None) -> str:
+    """
+    Точная проверка по методу пользователя:
+    GET https://t.me/<username>
+    - если в HTML есть tgme_page_title -> username занят;
+    - если tgme_page_title нет -> username свободен;
+    - любая ошибка / таймаут / не-200 -> считаем занятым.
+    """
+    u = (u or "").strip().replace("@", "").lower()
 
+    if not is_valid_telegram_profile_username(u):
+        return "taken"
+    if is_blacklisted(u):
+        return "taken"
+    for w in INVALID_WORDS:
+        if w == u or w in u:
+            return "taken"
+
+    return await check_username_tme(u)
 
 async def check_username(u: str) -> str:
-    """
-    Базовая проверка через Bot API.
-    """
+    """Публичный строгий статус username без Telethon/user-сессий."""
     u = (u or "").strip().replace("@", "").lower()
-
-    if not is_username_settable_in_profile(u):
-        return "taken"
-
     try:
-        await bot.get_chat(f"@{u}")
-        return "taken"
-
-    except TelegramBadRequest as e:
-        text = str(e).lower()
-
-        if "chat not found" in text:
-            return "free"
-
-        return "taken"
-
-    except Exception:
-        return "skip"
-
-
-async def check_username_selected(u: str, uid=None):
-    """
-    Универсальный роутер проверки username.
-    checker_mode=session  -> Telethon
-    checker_mode=botapi   -> Bot API
-    """
-
-    u = (u or "").strip().replace("@", "").lower()
-
-    if not u:
-        return "skip"
-
-    if CHECKER_MODE == "session" and pool and pool.has_sessions():
-
-        result = await pool.check_username_via_session(u)
-
-        # fallback на Bot API
-        if result == "skip":
-            return await check_username(u)
-
-        return result
-
-    return await check_username(u)
+        return await public_username_status(u)
+    except Exception as e:
+        logger.debug(f"[check_username] @{u}: {e}")
+        return "unknown"
         
 async def check_fragment(u: str) -> str:
-    return "unavailable"
+    """
+    Точная проверка статуса username на Fragment.
 
+    Возвращает один из:
+      "available"   — выставлен на продажу (Buy Now / Place Bid);
+      "in auction"  — идёт аукцион;
+      "sold"        — продан / уже имеет владельца через Fragment;
+      "reserved"    — зарезервирован;
+      "unavailable" — на Fragment нет карточки (обычный t.me username);
+      "unknown"     — сеть/таймаут/неоднозначно.
+
+    Сначала смотрим строго на класс ``.tm-section-header-status`` —
+    Fragment всегда печатает один из статусов внутри него.
+    Если карточки вообще нет — username не выставлен.
+    """
+    u = (u or "").strip().replace("@", "").lower()
+    if not u:
+        return "unknown"
+
+    now = time.time()
+    cached = _fragment_cache.get(u)
+    if cached and now - cached[1] < _fragment_cache_ttl:
+        return cached[0]
+
+    if http_session is None:
+        return "unknown"
+
+    url = f"https://fragment.com/username/{u}"
+    headers = {
+        "User-Agent": random.choice(_TME_USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    try:
+        async with http_session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=10),
+            headers=headers,
+            allow_redirects=True,
+        ) as resp:
+            if resp.status == 404:
+                _fragment_cache[u] = ("unavailable", now)
+                return "unavailable"
+            if resp.status != 200:
+                log_event("fragment", f"@{u} HTTP {resp.status} → unknown", logging.WARNING)
+                return "unknown"
+            text = await resp.text(errors="ignore")
+    except asyncio.TimeoutError:
+        log_event("fragment", f"@{u} timeout → unknown", logging.WARNING)
+        return "unknown"
+    except Exception as e:
+        log_event("fragment", f"@{u} error: {e} → unknown", logging.WARNING)
+        return "unknown"
+
+    status_match = re.search(
+        r'class="tm-section-header-status[^"]*"[^>]*>(.*?)<',
+        text, re.I | re.S,
+    )
+    status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
+    low = text.lower()
+
+    if status:
+        if "auction" in status or "bidding" in status:
+            result = "in auction"
+        elif "sold" in status or "taken" in status or "unavailable" in status:
+            result = "sold"
+        elif "available" in status or "for sale" in status or "buy now" in status:
+            result = "available"
+        elif "reserved" in status:
+            result = "reserved"
+        else:
+            result = "unknown"
+    elif "tm-section-header-status" in low:
+        # Карточка есть, но статус нераспознан — лучше не рисковать.
+        result = "unknown"
+    else:
+        # Никакого блока статуса нет → username не выставлен на Fragment.
+        result = "unavailable"
+
+    log_event("fragment", f"@{u} → {result}")
+    _fragment_cache[u] = (result, now)
+    return result
 
 _TME_USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -1357,42 +1048,74 @@ _TME_USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) Gecko/20100101 Firefox/126.0",
 ]
 
-async def REMOVED_check_username_tme(*args, **kwargs):
-    return False
+async def check_username_tme(u: str) -> str:
+    """
+    Точная проверка занятости через GET ``https://t.me/<username>``.
 
+    Логика именно такая, как просил пользователь:
+      • в HTML есть ``tgme_page_title``           → **taken** (есть карточка);
+      • элемента нет → страница-заглушка          → **free** (свободен);
+      • любая ошибка / таймаут / не-200 / не-html → **taken** (страховка).
 
-async def is_username_truly_free(*args, **kwargs):
-    return False
+    Возвращает строку "free" или "taken".
+    """
+    u = (u or "").strip().replace("@", "").lower()
+    if not is_valid_telegram_profile_username(u):
+        return "taken"
+    if http_session is None:
+        return "taken"
 
-
-async def is_username_free(u: str, uid=None):
-    u = u.lower().replace("@", "").strip()
-
-    if len(u) != 5:
-        return False
-
-    if not u.isalpha():
-        return False
+    url = f"https://t.me/{u}"
+    headers = {
+        "User-Agent": random.choice(_TME_USER_AGENTS),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
 
     try:
-        await bot.get_chat(f"@{u}")
-        return False
+        async with http_session.get(
+            url,
+            timeout=aiohttp.ClientTimeout(total=10),
+            headers=headers,
+            allow_redirects=True,
+        ) as resp:
+            if resp.status != 200:
+                log_event("tme", f"@{u} HTTP {resp.status} → taken", logging.DEBUG)
+                return "taken"
+            html_text = await resp.text(errors="ignore")
+    except asyncio.TimeoutError:
+        log_event("tme", f"@{u} timeout → taken", logging.DEBUG)
+        return "taken"
+    except Exception as e:
+        log_event("tme", f"@{u} error {e} → taken", logging.DEBUG)
+        return "taken"
 
-    except TelegramBadRequest as e:
-        text = str(e).lower()
-
-        if "chat not found" in text:
-            return True
-
-        return False
-
-    except:
-        return False
+    return "taken" if 'tgme_page_title' in html_text else "free"
 
 
-async def get_rechecked_cached_free(*args, **kwargs):
-    return False
+async def is_username_free(u: str, uid=None) -> bool:
+    """True только когда t.me-страница не содержит ``tgme_page_title``."""
+    return await check_username_tme(u) == "free"
 
+
+async def get_rechecked_cached_free(mode, count):
+    cached = await get_cached_free(mode, max(count * 3, count))
+    validate_func = SEARCH_MODES.get(mode, {}).get("validate", is_valid_username)
+    found = []
+    rejected = []
+    for u in cached:
+        u = (u or "").strip().replace("@", "").lower()
+        if validate_func(u) and await is_username_free(u):
+            found.append({"username": u, "fragment": "unavailable"})
+            if len(found) >= count:
+                break
+        else:
+            rejected.append(u)
+    if rejected:
+        logger.info(f"Rejected stale cache for mode={mode}: {len(rejected)}")
+    return found
 
 async def check_subscribed(uid):
     if uid in ADMIN_IDS or not REQUIRED_CHANNELS: return []
@@ -1426,111 +1149,131 @@ def evaluate_username(u):
     filled=min(score//20,10)
     return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
 
-async def do_search(count, gen_func, msg, title, uid, mode, session):
+async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
+    """
+    Точный тихий поиск через GET https://t.me/<username>.
 
-    # ===== Берём из кэша =====
-    while cached and len(found) < count:
-        user_entry = cached.pop(0)
-        username = user_entry['username']
-        found.append({'username': username, 'fragment':'unavailable'})
+    Правило проверки:
+    - tgme_page_title или already taken / available for purchase -> занят;
+    - нет признаков занятого username -> свободен;
+    - любая ошибка/таймаут/не-200 -> занят.
 
-    # ===== Догенерация =====
-    while len(found) < count and attempts < max_attempts:
-        username = gen_func()
-        if not username:
-            attempts += 1
+    Консоль не спамит каждой проверкой. Пишет только:
+    - что взяло из кэша;
+    - что занесло в кэш;
+    - короткий итог, сколько не вошло в кэш/выдачу.
+    """
+    found = []
+    start = time.time()
+    attempts = 0
+    last_edit = 0
+    cache_used = 0
+    cache_rejected = 0
+    generated_rejected = 0
+    cached_new = 0
+
+    validate_func = SEARCH_MODES.get(mode_key, {}).get("validate", is_valid_username)
+    checked = set()
+    mode_label = "beautiful" if mode_key == "beautiful" else "default"
+
+    log_event("search", f"▶  start mode={mode_label} uid={uid} need={count}")
+
+    # 1) Берём старый кэш, но перед выдачей перепроверяем через t.me.
+    cached = await get_cached_free(mode_key, max(count * 5, 20))
+    for raw in cached:
+        if len(found) >= count:
+            break
+
+        u = (raw or "").strip().replace("@", "").lower()
+        if not validate_func(u) or u in checked:
+            cache_rejected += 1
             continue
 
-        # Можно добавить префиксы/суффиксы
-        pre_suf_list = ['pro','x','yz','_','best','01','123']
-        username = (random.choice(pre_suf_list) + username).lower()
-
-        if username in checked:
-            attempts += 1
-            continue
-        checked.add(username)
+        checked.add(u)
         attempts += 1
 
-        # ===== Telethon проверка =====
-        status = await check_username_selected(username, uid)
+        status = await check_username_tme(u)
+        if status == "free":
+            found.append({"username": u, "fragment": "unavailable"})
+            save_history(uid, u, mode_name, len(u))
+            cache_used += 1
+            log_event("cache", f"💾 hit  @{u} ({mode_label})")
+        else:
+            cache_rejected += 1
 
-        if status != "free":
+        await asyncio.sleep(0.08)
+
+    if cache_rejected:
+        log_event("cache", f"🗑  stale dropped: {cache_rejected} ({mode_label})", logging.DEBUG)
+
+    # 2) Если кэша не хватило — генерируем и проверяем тем же методом.
+    max_attempts = 10000
+    while len(found) < count and attempts < max_attempts:
+        u = None
+        for _ in range(40):
+            c = gen_func()
+            c = (c or "").lower()
+            if c and c not in checked and c.isalpha() and validate_func(c):
+                u = c
+                break
+
+        if not u:
+            attempts += 1
+            generated_rejected += 1
             continue
 
-        # ===== Fragment проверка =====
-        fragment_status = await session.check_fragment(username)
-        if fragment_status != 'unavailable':
-            continue
+        checked.add(u)
+        attempts += 1
+        status = await check_username_tme(u)
 
-        # ===== Добавляем в результат и кэш =====
-        found.append({'username': username, 'fragment':'unavailable'})
-        cache_entry = {'username': username, 'ts': time.time()}
-        cache_data[mode].append(cache_entry)
+        if status == "free":
+            found.append({"username": u, "fragment": "unavailable"})
+            save_history(uid, u, mode_name, len(u))
+            await add_free_cache([u], mode_key)
+            cached_new += 1
+            log_event("cache", f"✨ add  @{u} ({mode_label})")
+        else:
+            generated_rejected += 1
 
-        # ===== Обновление UI =====
-        try:
-            await msg.edit_text(
-                f"🔍 <b>{title}</b>\n\n📊 Проверено: <code>{attempts}</code>\n✅ Найдено: <code>{len(found)}/{count}</code>",
-                parse_mode='HTML'
-            )
-        except:
-            pass
+        now = time.time()
+        if msg and now - last_edit > 4:
+            last_edit = now
+            pct = min(len(found) / max(count, 1), 1.0)
+            filled = int(pct * 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            try:
+                await edit_msg(
+                    msg,
+                    f"🔍 <b>{mode_name}</b>\n\n"
+                    f"[{bar}] {int(pct * 100)}%\n\n"
+                    f"✅ Найдено: <code>{len(found)}/{count}</code>\n"
+                    f"📊 Проверено: <code>{attempts}</code>\n"
+                    f"⏱ <code>{int(now - start)}с</code>"
+                )
+            except Exception:
+                pass
 
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.12)
 
-    # Сохраняем кэш
-    try:
-        with open(CACHE_FILE,'w',encoding='utf-8') as f:
-            json.dump(cache_data,f,ensure_ascii=False,indent=2)
-    except Exception as e:
-        logging.error(f'[CACHE SAVE] {e}')
-
-    elapsed = round(time.time() - start,1)
-    stats = {'attempts': attempts, 'elapsed': elapsed}
-    return found, stats
-
-
-
-async def toggle_checker_mode(chat_id, use_sessions: bool):
-    """
-    Переключение режима проверки username.
-    """
-
-    global CHECKER_MODE
-
-    config = load_bot_config()
-
-    config["checker_mode"] = (
-        "session"
-        if use_sessions else
-        "botapi"
+    elapsed = int(time.time() - start)
+    if generated_rejected:
+        log_event("search", f"⏭  rejected (taken): {generated_rejected} ({mode_label})", logging.DEBUG)
+    log_event(
+        "search",
+        f"✅ done mode={mode_label} found={len(found)}/{count} "
+        f"checked={attempts} hit={cache_used} add={cached_new} "
+        f"elapsed={elapsed}s",
     )
 
-    save_bot_config(config)
-    apply_config(config)
+    return found, {"attempts": attempts, "elapsed": elapsed}
 
-    CHECKER_MODE = config["checker_mode"]
-
-    if use_sessions and pool and pool.has_sessions():
-        try:
-            await pool.init()
-        except Exception:
-            pass
-
-    mode_name = (
-        "Telethon-сессии"
-        if use_sessions else
-        "Bot API + t.me"
-    )
-
-    await bot.send_message(
-        chat_id,
-        f"✅ Режим поиска сменён: {mode_name}"
-    )
-
+# ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
 
 def init_db():
     conn = sqlite3.connect(DB); c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS free_cache (
+        username TEXT PRIMARY KEY, checked_at TEXT, mode TEXT, length INTEGER DEFAULT 5
+    )""")
     c.execute("""CREATE TABLE IF NOT EXISTS users (
         uid INTEGER PRIMARY KEY, uname TEXT DEFAULT '', joined TEXT DEFAULT '',
         free INTEGER DEFAULT 3, searches INTEGER DEFAULT 0, sub_end TEXT DEFAULT '',
@@ -1708,7 +1451,7 @@ async def save_cache(data):
             json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-async def REMOVED_get_cached_free(mode, count):
+async def get_cached_free(mode, count):
     data = await load_cache()
 
     if mode not in data:
@@ -1722,23 +1465,8 @@ async def REMOVED_get_cached_free(mode, count):
     return usernames
 
 
-async def REMOVED_add_free_cache(usernames, mode):
+async def add_free_cache(usernames, mode):
     if not usernames:
-        return
-
-    # Финальный рубеж: в кэш «свободных» попадают только те юзы,
-    # которые в принципе можно поставить в профиль (формат, blacklist,
-    # INVALID_WORDS). Сетевые проверки уже были сделаны выше по стеку,
-    # здесь — последний синхронный фильтр от мусора.
-    filtered = []
-    for u in usernames:
-        if not u:
-            continue
-        u = u.strip().replace("@", "").lower()
-        if is_username_settable_in_profile(u):
-            filtered.append(u)
-
-    if not filtered:
         return
 
     data = await load_cache()
@@ -1748,12 +1476,14 @@ async def REMOVED_add_free_cache(usernames, mode):
 
     existing = set(data[mode])
 
-    for u in filtered:
+    for u in usernames:
+        u = u.lower()
+
         if u not in existing:
             data[mode].append(u)
             existing.add(u)
 
-    ##random.shuffle(data[mode])
+    random.shuffle(data[mode])
 
     data[mode] = data[mode][:10000]
 
@@ -4271,7 +4001,7 @@ async def register_handlers(dp: Dispatcher):
             for e in ["🎡","🔄","💫","🌟","✨","🎯"]:
                 try: await bot.send_message(uid, f"{e} Крутим...")
                 except: break
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.3)
             await msg.answer(f"🎡 <b>{prize}</b>", parse_mode="HTML")
             await notify_admins(f"🎡 <b>КОЛЕСО</b>\n👤 {display}\n🎁 {prize}\n⭐ {WHEEL_EXTRA_PRICE}⭐")
 
@@ -4282,7 +4012,7 @@ async def register_handlers(dp: Dispatcher):
             for e in ["📦","🔍","🎰","🌟","✨"]:
                 try: await bot.send_message(uid, f"{e}")
                 except: break
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.3)
             await msg.answer(f"🎉 <b>{prize}</b>", parse_mode="HTML")
             await notify_admins(f"📦 <b>ЛУТБОКС</b>\n👤 {display}\n🎁 {prize}\n⭐ {LOOTBOX_PRICE}⭐")
 
@@ -4801,144 +4531,9 @@ async def register_handlers(dp: Dispatcher):
                 await msg.answer("❌ Код уже существует")
             return
 
-        if action == "admin_add_session_api_id":
-            try:
-                api_id = int(msg.text.strip())
-            except ValueError:
-                await msg.answer("❌ API ID должен быть числом. Попробуйте ещё раз:")
-                return
-            user_states[uid] = {"action": "admin_add_session_api_hash", "api_id": api_id}
-            await msg.answer("✅ API ID принят.\n\nШаг 2/3: Отправьте <b>API Hash</b>", parse_mode="HTML")
-            return
-
-        if action == "admin_add_session_api_hash":
-            api_hash = msg.text.strip()
-            if len(api_hash) < 10:
-                await msg.answer("❌ API Hash слишком короткий. Попробуйте ещё раз:")
-                return
-            user_states[uid] = {
-                "action": "admin_add_session_phone",
-                "api_id": state["api_id"],
-                "api_hash": api_hash
-            }
-            await msg.answer("✅ API Hash принят.\n\nШаг 3/3: Отправьте <b>номер телефона</b> (с +)", parse_mode="HTML")
-            return
-
-        if action == "admin_add_session_phone":
-            phone = msg.text.strip()
-            api_id = state["api_id"]
-            api_hash = state["api_hash"]
+        if action in ("admin_add_session_api_id", "admin_add_session_api_hash", "admin_add_session_phone"):
             user_states.pop(uid, None)
-            session_name = f"session_{phone.replace('+', '').replace(' ', '')}"
-            session_path = os.path.join(SESSIONS_DIR, session_name)
-            if not HAS_TELETHON:
-                await msg.answer("❌ Telethon не установлен.")
-                return
-            try:
-                client = TelegramClient(session_path, api_id, api_hash)
-                await client.connect()
-                if not await client.is_user_authorized():
-                    await client.send_code_request(phone)
-                    user_states[uid] = {
-                        "action": "admin_add_session_code",
-                        "api_id": api_id,
-                        "api_hash": api_hash,
-                        "phone": phone,
-                        "session_name": session_name,
-                        "client": client,
-                    }
-                    await msg.answer("📲 Код отправлен! Введите код авторизации:")
-                else:
-                    # Уже авторизована
-                    sessions = load_saved_sessions()
-                    sessions.append([session_name, api_id, api_hash])
-                    save_sessions_config(sessions)
-                    ACCOUNTS.append((session_name, api_id, api_hash))
-                    pool.clients.append(client)
-                    pool.accounts.append((session_name, api_id, api_hash))
-                    idx = len(pool.clients) - 1
-                    pool.status[idx] = "active"
-                    pool.cooldown_until[idx] = 0
-                    pool.error_streak[idx] = 0
-                    pool.last_used[idx] = 0
-                    me = await client.get_me()
-                    uname = me.username or me.phone or "?"
-                    log_action(uid, "add_session", session_name)
-                    await msg.answer(f"✅ Сессия <b>{uname}</b> добавлена и активна!", parse_mode="HTML")
-            except Exception as e:
-                await msg.answer(f"❌ Ошибка: {e}")
-            return
-
-        if action == "admin_add_session_code":
-            code = msg.text.strip().replace(" ", "").replace("-", "")
-            client = state.get("client")
-            phone = state.get("phone")
-            api_id = state.get("api_id")
-            api_hash = state.get("api_hash")
-            session_name = state.get("session_name")
-            user_states.pop(uid, None)
-            if not client:
-                await msg.answer("❌ Сессия потеряна, начните заново.")
-                return
-            try:
-                await client.sign_in(phone, code)
-                sessions = load_saved_sessions()
-                sessions.append([session_name, api_id, api_hash])
-                save_sessions_config(sessions)
-                ACCOUNTS.append((session_name, api_id, api_hash))
-                pool.clients.append(client)
-                pool.accounts.append((session_name, api_id, api_hash))
-                idx = len(pool.clients) - 1
-                pool.status[idx] = "active"
-                pool.cooldown_until[idx] = 0
-                pool.error_streak[idx] = 0
-                pool.last_used[idx] = 0
-                me = await client.get_me()
-                uname = me.username or me.phone or "?"
-                log_action(uid, "add_session", session_name)
-                await msg.answer(f"✅ Сессия <b>{uname}</b> авторизована и добавлена!", parse_mode="HTML")
-            except errors.SessionPasswordNeededError:
-                user_states[uid] = {
-                    "action": "admin_add_session_2fa",
-                    "client": client,
-                    "api_id": api_id,
-                    "api_hash": api_hash,
-                    "session_name": session_name,
-                }
-                await msg.answer("🔐 Аккаунт с 2FA. Введите пароль:")
-            except Exception as e:
-                await msg.answer(f"❌ Ошибка авторизации: {e}")
-            return
-
-        if action == "admin_add_session_2fa":
-            password = msg.text.strip()
-            client = state.get("client")
-            api_id = state.get("api_id")
-            api_hash = state.get("api_hash")
-            session_name = state.get("session_name")
-            user_states.pop(uid, None)
-            if not client:
-                await msg.answer("❌ Сессия потеряна, начните заново.")
-                return
-            try:
-                await client.sign_in(password=password)
-                sessions = load_saved_sessions()
-                sessions.append([session_name, api_id, api_hash])
-                save_sessions_config(sessions)
-                ACCOUNTS.append((session_name, api_id, api_hash))
-                pool.clients.append(client)
-                pool.accounts.append((session_name, api_id, api_hash))
-                idx = len(pool.clients) - 1
-                pool.status[idx] = "active"
-                pool.cooldown_until[idx] = 0
-                pool.error_streak[idx] = 0
-                pool.last_used[idx] = 0
-                me = await client.get_me()
-                uname = me.username or me.phone or "?"
-                log_action(uid, "add_session", session_name)
-                await msg.answer(f"✅ Сессия <b>{uname}</b> авторизована и добавлена!", parse_mode="HTML")
-            except Exception as e:
-                await msg.answer(f"❌ Ошибка 2FA: {e}")
+            await msg.answer("⚡ User-сессии удалены. Бот работает только в публичном строгом режиме.")
             return
 
         if action=="admin_refs_check_input":
@@ -5098,17 +4693,15 @@ async def register_handlers(dp: Dispatcher):
         ps = pool.stats()
         detail = pool.detailed_status()
 
-        mode = "🟢 Сессии + t.me + Bot API" if pool.has_sessions() else "🔴 t.me + Bot API (без сессий)"
         text = (
-            f"⚡ <b>{mode}</b>\n\n"
-            f"🔢 Проверок: <code>{ps['checks']}</code>\n"
-            f"🔑 Через сессии: <code>{ps.get('session_checks', 0)}</code>\n"
-            f"🛡 Перехвачено ложных: <code>{ps.get('recheck_saves', 0)}</code>\n\n"
+            "⚡ <b>Публичная строгая проверка</b>\n\n"
+            "User-сессии и Telethon-пул отключены полностью.\n"
+            "Поиск использует только t.me, Bot API getChat и Fragment.\n\n"
+            f"🔢 Проверок: <code>{ps['checks']}</code>\n\n"
             f"<pre>{detail}</pre>"
         )
 
         kb = InlineKeyboardBuilder()
-        kb.button(text="➕ Добавить сессию", callback_data="a_add_session")
         kb.button(text="🔄 Обновить", callback_data="adm_sessions")
         kb.button(text="🔙 Админ", callback_data="cmd_admin")
         kb.adjust(1)
@@ -5322,19 +4915,13 @@ async def register_handlers(dp: Dispatcher):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
         ps = pool.stats(); detail = pool.detailed_status()
-        mode = "🟢 Сессии" if pool.has_sessions() else "🔴 Без сессий"
         text = (
-            f"⚡ <b>{mode}</b>\n\n"
-            f"📊 Проверок: <code>{ps['checks']}</code>\n"
-            f"🔑 Через сессии: <code>{ps.get('session_checks', 0)}</code>\n"
-            f"🛡 Перехвачено: <code>{ps.get('recheck_saves', 0)}</code>\n\n"
+            "⚡ <b>Без user-сессий</b>\n\n"
+            f"📊 Проверок: <code>{ps['checks']}</code>\n\n"
             f"<pre>{detail}</pre>"
         )
         kb = InlineKeyboardBuilder()
-        kb.button(text="➕ Добавить сессию", callback_data="a_add_session")
         kb.button(text="🔄 Обновить", callback_data="a_sessions")
-        if pool.has_sessions():
-            kb.button(text="🔄 Переподключить все", callback_data="a_reconnect_all")
         kb.button(text="🔙", callback_data="cmd_admin")
         kb.adjust(1)
         await edit_msg(cb.message, text, kb.as_markup())
@@ -5375,18 +4962,8 @@ async def register_handlers(dp: Dispatcher):
     async def cb_add_sess(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
-        if not HAS_TELETHON:
-            kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="a_sessions")
-            await edit_msg(cb.message, "⚠️ <b>Telethon не установлен.</b>\n\nВыполните: <code>pip install telethon</code>", kb.as_markup())
-            return
-        user_states[cb.from_user.id] = {"action": "admin_add_session_api_id"}
-        kb = InlineKeyboardBuilder(); kb.button(text="❌ Отмена", callback_data="a_sessions")
-        await edit_msg(cb.message,
-            "➕ <b>Добавление сессии</b>\n\n"
-            "Шаг 1/3: Отправьте <b>API ID</b>\n"
-            "(получить на https://my.telegram.org)",
-            kb.as_markup()
-        )
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="a_sessions")
+        await edit_msg(cb.message, "⚡ <b>User-сессии удалены. Добавление аккаунтов отключено.</b>", kb.as_markup())
 
     @dp.callback_query(F.data == "a_keys")
     async def cb_akeys(cb: CallbackQuery):
@@ -6140,25 +5717,9 @@ async def monitor_loop():
         await asyncio.sleep(MONITOR_CHECK_INTERVAL)
 
 async def session_watchdog():
-    """Периодическая проверка здоровья сессий и автореконнект."""
+    # User-сессии удалены; watchdog оставлен как пустой фоновой таск для совместимости.
     while True:
-        try:
-            if pool and pool.clients:
-                now = time.time()
-                for i in range(len(pool.clients)):
-                    st = pool.status.get(i)
-                    # Снять cooldown если время прошло
-                    if st == "cooldown" and now >= pool.cooldown_until.get(i, 0):
-                        pool.status[i] = "active"
-                        pool.cooldown_until[i] = 0
-                        log_event("bot", f"🔄 Сессия #{i} вышла из cooldown")
-                    # Попробовать переподключить мёртвые
-                    if st == "dead":
-                        await pool._try_reconnect(i)
-                        await asyncio.sleep(5)
-        except Exception as e:
-            logger.debug(f"[watchdog] {e}")
-        await asyncio.sleep(300)  # каждые 5 минут
+        await asyncio.sleep(3600)
 
 async def daily_report_loop():
     while True:
@@ -6180,20 +5741,13 @@ async def daily_report_loop():
         await asyncio.sleep(60)
 
 async def cache_warmer_check_username(u: str) -> bool:
-    """
-    Кэш наполняется только username, которые прошли полную строгую проверку:
-    формат + blacklist + INVALID_WORDS + t.me (нет tgme_page_title)
-    + Bot API getChat (явное chat not found)
-    + Telethon session CheckUsernameRequest (если сессии доступны).
-    """
+    """Кэш наполняется только username, которые прошли строгий t.me-check."""
     u = (u or "").strip().replace("@", "").lower()
-    if not is_username_settable_in_profile(u):
+    if not is_valid_telegram_profile_username(u):
         return False
-
-    # Фильтр некорректных / shadowban username
-    if not is_natural_username(u):
+    if is_blacklisted(u):
         return False
-    return await is_username_truly_free(u)
+    return await check_username_tme(u) == "free"
 
 
 async def free_cache_warmer_loop():
@@ -6236,13 +5790,13 @@ async def free_cache_warmer_loop():
                     attempts += 1
                     try:
                         if await cache_warmer_check_username(u):
-                            await REMOVED_add_free_cache([u], mode_key)
+                            await add_free_cache([u], mode_key)
                             added.append(u)
                             log_event("warmer", f"✨ +@{u} ({mode_key})", logging.DEBUG)
                     except Exception:
                         pass
 
-                    await asyncio.sleep(0.35)
+                    await asyncio.sleep(0.12)
 
                 if added:
                     total_now = await get_free_cache_count(mode_key)
@@ -6285,21 +5839,12 @@ async def main():
         for k,v in config["prices"].items():
             if k in PRICES: PRICES[k]["stars"]=v
     bot_info=await bot.get_me(); http_session=aiohttp.ClientSession()
-
-    # Загружаем сохранённые сессии и подключаем Telethon
-    saved = load_saved_sessions()
-    for s in saved:
-        if isinstance(s, (list, tuple)) and len(s) >= 3:
-            ACCOUNTS.append(tuple(s[:3]))
-    await pool.init(ACCOUNTS)
-
+    # User-сессии не подключаются: проверка работает через t.me + Bot API getChat + Fragment.
     await register_handlers(dp)
-    check_mode = "sessions + t.me + Bot API" if pool.has_sessions() else "t.me + Bot API (без сессий)"
     log_banner([
-        "USERNAME HUNTER  ·  v25.2",
+        "USERNAME HUNTER  ·  v25.1",
         f"bot: @{bot_info.username}",
-        f"check: {check_mode}",
-        f"sessions: {pool.stats()['active']}/{pool.stats()['total']}",
+        "check: GET t.me + tgme_page_title",
         f"db:    {DB}",
         f"cache: {CACHE_FILE}",
     ])
@@ -6318,4 +5863,3 @@ async def main():
 
 if __name__=="__main__":
     asyncio.run(main())
-
