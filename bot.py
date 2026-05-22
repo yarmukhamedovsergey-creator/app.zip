@@ -484,10 +484,10 @@ def is_button_enabled(name):
     return load_bot_config().get(f"btn_{name}", True)
 
 def get_checker_mode():
-    return "botapi"
+    return CHECKER_MODE
 
 def is_sessions_checker():
-    return False
+    return CHECKER_MODE == "session"
 
 # ═══════════════════════ RATE LIMITER (ОТКЛЮЧЁН) ═══════════════════════
 
@@ -998,7 +998,9 @@ async def do_word_search(word, count, msg, uid):
 
             attempts += 1
 
-            if await is_username_free(u, uid):
+            status = await check_username_selected(u, uid)
+
+            if status == "free":
                 fragment_status = await check_fragment(u)
 
                 if fragment_status != "unavailable":
@@ -1295,13 +1297,53 @@ async def public_username_status(*args, **kwargs):
 
 
 async def check_username(u: str) -> str:
-    """Публичный строгий статус username без Telethon/user-сессий."""
+    """
+    Базовая проверка через Bot API.
+    """
     u = (u or "").strip().replace("@", "").lower()
+
+    if not is_username_settable_in_profile(u):
+        return "taken"
+
     try:
-        return await public_username_status(u)
-    except Exception as e:
-        logger.debug(f"[check_username] @{u}: {e}")
-        return "unknown"
+        await bot.get_chat(f"@{u}")
+        return "taken"
+
+    except TelegramBadRequest as e:
+        text = str(e).lower()
+
+        if "chat not found" in text:
+            return "free"
+
+        return "taken"
+
+    except Exception:
+        return "skip"
+
+
+async def check_username_selected(u: str, uid=None):
+    """
+    Универсальный роутер проверки username.
+    checker_mode=session  -> Telethon
+    checker_mode=botapi   -> Bot API
+    """
+
+    u = (u or "").strip().replace("@", "").lower()
+
+    if not u:
+        return "skip"
+
+    if CHECKER_MODE == "session" and pool and pool.has_sessions():
+
+        result = await pool.check_username_via_session(u)
+
+        # fallback на Bot API
+        if result == "skip":
+            return await check_username(u)
+
+        return result
+
+    return await check_username(u)
         
 async def check_fragment(u: str) -> str:
     return "unavailable"
@@ -1410,8 +1452,9 @@ async def do_search(count, gen_func, msg, title, uid, mode, session):
         attempts += 1
 
         # ===== Telethon проверка =====
-        free = await session.is_username_free(username, uid)
-        if not free:
+        status = await check_username_selected(username, uid)
+
+        if status != "free":
             continue
 
         # ===== Fragment проверка =====
@@ -1445,6 +1488,45 @@ async def do_search(count, gen_func, msg, title, uid, mode, session):
     elapsed = round(time.time() - start,1)
     stats = {'attempts': attempts, 'elapsed': elapsed}
     return found, stats
+
+
+
+async def toggle_checker_mode(chat_id, use_sessions: bool):
+    """
+    Переключение режима проверки username.
+    """
+
+    global CHECKER_MODE
+
+    config = load_bot_config()
+
+    config["checker_mode"] = (
+        "session"
+        if use_sessions else
+        "botapi"
+    )
+
+    save_bot_config(config)
+    apply_config(config)
+
+    CHECKER_MODE = config["checker_mode"]
+
+    if use_sessions and pool and pool.has_sessions():
+        try:
+            await pool.init()
+        except Exception:
+            pass
+
+    mode_name = (
+        "Telethon-сессии"
+        if use_sessions else
+        "Bot API + t.me"
+    )
+
+    await bot.send_message(
+        chat_id,
+        f"✅ Режим поиска сменён: {mode_name}"
+    )
 
 
 def init_db():
