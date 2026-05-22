@@ -1,5 +1,5 @@
 """
-USERNAME HUNTER v67 — VIP + Тематический поиск + проверка через сессии
+USERNAME HUNTER v68 — VIP + Тематический поиск + проверка через сессии
 Проверка занятости (строгий многоисточниковый чекер):
   • формат + длина + INVALID_WORDS + blacklist;
   • GET https://t.me/<username> — нет tgme_page_title;
@@ -117,6 +117,25 @@ ADMIN_CONTACT = "emeuw"
 # session_name — имя файла .session в папке sessions/
 # Можно добавлять через админ-панель
 ACCOUNTS = []  # заполняется через админку или вручную
+
+
+search_sessions = []
+check_sessions = []
+
+def get_search_session():
+    if not search_sessions:
+        return None
+    s = search_sessions.pop(0)
+    search_sessions.append(s)
+    return s
+
+
+def get_check_session():
+    if not check_sessions:
+        return None
+    s = check_sessions.pop(0)
+    check_sessions.append(s)
+    return s
 SESSIONS_DIR = "sessions"
 
 
