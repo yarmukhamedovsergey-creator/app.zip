@@ -1386,11 +1386,10 @@ def evaluate_username(u):
 
 async def do_search(count, gen_func, msg, title, uid, mode):
     start = time.time()
-
     found = []
     checked = set()
     attempts = 0
-    max_attempts = 5000
+    max_attempts = 10000  # больше попыток для генерации
 
     config = load_bot_config()
     strict_cache_enabled = config.get("strict_cache_enabled", False)
@@ -1398,60 +1397,64 @@ async def do_search(count, gen_func, msg, title, uid, mode):
     # ===== КЭШ =====
     if strict_cache_enabled:
         try:
-            cache_data = await load_cache()
-            cached = cache_data.get(mode, [])
+            with open(f'free_usernames_tme_strict.json','r',encoding='utf-8') as f:
+                cache_data = json.load(f)
+        except:
+            cache_data = {}
 
-            while cached and len(found) < count:
-                username = cached.pop(0)
-                if not username:
-                    continue
-                username = username.lower()
-                found.append({"username": username, "fragment": "unavailable"})
+        cached = cache_data.get(mode, [])
+        while cached and len(found) < count:
+            username = cached.pop(0)
+            if not username:
+                continue
+            username = username.lower()
+            found.append({"username": username, "fragment": "unavailable"})
 
-            cache_data[mode] = cached
-            await save_cache(cache_data)
-        except Exception as e:
-            logger.error(f"[CACHE] {e}")
+        cache_data[mode] = cached
+        try:
+            with open(f'free_usernames_tme_strict.json','w',encoding='utf-8') as f:
+                json.dump(cache_data,f,ensure_ascii=False,indent=2)
+        except:
+            pass
 
     # ===== ДОГЕНЕРАЦИЯ =====
     while len(found) < count and attempts < max_attempts:
         try:
-            username = gen_func()
-            if not username:
-                continue
-            username = username.lower()
-            if username in checked:
+            # Генерация через разные комбинации
+            u = gen_func()
+            # Добавляем префиксы/суффиксы и цифры
+            pre_suf_list = ['pro','x','yz','_','best','01','123']
+            c = random.choice(pre_suf_list) + u
+            username = c.lower()
+
+            if username in checked or not username.isalpha():
+                attempts += 1
                 continue
             checked.add(username)
             attempts += 1
+
             if not is_valid_username(username):
                 continue
 
-            # ===== TELEGRAM CHECK =====
             free = await is_username_free(username, uid)
             if not free:
                 continue
 
-            # ===== FRAGMENT CHECK =====
-            fragment_status = await check_fragment(username)
-            if fragment_status != "unavailable":
-                continue
-
-            found.append({"username": username, "fragment": fragment_status})
-
+            found.append({"username": username, "fragment": "unavailable"})
             save_history(uid, username, mode, len(username))
 
             # ===== ДОБАВЛЕНИЕ В КЭШ =====
             if strict_cache_enabled:
                 try:
-                    cache_data = await load_cache()
+                    cache_data = cache_data if 'cache_data' in locals() else {}
                     if mode not in cache_data:
                         cache_data[mode] = []
                     if username not in cache_data[mode]:
                         cache_data[mode].append(username)
-                    await save_cache(cache_data)
+                    with open(f'free_usernames_tme_strict.json','w',encoding='utf-8') as f:
+                        json.dump(cache_data,f,ensure_ascii=False,indent=2)
                 except Exception as e:
-                    logger.error(f"[CACHE SAVE] {e}")
+                    logging.error(f'[CACHE SAVE] {e}')
 
             # ===== ОБНОВЛЕНИЕ UI =====
             try:
@@ -1462,18 +1465,13 @@ async def do_search(count, gen_func, msg, title, uid, mode):
             except:
                 pass
 
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.1)
         except Exception as e:
-            logger.error(f"[SEARCH LOOP] {e}")
+            logging.error(f"[SEARCH LOOP] {e}")
 
     elapsed = round(time.time() - start, 1)
     stats = {"attempts": attempts, "elapsed": elapsed}
     return found, stats
-
-
-
-async def check_from_cache(*args, **kwargs):
-    return False
 
 
 def init_db():
