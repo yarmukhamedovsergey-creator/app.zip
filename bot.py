@@ -1049,29 +1049,19 @@ _TME_USER_AGENTS = [
 ]
 
 async def check_username_tme(u: str) -> str:
-    """
-    Точная проверка занятости через GET ``https://t.me/<username>``.
-
-    Логика именно такая, как просил пользователь:
-      • в HTML есть ``tgme_page_title``           → **taken** (есть карточка);
-      • элемента нет → страница-заглушка          → **free** (свободен);
-      • любая ошибка / таймаут / не-200 / не-html → **taken** (страховка).
-
-    Возвращает строку "free" или "taken".
-    """
     u = (u or "").strip().replace("@", "").lower()
+
     if not is_valid_telegram_profile_username(u):
         return "taken"
+
     if http_session is None:
         return "taken"
 
     url = f"https://t.me/{u}"
+
     headers = {
         "User-Agent": random.choice(_TME_USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
-        "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
+        "Accept-Language": "en-US,en;q=0.9",
     }
 
     try:
@@ -1079,20 +1069,41 @@ async def check_username_tme(u: str) -> str:
             url,
             timeout=aiohttp.ClientTimeout(total=10),
             headers=headers,
-            allow_redirects=True,
+            allow_redirects=True
         ) as resp:
+
             if resp.status != 200:
-                log_event("tme", f"@{u} HTTP {resp.status} → taken", logging.DEBUG)
                 return "taken"
-            html_text = await resp.text(errors="ignore")
-    except asyncio.TimeoutError:
-        log_event("tme", f"@{u} timeout → taken", logging.DEBUG)
-        return "taken"
-    except Exception as e:
-        log_event("tme", f"@{u} error {e} → taken", logging.DEBUG)
+
+            text = (await resp.text()).lower()
+
+    except:
         return "taken"
 
-    return "taken" if 'tgme_page_title' in html_text else "free"
+    occupied_signs = [
+        "send message",
+        "view in telegram",
+        "tgme_page_title",
+        "if you have telegram",
+        "preview channel",
+        "preview group",
+    ]
+
+    for sign in occupied_signs:
+        if sign in text:
+            return "taken"
+
+    free_signs = [
+        "this channel cannot be displayed",
+        "username is not occupied",
+        "page is not available",
+    ]
+
+    for sign in free_signs:
+        if sign in text:
+            return "free"
+
+    return "taken"
 
 
 async def is_username_free(u: str, uid=None) -> bool:
