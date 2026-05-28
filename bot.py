@@ -1068,7 +1068,7 @@ async def check_username_tme(u: str) -> str:
     try:
         async with http_session.get(
             url,
-            timeout=aiohttp.ClientTimeout(total=6),
+            timeout=aiohttp.ClientTimeout(total=10),
             headers=headers,
             allow_redirects=True
         ) as resp:
@@ -1107,6 +1107,23 @@ async def check_username_tme(u: str) -> str:
     except Exception:
         return "unknown"
 
+async def reliable_check(u: str) -> bool:
+    free_votes = 0
+    taken_votes = 0
+
+    for _ in range(3):
+
+        status = await check_username_tme(u)
+
+        if status == "free":
+            free_votes += 1
+
+        elif status == "taken":
+            taken_votes += 1
+
+        await asyncio.sleep(1.3)
+
+    return free_votes >= 2 and taken_votes == 0
 
 async def is_username_free(u: str, uid=None) -> bool:
     """True только когда t.me-страница не содержит ``tgme_page_title``."""
@@ -1206,7 +1223,10 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
 
         status = await check_username_tme(u)
-        if status in ["free", "unknown"]:
+        ok = await reliable_check(username)
+
+    if ok:
+        found.append(username)
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
             cache_used += 1
@@ -1239,7 +1259,10 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
         status = await check_username_tme(u)
 
-        if status in ["free", "unknown"]:
+        ok = await reliable_check(username)
+
+    if ok:
+        found.append(username)
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
             await add_free_cache([u], mode_key)
