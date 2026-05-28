@@ -1,5 +1,5 @@
 """
-USERNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
+USE333RNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
 Проверка занятости: GET https://t.me/<username>; нет tgme_page_title → free.
 Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
 """
@@ -44,7 +44,7 @@ bot_info = None
 
 # ═══════════════════════ НАСТРОЙКИ ═══════════════════════
 
-MAIN_TOKEN = "8325751391:AAFGB3KV34DiOp_Z0HXg5nErgxwOk6XR3C4"
+MAIN_TOKEN = "8325751391:AAGoIqb0YvnXmFFjJCB0kX_wZ8HUvD53-Bg"
 ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "emeuw"
 
