@@ -1223,7 +1223,8 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
 
         status = await check_username_tme(u)
-        ok = await reliable_check(username)
+        ok = await reliable_check(u)
+        
         if ok:
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
@@ -1257,7 +1258,8 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
         status = await check_username_tme(u)
 
-        ok = await reliable_check(username)
+        ok = await reliable_check(u)
+        
         if ok:
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
