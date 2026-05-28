@@ -1055,61 +1055,63 @@ async def check_username_tme(u: str) -> str:
         return "taken"
 
     if http_session is None:
-        return "taken"
+        return "unknown"
 
     url = f"https://t.me/{u}"
 
     headers = {
         "User-Agent": random.choice(_TME_USER_AGENTS),
         "Accept-Language": "en-US,en;q=0.9",
+        "Cache-Control": "no-cache",
     }
 
     try:
         async with http_session.get(
             url,
-            timeout=aiohttp.ClientTimeout(total=10),
+            timeout=aiohttp.ClientTimeout(total=6),
             headers=headers,
             allow_redirects=True
         ) as resp:
 
-            if resp.status != 200:
-                return "taken"
+            text = (await resp.text(errors="ignore")).lower()
 
-            text = (await resp.text()).lower()
+            if resp.status == 404:
+                return "free"
 
-    except:
-        return "taken"
+            occupied = [
+                "view in telegram",
+                "send message",
+                "preview channel",
+                "preview group",
+            ]
 
-    occupied_signs = [
-        "send message",
-        "view in telegram",
-        "tgme_page_title",
-        "if you have telegram",
-        "preview channel",
-        "preview group",
-    ]
+            for sign in occupied:
+                if sign in text:
+                    return "taken"
 
-    for sign in occupied_signs:
-        if sign in text:
-            return "taken"
+            free_signs = [
+                "this page is not available",
+                "username is not occupied",
+                "page is not available",
+            ]
 
-    free_signs = [
-        "this channel cannot be displayed",
-        "username is not occupied",
-        "page is not available",
-    ]
+            for sign in free_signs:
+                if sign in text:
+                    return "free"
 
-    for sign in free_signs:
-        if sign in text:
-            return "free"
+            return "unknown"
 
-    return "taken"
+    except asyncio.TimeoutError:
+        return "unknown"
+
+    except Exception:
+        return "unknown"
 
 
 async def is_username_free(u: str, uid=None) -> bool:
     """True только когда t.me-страница не содержит ``tgme_page_title``."""
-    return await check_username_tme(u) == "free"
-
+    status = await check_username_tme(u)
+    return status in ["free", "unknown"]
 
 async def get_rechecked_cached_free(mode, count):
     cached = await get_cached_free(mode, max(count * 3, count))
@@ -1204,7 +1206,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
 
         status = await check_username_tme(u)
-        if status == "free":
+        if status in ["free", "unknown"]:
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
             cache_used += 1
@@ -1237,7 +1239,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
         status = await check_username_tme(u)
 
-        if status == "free":
+        if status in ["free", "unknown"]:
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
             await add_free_cache([u], mode_key)
