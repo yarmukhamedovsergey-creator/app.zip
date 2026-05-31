@@ -650,17 +650,17 @@ class AccountPool:
 
     async def _try_reconnect(self, i):
         """Попытка переподключить мёртвую сессию"""
-            try:
-                await self.clients[i].disconnect()
-                await self.clients[i].connect()
-                if await self.clients[i].is_user_authorized():
-                    self.status[i] = "active"
-                    self.cooldown_until[i] = 0
-                    return True
-            except:
-                pass
-            self.status[i] = "dead"
-            return False
+        try:                            # ← 4 пробела
+            await self.clients[i].disconnect()
+            await self.clients[i].connect()
+            if await self.clients[i].is_user_authorized():
+                self.status[i] = "active"
+                self.cooldown_until[i] = 0
+                return True
+        except:
+            pass
+        self.status[i] = "dead"
+        return False
     
     async def disconnect(self):
         for client in self.clients:
