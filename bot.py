@@ -36,7 +36,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 # Telethon полностью отключён: бот работает без user-сессий.
-HAS_TELETHON = False
+HAS_TELETHON = True
 
 pool = None
 http_session = None
@@ -477,47 +477,159 @@ def get_action_log(limit=50):
 # ═══════════════════════ ПУЛ АККАУНТОВ ═══════════════════════
 
 class AccountPool:
-    """Заглушка вместо Telethon-пула. В проекте нет user-сессий вообще."""
-
     def __init__(self):
-        self.clients = []
-        self.status = {}
-        self.cooldown_until = {}
+        self.clients = []          # список TelegramClient
+        self.status = {}           # 'active', 'warming', 'cooldown', 'dead'
+        self.cooldown_until = {}   # время до разбана
+        self.phone_numbers = []    # номера телефонов для каждого клиента
         self.total_checks = 0
         self.caught_by_botapi = 0
         self.caught_by_recheck = 0
         self.reconnect_count = 0
+        self.BASE_DELAY = 2.0
+        self.MAX_DELAY = 20.0
+        self.BUDGET_PER_MIN = 12
+        self.MAX_ERROR_STREAK = 3
+        self.FLOOD_REST_TIME = 600
+        self.WARMUP_EXTRA_DELAY = 10.0
 
     async def init(self, accounts=None):
-        logger.info("Public strict mode: Telethon sessions are disabled")
+        """Загрузить сессии из папки sessions/"""
+        if not os.path.exists("sessions"):
+            os.makedirs("sessions")
+        # Ищем .session файлы
+        session_files = [f for f in os.listdir("sessions") if f.endswith(".session")]
+        for sf in session_files:
+            phone = sf.replace(".session", "")
+            await self._add_client(phone)
+        logger.info(f"Загружено сессий: {len(self.clients)}")
+
+    async def _add_client(self, phone: str):
+        """Создать и авторизовать клиент по номеру телефона"""
+        if not phone.startswith("+"):
+            phone = "+" + phone
+        session_path = os.path.join("sessions", phone)
+        client = TelegramClient(session_path, API_ID, API_HASH)
+        await client.connect()
+        if not await client.is_user_authorized():
+            # Попросим код (но обычно сессия уже есть)
+            logger.warning(f"Сессия {phone} не авторизована, пропускаем")
+            return
+        self.clients.append(client)
+        self.phone_numbers.append(phone)
+        idx = len(self.clients) - 1
+        self.status[idx] = "active"
+        self.cooldown_until[idx] = 0
+        logger.info(f"Аккаунт {phone} добавлен, статус active")
+
+    async def add_new_account(self, phone: str, uid: int, bot_instance, step_callback):
+        """Диалог добавления нового аккаунта через бота (админ)"""
+        # Этот метод вызывается из callback a_add_session
+        # step_callback - функция для отправки сообщений пользователю
+        if phone in self.phone_numbers:
+            await step_callback("❌ Аккаунт уже есть")
+            return False
+        session_path = os.path.join("sessions", phone)
+        client = TelegramClient(session_path, API_ID, API_HASH)
+        await client.connect()
+        if await client.is_user_authorized():
+            self.clients.append(client)
+            self.phone_numbers.append(phone)
+            idx = len(self.clients) - 1
+            self.status[idx] = "active"
+            self.cooldown_until[idx] = 0
+            await step_callback(f"✅ Аккаунт {phone} уже авторизован и добавлен")
+            return True
+        # Запрос кода
+        try:
+            await client.send_code_request(phone)
+            await step_callback(f"📱 Код отправлен на {phone}\nВведите код подтверждения:")
+            # Ожидаем ответа пользователя в другом хендлере, сохраняем состояние
+            # Для простоты: передадим объект состояния в user_states
+            user_states[uid] = {"action": "session_code", "client": client, "phone": phone}
+            return None  # означает, что процесс не завершён
+        except Exception as e:
+            await step_callback(f"❌ Ошибка: {e}")
+            return False
+
+    async def finalize_add_account(self, uid, code, client, phone):
+        """Завершить добавление после ввода кода"""
+        try:
+            await client.sign_in(phone, code)
+            # Проверка 2FA
+            if hasattr(client, 'is_user_authorized') and not await client.is_user_authorized():
+                await bot.send_message(uid, "🔒 Требуется пароль 2FA. Введите пароль:")
+                user_states[uid] = {"action": "session_2fa", "client": client, "phone": phone}
+                return
+            self.clients.append(client)
+            self.phone_numbers.append(phone)
+            idx = len(self.clients) - 1
+            self.status[idx] = "active"
+            self.cooldown_until[idx] = 0
+            await bot.send_message(uid, f"✅ Аккаунт {phone} добавлен!")
+            logger.info(f"Новый аккаунт {phone} добавлен")
+        except Exception as e:
+            await bot.send_message(uid, f"❌ Ошибка авторизации: {e}")
 
     def has_sessions(self):
-        return False
+        return len(self.clients) > 0
 
-    async def check(self, u, uid=None):
+    async def _acquire(self, uid=None, timeout=0):
+        """Взять свободный клиент (активный, не в кд)"""
+        now = time.time()
+        for i in range(len(self.clients)):
+            if self.status.get(i) == "active" and self.cooldown_until.get(i, 0) <= now:
+                return i, self.clients[i]
+        return None, None
+
+    async def check(self, u: str, uid=None) -> str:
+        """Проверить username через любой доступный клиент"""
         self.total_checks += 1
+        idx, client = await self._acquire(uid)
+        if not client:
+            # Нет активного клиента – пробуем через botapi (но это не точно)
+            return await check_username_botapi(u)
         try:
-            return "free" if await is_username_free(u, uid) else "taken"
+            result = await client(CheckUsernameRequest(u))
+            # Обновляем статистику
+            self._ok(idx)
+            return "free" if result else "taken"
+        except errors.FloodWaitError as e:
+            self._err(idx, flood=True, secs=e.seconds)
+            logger.warning(f"Flood на аккаунте {self.phone_numbers[idx]}: {e.seconds}с")
+            return "unknown"
         except Exception as e:
-            logger.debug(f"[public-check] @{u}: {e}")
-            return "skip"
+            self._err(idx)
+            logger.error(f"Ошибка при проверке @{u}: {e}")
+            return "unknown"
 
-    async def strong_check(self, u, uid=None):
+    async def strong_check(self, u: str, uid=None) -> str:
+        """То же самое, что check"""
         return await self.check(u, uid)
 
-    def add_user(self, uid):
-        return None
+    def _ok(self, i):
+        self.status[i] = "active"
+        self.cooldown_until[i] = 0
 
-    def remove_user(self, uid):
-        return None
+    def _err(self, i, flood=False, secs=0):
+        if flood:
+            self.status[i] = "cooldown"
+            self.cooldown_until[i] = time.time() + secs
+        else:
+            self.status[i] = "dead"
+            self.cooldown_until[i] = time.time() + 300
 
     def stats(self):
+        active = sum(1 for s in self.status.values() if s == "active")
+        warming = sum(1 for s in self.status.values() if s == "warming")
+        cooldown = sum(1 for s in self.status.values() if s == "cooldown")
+        dead = sum(1 for s in self.status.values() if s == "dead")
         return {
-            "total": 0,
-            "active": 0,
-            "warming": 0,
-            "cooldown": 0,
-            "dead": 0,
+            "total": len(self.clients),
+            "active": active,
+            "warming": warming,
+            "cooldown": cooldown,
+            "dead": dead,
             "checks": self.total_checks,
             "errors": 0,
             "botapi_saves": self.caught_by_botapi,
@@ -526,22 +638,20 @@ class AccountPool:
         }
 
     def detailed_status(self):
-        return "User-сессии отключены. Проверка работает только публичными методами: t.me + Bot API + Fragment."
-
-    async def _try_reconnect(self, i):
-        return False
-
-    async def _acquire(self, uid=None, timeout=0):
-        return None, None
-
-    def _ok(self, i):
-        return None
-
-    def _err(self, i, flood=False, secs=0):
-        return None
+        lines = []
+        for i, phone in enumerate(self.phone_numbers):
+            status = self.status.get(i, "unknown")
+            cd = self.cooldown_until.get(i, 0)
+            cd_rem = max(0, int(cd - time.time())) if cd else 0
+            lines.append(f"{phone[:10]}... {status}" + (f" (ждёт {cd_rem}с)" if cd_rem else ""))
+        return "\n".join(lines) if lines else "Нет активных сессий"
 
     async def disconnect(self):
-        return None
+        for client in self.clients:
+            try:
+                await client.disconnect()
+            except:
+                pass
 
 
 # ═══════════════════════ ГЕНЕРАТОРЫ v5 ═══════════════════════
@@ -1049,63 +1159,8 @@ _TME_USER_AGENTS = [
 ]
 
 async def check_username_tme(u: str) -> str:
-    u = (u or "").strip().replace("@", "").lower()
-
-    if not is_valid_telegram_profile_username(u):
-        return "taken"
-
-    if http_session is None:
-        return "unknown"
-
-    url = f"https://t.me/{u}"
-
-    headers = {
-        "User-Agent": random.choice(_TME_USER_AGENTS),
-        "Accept-Language": "en-US,en;q=0.9",
-        "Cache-Control": "no-cache",
-    }
-
-    try:
-        async with http_session.get(
-            url,
-            timeout=aiohttp.ClientTimeout(total=10),
-            headers=headers,
-            allow_redirects=True
-        ) as resp:
-
-            text = (await resp.text(errors="ignore")).lower()
-
-            if resp.status == 404:
-                return "free"
-
-            occupied = [
-                "view in telegram",
-                "send message",
-                "preview channel",
-                "preview group",
-            ]
-
-            for sign in occupied:
-                if sign in text:
-                    return "taken"
-
-            free_signs = [
-                "this page is not available",
-                "username is not occupied",
-                "page is not available",
-            ]
-
-            for sign in free_signs:
-                if sign in text:
-                    return "free"
-
-            return "unknown"
-
-    except asyncio.TimeoutError:
-        return "unknown"
-
-    except Exception:
-        return "unknown"
+    # ОТКЛЮЧЕНО — используйте только сессии Telethon
+    return "unknown"
 
 async def reliable_check(u: str) -> bool:
     free_votes = 0
@@ -1126,9 +1181,19 @@ async def reliable_check(u: str) -> bool:
     return free_votes >= 2 and taken_votes == 0
 
 async def is_username_free(u: str, uid=None) -> bool:
-    """True только когда t.me-страница не содержит ``tgme_page_title``."""
-    status = await check_username_tme(u)
-    return status in ["free", "unknown"]
+    # 1. Быстрая проверка через t.me
+    tme_free = await check_username_tme(u) in ["free", "unknown"]
+    if not tme_free:
+        return False
+    # 2. Точная проверка через пул сессий (если доступен)
+    if pool and pool.has_sessions():
+        try:
+            result = await pool.check(u, uid)
+            return result == "free"
+        except Exception:
+            pass
+    # Если сессий нет или ошибка – доверяем t.me
+    return True
 
 async def get_rechecked_cached_free(mode, count):
     cached = await get_cached_free(mode, max(count * 3, count))
@@ -1222,8 +1287,8 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         checked.add(u)
         attempts += 1
 
-        status = await check_username_tme(u)
-        ok = await reliable_check(u)
+        status = await is_username_free(u)
+        ok = await is_username_free(u, uid)
         
         if ok:
             found.append({"username": u, "fragment": "unavailable"})
@@ -4614,6 +4679,73 @@ async def register_handlers(dp: Dispatcher):
             config["required_channels"]=channels; save_bot_config(config); apply_config(config)
             log_action(uid,"ch_add",ch); await msg.answer(f"✅ @{ch}"); return
 
+        if action == "admin_add_session_phone":
+            phone = msg.text.strip()
+            if not phone.startswith("+"):
+                phone = "+" + phone
+            # Вызываем метод пула
+            result = await pool.add_new_account(phone, uid, bot, lambda t: asyncio.create_task(msg.answer(t)))
+            if result is True:
+                # уже авторизован
+                user_states.pop(uid, None)
+                await cb_adm_sessions(msg)  # обновить админ-панель
+            elif result is False:
+                await msg.answer("❌ Ошибка")
+                user_states.pop(uid, None)
+    # если result is None – ждём код, состояние уже установлено в add_new_account
+            return
+
+        if action == "session_code":
+            code = msg.text.strip()
+            client = state.get("client")
+            phone = state.get("phone")
+            if not client:
+                await msg.answer("❌ Сессия потеряна")
+                user_states.pop(uid, None)
+                return
+            try:
+                await client.sign_in(phone, code)
+        # если запросит 2FA, то будет ошибка, обработаем ниже
+        # если успешно – завершаем
+                pool.clients.append(client)
+                pool.phone_numbers.append(phone)
+                idx = len(pool.clients) - 1
+                pool.status[idx] = "active"
+                pool.cooldown_until[idx] = 0
+                await msg.answer(f"✅ Аккаунт {phone} добавлен!")
+                user_states.pop(uid, None)
+                await cb_adm_sessions(msg)
+            except errors.SessionPasswordNeededError:
+                user_states[uid] = {"action": "session_2fa", "client": client, "phone": phone}
+                await msg.answer("🔒 Введите пароль двухфакторной аутентификации:")
+            except Exception as e:
+                await msg.answer(f"❌ Ошибка: {e}")
+                user_states.pop(uid, None)
+            return
+
+        if action == "session_2fa":
+            password = msg.text.strip()
+            client = state.get("client")
+            phone = state.get("phone")
+            if not client:
+                await msg.answer("❌ Ошибка")
+                user_states.pop(uid, None)
+                return
+            try:
+                await client.sign_in(password=password)
+                pool.clients.append(client)
+                pool.phone_numbers.append(phone)
+                idx = len(pool.clients) - 1
+                pool.status[idx] = "active"
+                pool.cooldown_until[idx] = 0
+                await msg.answer(f"✅ Аккаунт {phone} добавлен!")
+                user_states.pop(uid, None)
+                await cb_adm_sessions(msg)
+            except Exception as e:
+                await msg.answer(f"❌ Ошибка: {e}")
+                user_states.pop(uid, None)
+            return
+        
         # Дефолт
         ns=await check_subscribed(uid)
         if ns: t,k=build_sub_kb(ns)
@@ -4999,6 +5131,16 @@ async def register_handlers(dp: Dispatcher):
         kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="a_sessions")
         await edit_msg(cb.message, "⚡ <b>User-сессии удалены. Добавление аккаунтов отключено.</b>", kb.as_markup())
 
+    @dp.callback_query(F.data == "a_add_session")
+    async def cb_add_session(cb: CallbackQuery):
+        if cb.from_user.id not in ADMIN_IDS:
+            return
+        await answer_cb(cb)
+        user_states[cb.from_user.id] = {"action": "admin_add_session_phone"}
+        kb = InlineKeyboardBuilder()
+        kb.button(text="❌", callback_data="adm_sessions")
+        await edit_msg(cb.message, "📱 Введите номер телефона в формате +7XXXXXXXXXX:", kb.as_markup())
+    
     @dp.callback_query(F.data == "a_keys")
     async def cb_akeys(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
@@ -5867,7 +6009,7 @@ async def main():
     global http_session, bot_info, pool
     dp = Dispatcher()
     pool = AccountPool()
-    init_db(); setup_systemd()
+    init_db(); await pool.init(); setup_systemd()
     config=load_bot_config(); apply_config(config)
     if "prices" in config:
         for k,v in config["prices"].items():
