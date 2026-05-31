@@ -4947,19 +4947,19 @@ async def register_handlers(dp: Dispatcher):
 
         await edit_msg(cb.message, text, kb.as_markup())
 
-@dp.callback_query(F.data == "upload_session")
-async def cb_upload_session(cb: CallbackQuery):
-    if cb.from_user.id not in ADMIN_IDS:
-        await cb.answer("⛔ Нет прав", show_alert=True)
-        return
-    await cb.answer()
-    user_states[cb.from_user.id] = {"action": "waiting_session_file"}
-    await cb.message.edit_text(
-        "📤 Отправьте мне файл сессии (.session)\n\n"
-        "Файл должен быть создан заранее (например, через Telethon).\n"
-        "После загрузки я запрошу номер телефона для этого аккаунта.",
-        reply_markup=InlineKeyboardBuilder().button(text="❌ Отмена", callback_data="adm_sessions").as_markup()
-    )
+    @dp.callback_query(F.data == "upload_session")
+    async def cb_upload_session(cb: CallbackQuery):
+        if cb.from_user.id not in ADMIN_IDS:
+            await cb.answer("⛔ Нет прав", show_alert=True)
+            return
+        await cb.answer()
+        user_states[cb.from_user.id] = {"action": "waiting_session_file"}
+        await cb.message.edit_text(
+            "📤 Отправьте мне файл сессии (.session)\n\n"
+            "Файл должен быть создан заранее (например, через Telethon).\n"
+            "После загрузки я запрошу номер телефона для этого аккаунта.",
+            reply_markup=InlineKeyboardBuilder().button(text="❌ Отмена", callback_data="adm_sessions").as_markup()
+        )
         
     @dp.callback_query(F.data == "a_toggle_checker")
     async def cb_toggle_checker(cb: CallbackQuery):
