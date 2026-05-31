@@ -4943,6 +4943,7 @@ async def register_handlers(dp: Dispatcher):
         kb = InlineKeyboardBuilder()
         kb.button(text="🔄 Обновить", callback_data="adm_sessions")
         kb.button(text="📤 Загрузить сессию", callback_data="upload_session")
+        kb.button(text="➕ Добавить аккаунт", callback_data="a_add_session")
         kb.button(text="🔙 Админ", callback_data="cmd_admin")
 
         await edit_msg(cb.message, text, kb.as_markup())
