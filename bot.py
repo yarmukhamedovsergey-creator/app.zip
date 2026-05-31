@@ -10,6 +10,7 @@ import asyncio
 import random
 import logging
 import sqlite3
+import shutil
 import secrets
 import time
 import re
@@ -4186,6 +4187,34 @@ async def register_handlers(dp: Dispatcher):
             return
         await start_search(msg)
 
+    @dp.message(F.document)
+    async def handle_session_file(msg: Message):
+        uid = msg.from_user.id
+        if uid not in ADMIN_IDS:
+            await msg.answer("⛔ Нет прав")
+            return
+    
+        state = user_states.get(uid, {})
+        if state.get("action") != "waiting_session_file":
+            await msg.answer("❌ Сейчас не ожидается загрузка файла. Начните с кнопки '📤 Загрузить сессию' в админ-панели.")
+            return
+
+        doc = msg.document
+        if not doc.file_name.endswith(".session"):
+            await msg.answer("❌ Неверный формат. Нужен файл с расширением .session")
+            return
+
+        # Сохраняем временный файл
+        temp_path = f"temp_{uid}_{int(time.time())}.session"
+        await bot.download(doc, destination=temp_path)
+
+    # Запоминаем временный файл в состоянии
+        user_states[uid] = {
+            "action": "waiting_session_phone",
+            "temp_file": temp_path
+        }
+        await msg.answer("📱 Введите номер телефона этого аккаунта в формате +7XXXXXXXXXX")
+    
     @dp.message(F.text & ~F.text.startswith("/"))
     async def handle_text(msg: Message):
         uid = msg.from_user.id
@@ -4763,6 +4792,32 @@ async def register_handlers(dp: Dispatcher):
                 await msg.answer(f"❌ Ошибка: {e}")
                 user_states.pop(uid, None)
             return
+
+        if action == "waiting_session_phone":
+            phone = msg.text.strip()
+            if not phone.startswith("+"):
+                phone = "+" + phone
+            temp_file = state.get("temp_file")
+            if not temp_file or not os.path.exists(temp_file):
+                await msg.answer("❌ Временный файл потерян. Попробуйте заново.")
+                user_states.pop(uid, None)
+                return
+
+            # Перемещаем файл в папку sessions с правильным именем
+            os.makedirs("sessions", exist_ok=True)
+            dest_path = os.path.join("sessions", f"{phone}.session")
+            shutil.move(temp_file, dest_path)
+
+            # Добавляем клиент в пул (перезагружаем сессии)
+            await pool._add_client(phone)
+    
+            await msg.answer(f"✅ Сессия для {phone} успешно добавлена!")
+            user_states.pop(uid, None)
+    
+            # Обновляем админ-панель сессий
+            fake_cb = CallbackQuery(id="fake", from_user=msg.from_user, chat_instance="", data="adm_sessions", message=msg)
+            await cb_adm_sessions(fake_cb)
+            return
         
         # Дефолт
         ns=await check_subscribed(uid)
@@ -4887,11 +4942,25 @@ async def register_handlers(dp: Dispatcher):
 
         kb = InlineKeyboardBuilder()
         kb.button(text="🔄 Обновить", callback_data="adm_sessions")
+        kb.button(text="📤 Загрузить сессию", callback_data="upload_session")
         kb.button(text="🔙 Админ", callback_data="cmd_admin")
-        kb.adjust(1)
 
         await edit_msg(cb.message, text, kb.as_markup())
 
+@dp.callback_query(F.data == "upload_session")
+async def cb_upload_session(cb: CallbackQuery):
+    if cb.from_user.id not in ADMIN_IDS:
+        await cb.answer("⛔ Нет прав", show_alert=True)
+        return
+    await cb.answer()
+    user_states[cb.from_user.id] = {"action": "waiting_session_file"}
+    await cb.message.edit_text(
+        "📤 Отправьте мне файл сессии (.session)\n\n"
+        "Файл должен быть создан заранее (например, через Telethon).\n"
+        "После загрузки я запрошу номер телефона для этого аккаунта.",
+        reply_markup=InlineKeyboardBuilder().button(text="❌ Отмена", callback_data="adm_sessions").as_markup()
+    )
+        
     @dp.callback_query(F.data == "a_toggle_checker")
     async def cb_toggle_checker(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS:
