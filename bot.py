@@ -4674,11 +4674,6 @@ async def register_handlers(dp: Dispatcher):
                 await msg.answer("❌ Код уже существует")
             return
 
-        if action in ("admin_add_session_api_id", "admin_add_session_api_hash", "admin_add_session_phone"):
-            user_states.pop(uid, None)
-            await msg.answer("⚡ User-сессии удалены. Бот работает только в публичном строгом режиме.")
-            return
-
         if action=="admin_refs_check_input":
             user_states.pop(uid,None); target=find_user(msg.text.strip())
             if not target: await msg.answer("❌"); return
