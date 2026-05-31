@@ -1,24 +1,15 @@
-﻿#!/usr/bin/env python3
-import subprocess, sys, os
+import asyncio
+from telethon import TelegramClient
 
-BOT_PATH='/root/bot.py'
-VENV_PATH='/root/venv/bin/activate'
+API_ID = 2040          # твой api_id
+API_HASH = 'b18441a1ff607e10a989891a5462e627'
 
-# Функция проверяет запущен ли бот
-def is_bot_running():
-    result = subprocess.run(['pgrep', '-f', BOT_PATH], stdout=subprocess.PIPE)
-    return bool(result.stdout.strip())
+async def main():
+    phone = input("Введите номер телефона в формате +7XXXXXXXXXX: ").strip()
+    client = TelegramClient(f"sessions/{phone}", API_ID, API_HASH)
+    await client.start(phone)
+    print(f"✅ Сессия создана: sessions/{phone}.session")
+    await client.disconnect()
 
-# Если запущен, ничего не делаем
-if is_bot_running():
-    print('Бот уже запущен, пропуск.')
-    sys.exit(0)
-
-# Активируем виртуальное окружение
-activate_cmd = f'source {VENV_PATH}'
-subprocess.call(activate_cmd, shell=True, executable='/bin/bash')
-
-# Запускаем бот в фоне с логированием
-log_file='/root/bot.log'
-subprocess.Popen([sys.executable, BOT_PATH], stdout=open(log_file,'a'), stderr=subprocess.STDOUT)
-print('Бот запущен.')
+if __name__ == '__main__':
+    asyncio.run(main())
