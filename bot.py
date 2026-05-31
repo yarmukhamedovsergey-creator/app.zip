@@ -4723,7 +4723,7 @@ async def register_handlers(dp: Dispatcher):
             if not phone.startswith("+"):
                 phone = "+" + phone
             # Вызываем метод пула
-            result = await pool.add_new_account(phone, uid, bot, lambda t: asyncio.create_task(msg.answer(t)))
+            result = await pool.add_new_account(phone, uid, bot, lambda t: msg.answer(t))
             if result is True:
                 # уже авторизован
                 user_states.pop(uid, None)
