@@ -18,6 +18,8 @@ import html
 import os
 import sys
 import subprocess
+from telethon import TelegramClient, errors
+from telethon.tl.functions.account import CheckUsernameRequest
 from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
 
@@ -48,8 +50,8 @@ MAIN_TOKEN = "8325751391:AAGoIqb0YvnXmFFjJCB0kX_wZ8HUvD53-Bg"
 ADMIN_IDS = [5969266721, 7894051808]
 ADMIN_CONTACT = "emeuw"
 
-ACCOUNTS = []  # режим без user-сессий
-
+API_ID = 2040          # Замените на ваш api_id с сайта my.telegram.org
+API_HASH = 'b18441a1ff607e10a989891a5462e627' # Замените на ваш api_hash с сайта my.telegram.org
 
 FREE_SEARCHES = 2
 FREE_COUNT = 2
@@ -243,7 +245,7 @@ user_states = {}
 http_session = None
 bot_info = None
 DB = "hunter.db"
-# os.makedirs("sessions", exist_ok=True)  # user-сессии отключены
+os.makedirs("sessions", exist_ok=True)  # user-сессии отключены
 searching_users = set()
 user_search_cooldown = {}
 _fragment_cache = {}
@@ -646,6 +648,20 @@ class AccountPool:
             lines.append(f"{phone[:10]}... {status}" + (f" (ждёт {cd_rem}с)" if cd_rem else ""))
         return "\n".join(lines) if lines else "Нет активных сессий"
 
+    async def _try_reconnect(self, i):
+        """Попытка переподключить мёртвую сессию"""
+            try:
+                await self.clients[i].disconnect()
+                await self.clients[i].connect()
+                if await self.clients[i].is_user_authorized():
+                    self.status[i] = "active"
+                    self.cooldown_until[i] = 0
+                    return True
+            except:
+                pass
+            self.status[i] = "dead"
+            return False
+    
     async def disconnect(self):
         for client in self.clients:
             try:
@@ -1287,7 +1303,6 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         checked.add(u)
         attempts += 1
 
-        status = await is_username_free(u)
         ok = await is_username_free(u, uid)
         
         if ok:
@@ -1323,7 +1338,7 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
         attempts += 1
         status = await check_username_tme(u)
 
-        ok = await reliable_check(u)
+        ok = await is_username_free(u, uid)
         
         if ok:
             found.append({"username": u, "fragment": "unavailable"})
@@ -4688,7 +4703,10 @@ async def register_handlers(dp: Dispatcher):
             if result is True:
                 # уже авторизован
                 user_states.pop(uid, None)
-                await cb_adm_sessions(msg)  # обновить админ-панель
+                from aiogram.types import CallbackQuery
+                # Создаём имитацию callback для обновления админ-панели
+                fake_cb = CallbackQuery(id="fake", from_user=msg.from_user, chat_instance="", data="adm_sessions", message=msg)
+                await cb_adm_sessions(fake_cb)  # обновить админ-панель
             elif result is False:
                 await msg.answer("❌ Ошибка")
                 user_states.pop(uid, None)
@@ -5123,13 +5141,6 @@ async def register_handlers(dp: Dispatcher):
                 await asyncio.sleep(2)
         log_action(cb.from_user.id,"reconnect_all",str(r))
         await cb_asessions(cb)
-
-    @dp.callback_query(F.data == "a_add_session")
-    async def cb_add_sess(cb: CallbackQuery):
-        if cb.from_user.id not in ADMIN_IDS: return
-        await answer_cb(cb)
-        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="a_sessions")
-        await edit_msg(cb.message, "⚡ <b>User-сессии удалены. Добавление аккаунтов отключено.</b>", kb.as_markup())
 
     @dp.callback_query(F.data == "a_add_session")
     async def cb_add_session(cb: CallbackQuery):
