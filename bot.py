@@ -370,7 +370,7 @@ DEFAULT_CONFIG = {
     "free_searches_limit": 2, "premium_searches_limit": 7, "vip_searches_limit": 15,
     "ref_bonus": 2, "search_cooldown": 10,
     "search_price_stars": 5, "min_withdraw": 50, "pay_contact": "SoveqK",
-    "required_channels": ["SwordUsers"],
+    "required_channels": ["SwordSearch"],
     "text_welcome": "", "text_found": "", "text_empty": "",
     "text_profile_header": "", "text_shop_header": "",
     "btn_tiktok": True, "btn_roulette": False, "btn_monitor": True,
@@ -413,7 +413,7 @@ def apply_config(config):
     SEARCH_PRICE_STARS = config.get("search_price_stars", 5)
     MIN_WITHDRAW = config.get("min_withdraw", 50)
     PAY_CONTACT = config.get("pay_contact", "SoveqK")
-    REQUIRED_CHANNELS = config.get("required_channels", ["SwordUsers"])
+    REQUIRED_CHANNELS = config.get("required_channels", ["SwordSearch"])
     CHECKER_MODE = config.get("checker_mode", "botapi")
 
     for key in SEARCH_MODES:
