@@ -1,5 +1,5 @@
 """
-USE333RNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
+USERNAME HUNTER v25.1 — VIP + Тематический поиск + красивые логи
 Проверка занятости: GET https://t.me/<username>; нет tgme_page_title → free.
 Любая ошибка / таймаут / не-200 → taken (страховка от ложных free).
 """
@@ -10,7 +10,6 @@ import asyncio
 import random
 import logging
 import sqlite3
-import shutil
 import secrets
 import time
 import re
@@ -19,8 +18,6 @@ import html
 import os
 import sys
 import subprocess
-from telethon import TelegramClient, errors
-from telethon.tl.functions.account import CheckUsernameRequest
 from datetime import datetime, timedelta
 from aiogram.types import FSInputFile
 
@@ -39,7 +36,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
 # Telethon полностью отключён: бот работает без user-сессий.
-HAS_TELETHON = True
+HAS_TELETHON = False
 
 pool = None
 http_session = None
@@ -47,20 +44,20 @@ bot_info = None
 
 # ═══════════════════════ НАСТРОЙКИ ═══════════════════════
 
-MAIN_TOKEN = "8325751391:AAGoIqb0YvnXmFFjJCB0kX_wZ8HUvD53-Bg"
-ADMIN_IDS = [5969266721, 7894051808]
+MAIN_TOKEN = "8796662755:AAF8iR8j4DIHqBnsgfP67ixFVgp2avDGWPk"
+ADMIN_IDS = [8746165041, 7894051808, 8477431361, 5969266721]
 ADMIN_CONTACT = "emeuw"
 
-API_ID = 2040          # Замените на ваш api_id с сайта my.telegram.org
-API_HASH = 'b18441a1ff607e10a989891a5462e627' # Замените на ваш api_hash с сайта my.telegram.org
+ACCOUNTS = []  # режим без user-сессий
 
-FREE_SEARCHES = 2
-FREE_COUNT = 2
-PREMIUM_COUNT = 3
-VIP_COUNT = 5  # ═ НОВОЕ ═
-FREE_SEARCHES_LIMIT = 2
-PREMIUM_SEARCHES_LIMIT = 7
-VIP_SEARCHES_LIMIT = 15  # ═ НОВОЕ ═
+
+FREE_SEARCHES = 3
+FREE_COUNT = 1
+PREMIUM_COUNT = 1
+VIP_COUNT = 3          # для /vip
+FREE_SEARCHES_LIMIT = 3
+PREMIUM_SEARCHES_LIMIT = 999999   # безлимит
+VIP_SEARCHES_LIMIT = 999999       # безлимит
 REF_BONUS = 2
 REFERRAL_PREMIUM_BONUSES = {5: 1, 10: 3, 15: 8, 30: 14}
 REFERRAL_COMMISSION = 0.04
@@ -69,6 +66,7 @@ MIN_WITHDRAW = 50
 SEARCH_PRICE_STARS = 5
 PAY_CONTACT = "Soveqk"
 REQUIRED_CHANNELS = ["SwordUsers"]
+SUPPORT_URL = "https://t.me/Soveqk"
 MONITOR_CHECK_INTERVAL = 1800
 MONITOR_MAX_FREE = 0
 MONITOR_MAX_PREMIUM = 5
@@ -77,6 +75,32 @@ RATE_SEARCH_PER_MIN = 3
 RATE_CHECK_PER_HOUR = 50
 TEMP_BAN_MINUTES = 30
 STAR_TO_RUB = 1.25  # ═ НОВОЕ: курс звезды к рублям ═
+
+# ========== ПРОВЕРКА ПОДПИСКИ НА КАНАЛЫ ==========
+async def check_subscribed(uid):
+    if uid in ADMIN_IDS or not REQUIRED_CHANNELS:
+        return []
+    bad = []
+    for ch in REQUIRED_CHANNELS:
+        try:
+            m = await bot.get_chat_member(f"@{ch}", uid)
+            if m.status in ("left", "kicked"):
+                bad.append(ch)
+        except Exception as e:
+            logger.warning(f"check_subscribed @{ch} uid={uid}: {e}")
+            bad.append(ch)
+    return bad
+def build_sub_kb(missing_channels):
+    kb = InlineKeyboardBuilder()
+    for ch in missing_channels[:8]:
+        kb.button(text=f"📢 @{ch}", url=f"https://t.me/{ch}")
+    kb.button(text="✅ Проверить", callback_data="check_sub")
+    kb.adjust(1)
+    text = (
+        "🔒 <b>Для использования бота нужно подписаться на каналы</b>\n\n" +
+        "\n".join(f"• @{ch}" for ch in missing_channels)
+    )
+    return text, kb.as_markup()
 
 TIKTOK_COMMENT_TEXT = "@SworuserN_bot бесплатные звёзды, найти юз, оценить юз"
 TIKTOK_REWARD_GIFT = "🧸 Мишка (15⭐)"
@@ -241,17 +265,24 @@ def log_banner(lines) -> None:
         out.append(_c(_Ansi.CYAN, "│ ") + _c(_Ansi.BOLD, ln) + pad + _c(_Ansi.CYAN, " │"))
     out.append(_c(_Ansi.CYAN, f"╰{bar}╯"))
     print("\n".join(out), flush=True)
+# ========== СПИСОК ЗАПРЕЩЁННЫХ СЛОВ ==========
+INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
+                 "service","security","account","login","password","verify",
+                 "moderator","system","null","undefined","root","user","about","contact",
+                 "info","news","updates","support","status","api","dev","beta","alpha"]
 bot = Bot(token=MAIN_TOKEN)
+
 user_states = {}
 http_session = None
 bot_info = None
 DB = "hunter.db"
-os.makedirs("sessions", exist_ok=True)  # user-сессии отключены
+# os.makedirs("sessions", exist_ok=True)  # user-сессии отключены
 searching_users = set()
 user_search_cooldown = {}
 _fragment_cache = {}
 _fragment_cache_ttl = 600
 BOT_CONFIG_FILE = "bot_config.json"
+FOUND_USERS_FILE = "found_usernames_all.txt"
 MENU_IMAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "image.png")
 
 async def send_menu_photo(chat_id, text, kb=None):
@@ -468,6 +499,33 @@ def log_action(uid, action, details=""):
     except: pass
     conn.commit(); conn.close()
 
+def load_found_usernames():
+    """Загружает все ранее найденные ники из файла в available_usernames"""
+    global available_usernames
+    if not os.path.exists(FOUND_USERS_FILE):
+        return
+    with open(FOUND_USERS_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            u = line.strip().lower()
+            if u:
+                available_usernames.add(u)
+                checked_usernames.add(u)  # также помечаем как проверенные
+    log_event("cache", f"Загружено {len(available_usernames)} сохранённых ников")
+
+def save_found_username(username):
+    """Сохраняет один найденный ник в файл (если его ещё нет)"""
+    username = username.lower().strip()
+    if not username:
+        return
+    # Проверяем, есть ли уже в файле (чтобы не дублировать)
+    if os.path.exists(FOUND_USERS_FILE):
+        with open(FOUND_USERS_FILE, "r", encoding="utf-8") as f:
+            existing = set(line.strip().lower() for line in f)
+            if username in existing:
+                return
+    with open(FOUND_USERS_FILE, "a", encoding="utf-8") as f:
+        f.write(username + "\n")
+
 def get_action_log(limit=50):
     conn = sqlite3.connect(DB); c = conn.cursor()
     try:
@@ -480,159 +538,47 @@ def get_action_log(limit=50):
 # ═══════════════════════ ПУЛ АККАУНТОВ ═══════════════════════
 
 class AccountPool:
+    """Заглушка вместо Telethon-пула. В проекте нет user-сессий вообще."""
+
     def __init__(self):
-        self.clients = []          # список TelegramClient
-        self.status = {}           # 'active', 'warming', 'cooldown', 'dead'
-        self.cooldown_until = {}   # время до разбана
-        self.phone_numbers = []    # номера телефонов для каждого клиента
+        self.clients = []
+        self.status = {}
+        self.cooldown_until = {}
         self.total_checks = 0
         self.caught_by_botapi = 0
         self.caught_by_recheck = 0
         self.reconnect_count = 0
-        self.BASE_DELAY = 2.0
-        self.MAX_DELAY = 20.0
-        self.BUDGET_PER_MIN = 12
-        self.MAX_ERROR_STREAK = 3
-        self.FLOOD_REST_TIME = 600
-        self.WARMUP_EXTRA_DELAY = 10.0
 
     async def init(self, accounts=None):
-        """Загрузить сессии из папки sessions/"""
-        if not os.path.exists("sessions"):
-            os.makedirs("sessions")
-        # Ищем .session файлы
-        session_files = [f for f in os.listdir("sessions") if f.endswith(".session")]
-        for sf in session_files:
-            phone = sf.replace(".session", "")
-            await self._add_client(phone)
-        logger.info(f"Загружено сессий: {len(self.clients)}")
-
-    async def _add_client(self, phone: str):
-        """Создать и авторизовать клиент по номеру телефона"""
-        if not phone.startswith("+"):
-            phone = "+" + phone
-        session_path = os.path.join("sessions", phone)
-        client = TelegramClient(session_path, API_ID, API_HASH)
-        await client.connect()
-        if not await client.is_user_authorized():
-            # Попросим код (но обычно сессия уже есть)
-            logger.warning(f"Сессия {phone} не авторизована, пропускаем")
-            return
-        self.clients.append(client)
-        self.phone_numbers.append(phone)
-        idx = len(self.clients) - 1
-        self.status[idx] = "active"
-        self.cooldown_until[idx] = 0
-        logger.info(f"Аккаунт {phone} добавлен, статус active")
-
-    async def add_new_account(self, phone: str, uid: int, bot_instance, step_callback):
-        """Диалог добавления нового аккаунта через бота (админ)"""
-        # Этот метод вызывается из callback a_add_session
-        # step_callback - функция для отправки сообщений пользователю
-        if phone in self.phone_numbers:
-            await step_callback("❌ Аккаунт уже есть")
-            return False
-        session_path = os.path.join("sessions", phone)
-        client = TelegramClient(session_path, API_ID, API_HASH)
-        await client.connect()
-        if await client.is_user_authorized():
-            self.clients.append(client)
-            self.phone_numbers.append(phone)
-            idx = len(self.clients) - 1
-            self.status[idx] = "active"
-            self.cooldown_until[idx] = 0
-            await step_callback(f"✅ Аккаунт {phone} уже авторизован и добавлен")
-            return True
-        # Запрос кода
-        try:
-            await client.send_code_request(phone)
-            await step_callback(f"📱 Код отправлен на {phone}\nВведите код подтверждения:")
-            # Ожидаем ответа пользователя в другом хендлере, сохраняем состояние
-            # Для простоты: передадим объект состояния в user_states
-            user_states[uid] = {"action": "session_code", "client": client, "phone": phone}
-            return None  # означает, что процесс не завершён
-        except Exception as e:
-            await step_callback(f"❌ Ошибка: {e}")
-            return False
-
-    async def finalize_add_account(self, uid, code, client, phone):
-        """Завершить добавление после ввода кода"""
-        try:
-            await client.sign_in(phone, code)
-            # Проверка 2FA
-            if hasattr(client, 'is_user_authorized') and not await client.is_user_authorized():
-                await bot.send_message(uid, "🔒 Требуется пароль 2FA. Введите пароль:")
-                user_states[uid] = {"action": "session_2fa", "client": client, "phone": phone}
-                return
-            self.clients.append(client)
-            self.phone_numbers.append(phone)
-            idx = len(self.clients) - 1
-            self.status[idx] = "active"
-            self.cooldown_until[idx] = 0
-            await bot.send_message(uid, f"✅ Аккаунт {phone} добавлен!")
-            logger.info(f"Новый аккаунт {phone} добавлен")
-        except Exception as e:
-            await bot.send_message(uid, f"❌ Ошибка авторизации: {e}")
+        logger.info("Public strict mode: Telethon sessions are disabled")
 
     def has_sessions(self):
-        return len(self.clients) > 0
+        return False
 
-    async def _acquire(self, uid=None, timeout=0):
-        """Взять свободный клиент (активный, не в кд)"""
-        now = time.time()
-        for i in range(len(self.clients)):
-            if self.status.get(i) == "active" and self.cooldown_until.get(i, 0) <= now:
-                return i, self.clients[i]
-        return None, None
-
-    async def check(self, u: str, uid=None) -> str:
-        """Проверить username через любой доступный клиент"""
+    async def check(self, u, uid=None):
         self.total_checks += 1
-        idx, client = await self._acquire(uid)
-        if not client:
-            # Нет активного клиента – пробуем через botapi (но это не точно)
-            return await check_username_botapi(u)
         try:
-            result = await client(CheckUsernameRequest(u))
-            # Обновляем статистику
-            self._ok(idx)
-            return "free" if result else "taken"
-        except errors.FloodWaitError as e:
-            self._err(idx, flood=True, secs=e.seconds)
-            logger.warning(f"Flood на аккаунте {self.phone_numbers[idx]}: {e.seconds}с")
-            return "unknown"
+            return "free" if await is_username_free(u, uid) else "taken"
         except Exception as e:
-            self._err(idx)
-            logger.error(f"Ошибка при проверке @{u}: {e}")
-            return "unknown"
+            logger.debug(f"[public-check] @{u}: {e}")
+            return "skip"
 
-    async def strong_check(self, u: str, uid=None) -> str:
-        """То же самое, что check"""
+    async def strong_check(self, u, uid=None):
         return await self.check(u, uid)
 
-    def _ok(self, i):
-        self.status[i] = "active"
-        self.cooldown_until[i] = 0
+    def add_user(self, uid):
+        return None
 
-    def _err(self, i, flood=False, secs=0):
-        if flood:
-            self.status[i] = "cooldown"
-            self.cooldown_until[i] = time.time() + secs
-        else:
-            self.status[i] = "dead"
-            self.cooldown_until[i] = time.time() + 300
+    def remove_user(self, uid):
+        return None
 
     def stats(self):
-        active = sum(1 for s in self.status.values() if s == "active")
-        warming = sum(1 for s in self.status.values() if s == "warming")
-        cooldown = sum(1 for s in self.status.values() if s == "cooldown")
-        dead = sum(1 for s in self.status.values() if s == "dead")
         return {
-            "total": len(self.clients),
-            "active": active,
-            "warming": warming,
-            "cooldown": cooldown,
-            "dead": dead,
+            "total": 0,
+            "active": 0,
+            "warming": 0,
+            "cooldown": 0,
+            "dead": 0,
             "checks": self.total_checks,
             "errors": 0,
             "botapi_saves": self.caught_by_botapi,
@@ -641,254 +587,57 @@ class AccountPool:
         }
 
     def detailed_status(self):
-        lines = []
-        for i, phone in enumerate(self.phone_numbers):
-            status = self.status.get(i, "unknown")
-            cd = self.cooldown_until.get(i, 0)
-            cd_rem = max(0, int(cd - time.time())) if cd else 0
-            lines.append(f"{phone[:10]}... {status}" + (f" (ждёт {cd_rem}с)" if cd_rem else ""))
-        return "\n".join(lines) if lines else "Нет активных сессий"
+        return "User-сессии отключены. Проверка работает только публичными методами: t.me + Bot API + Fragment."
 
     async def _try_reconnect(self, i):
-        """Попытка переподключить мёртвую сессию"""
-        try:                            # ← 4 пробела
-            await self.clients[i].disconnect()
-            await self.clients[i].connect()
-            if await self.clients[i].is_user_authorized():
-                self.status[i] = "active"
-                self.cooldown_until[i] = 0
-                return True
-        except:
-            pass
-        self.status[i] = "dead"
         return False
-    
+
+    async def _acquire(self, uid=None, timeout=0):
+        return None, None
+
+    def _ok(self, i):
+        return None
+
+    def _err(self, i, flood=False, secs=0):
+        return None
+
     async def disconnect(self):
-        for client in self.clients:
-            try:
-                await client.disconnect()
-            except:
-                pass
+        return None
 
 
-# ═══════════════════════ ГЕНЕРАТОРЫ v5 ═══════════════════════
+# ========== НОВЫЕ ГЕНЕРАТОРЫ (из bot (8).txt) ==========
+# ========== СПИСОК ЗАПРЕЩЁННЫХ СЛОВ ==========
+INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
+                 "service","security","account","login","password","verify",
+                 "moderator","system","null","undefined","root","user","about","contact",
+                 "info","news","updates","support","status","api","dev","beta","alpha"]
 
-_V = "aeiou"
-_C = "bcdfghjklmnprstvwxyz"
+# ========== НОВЫЕ ГЕНЕРАТОРЫ (из bot (8).txt) ==========
+premium_pattern_mode = 0
 
-# ═ НОВОЕ: красивые digraphs для начала слова ═
-_DIGRAPHS = ["bl","br","ch","cl","cr","dr","fl","fr","gl","gr","kn","pl","pr",
-             "sc","sh","sk","sl","sm","sn","sp","st","sw","th","tr","tw","wr","zh"]
-_ENDINGS = ["ax","ex","ix","ox","en","on","an","er","or","ar","in","yn","us",
-            "os","is","al","el","il","ol","ul","ay","ey","oy","ry","ly","ny","zy"]
+def generate_premium_pattern(length=5):
+    """Генерация ника по паттерну VCCVV без двух одинаковых гласных подряд"""
+    vowels = 'aeiouy'
+    consonants = 'bcdfghjklmnprstvxz'
+    while True:
+        v1 = random.choice(vowels)
+        c1 = random.choice(consonants)
+        c2 = random.choice(consonants)
+        v2 = random.choice(vowels)
+        v3 = random.choice(vowels)
+        if v2 != v3:   # гласные на позициях 3 и 4 не должны совпадать
+            return v1 + c1 + c2 + v2 + v3
 
-def _pronounceable(n):
-    w=[]; sc=random.choice([True,False])
-    for i in range(n):
-        w.append(random.choice(_C) if (i%2==0)==sc else random.choice(_V))
-    return "".join(w)
+def generate_standard_pattern(length=6):
+    """Обычный паттерн (6 символов) — случайные буквы"""
+    for _ in range(200):
+        username = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
+        if is_valid_username(username):
+            return username
+    return ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(length))
 
-def gen_default():
-    """6-буквенные, только буквы"""
-    return _pronounceable(6)
-
-def gen_dictionary():
-    """5-буквенные слова из словаря"""
-    words = [
-        "apple","beach","chair","dance","eagle","flame","grape","heart","ivory","jolly",
-        "lemon","music","night","ocean","pearl","queen","river","stone","tiger",
-        "unity","voice","water","youth","zebra","brick","candy","dream","earth","frost",
-        "ghost","honey","image","jewel","knife","light","mouse","noble","olive","peace",
-        "smile","table","under","whale","yacht","blade","cloud","flute","grace","horse",
-        "juice","mango","opera","piano","raven","sugar","value","angel","crown","daisy",
-        "globe","karma","tulip","urban",
-    ]
-    return random.choice(words).lower()
-
-def gen_beautiful():
-    """Красивые паттерны, 5 букв"""
-    patterns = [
-        lambda: random.choice(_V)+random.choice(_C)+random.choice(_V)+random.choice(_C)+random.choice(_V),
-        lambda: random.choice(_C)+random.choice(_V)+random.choice(_C)+random.choice(_C)+random.choice(_V),
-        lambda: random.choice(_C)+random.choice(_V)+random.choice(_V)+random.choice(_C)+random.choice(_C),
-        lambda: random.choice(_V)+random.choice(_C)+random.choice(_V)+random.choice(_V)+random.choice(_C),
-    ]
-    return random.choice(patterns)()
-
-_pattern_template = ""
-def gen_pattern():
-    """Генерация по шаблону (a__le -> a + random + random + l + e)"""
-    if not _pattern_template or len(_pattern_template) != 5:
-        return gen_default()
-    result = []
-    for ch in _pattern_template.lower():
-        if ch == "_":
-            result.append(random.choice(_V if random.random() > 0.5 else _C))
-        else:
-            result.append(ch)
-    return "".join(result)
-
-def gen_word_combinations(word):
-    """Комбинирует слово с реальными словами → осмысленные юзернеймы"""
-    word = word.lower().strip().replace("@", "")
-
-    w3 = [
-        "car","box","lab","hub","man","boy","god","pro","dev","art","web","net",
-        "app","bot","fan","run","fly","win","pay","buy","dog","cat","fox","owl",
-        "key","pin","tag","tip","spy","doc","gem","ink","map","log","job","war",
-        "cup","bar","van","jet","ace","bag","bat","bed","bee","bug","bus","cab",
-        "cam","cap","dew","dim","elf","era","eve","fig","fin","fit","fog","fur",
-        "gig","gin","gun","gym","ham","hat","hen","hop","hut","ivy","jam","jar",
-        "joy","jug","kit","lap","law","leg","lid","lip","lot","mad","mob","mod",
-        "mop","mud","mug","nap","nod","nut","oak","oil","orb","ore","pad","pal",
-        "pan","pat","paw","pea","peg","pen","pet","pie","pig","pit","pod","pot",
-        "pub","pug","rag","ram","rap","rat","ray","rib","rig","rim","rip","rod",
-        "row","rub","rug","rum","saw","sax","sir","ski","sob","son","spa","sub",
-        "sum","tab","tan","tap","tar","tax","tie","tin","toe","ton","toy","tub",
-        "tug","urn","vat","vet","vim","vow","wad","wig","wit","woe","wok","yak",
-        "yam","yen","yew","zip","zoo","max","mix","fix","pop","raw","day","one",
-        "bit","dot","top","hot","big","old","new","red","ice","zen","sun","sky",
-        "air","sea","try","set","get","way","eye","tea",
-    ]
-
-    w4 = [
-        "cook","shop","club","gang","crew","team","band","camp","city","town",
-        "land","park","road","path","lake","moon","rain","wind","snow","gold",
-        "iron","rock","wood","dust","sand","wave","coin","cash","bank","card",
-        "gift","show","play","game","song","film","book","wall","door","roof",
-        "lamp","bell","ring","ball","bowl","drum","fish","bird","bear","wolf",
-        "deer","lion","bull","duck","frog","crab","worm","seed","leaf","root",
-        "vine","rose","lily","tree","food","meal","cake","milk","rice","meat",
-        "soup","wine","beer","salt","mint","sage","chef","king","duke","earl",
-        "work","task","plan","goal","idea","mind","soul","life","love","hope",
-        "fear","rage","calm","cool","warm","cold","dark","deep","fast","slow",
-        "hard","soft","wild","bold","wise","kind","pure","true","real","good",
-        "best","mega","boss","lord","star","fire","face","hand","head","bone",
-        "fist","tail","wing","claw","horn","fury","glow","haze","mist","void",
-        "flux","grid","mesh","core","code","node","link","base","site","zone",
-        "mode","byte","chip","data","hack","loop","scan","sync","tech","volt",
-        "beam","gear","tool","fuel","pump","tank","helm","cape","mask","robe",
-        "vest","boot","belt","whip","pill","dose","dope","hemp","kush","haze",
-        "acid","weed","hash","flex","drip","swag","trap","vibe","mood","flow",
-        "grim","nuke","bomb","doom","fury","riot","punk","goth","rave","bass",
-    ]
-
-    w5 = [
-        "craft","world","storm","flame","frost","steel","blade","night","light",
-        "dream","ghost","devil","angel","power","force","magic","chaos","order",
-        "peace","death","blood","heart","brain","nerve","pulse","flash","spark",
-        "blaze","smoke","steam","stone","earth","ocean","river","cloud","shade",
-        "ninja","titan","demon","beast","snake","eagle","raven","shark","tiger",
-        "viper","cobra","money","price","trade","store","tower","house","guard",
-        "watch","quest","point","score","level","arena","field","track","rider",
-        "racer","pilot","chief","cyber","pixel","sonic","turbo","ultra","super",
-        "hyper","alpha","omega","delta","sigma","prime","elite","royal","mafia",
-        "cartel","crack","speed",
-    ]
-
-    pre_short = ["my","mr","el","la","de","go","no","hi","ok","up","on","in","dj","dr","mc"]
-    pre_long = ["big","top","hot","old","new","red","ice","pro","neo","zen","raw",
-                "the","its","not","sir","don","von","max","all","any","bad","mad","sad"]
-
-    results = []
-    all_suf = w3 + w4 + w5
-    all_pre = pre_short + pre_long + w3 + w4
-
-    # word + суффикс  (mef + cook = mefcook)
-    for s in all_suf:
-        u = word + s
-        if 5 <= len(u) <= 15: results.append(u)
-
-    # префикс + word  (big + mef = bigmef)
-    for p in all_pre:
-        u = p + word
-        if 5 <= len(u) <= 15: results.append(u)
-
-    # суффикс + word  (cook + mef = cookmef)
-    for s in w3 + w4:
-        u = s + word
-        if 5 <= len(u) <= 15: results.append(u)
-
-    # word_суффикс
-    for s in w3 + w4[:60]:
-        u = word + "_" + s
-        if 5 <= len(u) <= 15: results.append(u)
-
-    # префикс_word
-    for p in pre_short + pre_long:
-        u = p + "_" + word
-        if 5 <= len(u) <= 15: results.append(u)
-
-    # word + цифра
-    for n in [1,2,3,5,7,9,11,13,23,42,69,77,99,228]:
-        u = word + str(n)
-        if 5 <= len(u) <= 15: results.append(u)
-
-    # Фильтр
-    valid = []; seen = set()
-    for u in results:
-        ul = u.lower()
-        if (ul not in seen and re.match(r'^[a-zA-Z][a-zA-Z0-9_]*$', ul)
-                and 5 <= len(ul) <= 15 and "__" not in ul
-                and not ul.startswith("_") and not ul.endswith("_")):
-            valid.append(ul); seen.add(ul)
-
-    random.shuffle(valid)
-    return valid
-
-async def do_word_search(word, count, msg, uid):
-    combinations = gen_word_combinations(word)
-    found = []
-    attempts = 0
-    start = time.time()
-    last_update = 0
-    checked = set()
-
-    try:
-        for u in combinations:
-            if len(found) >= count or attempts >= 500:
-                break
-
-            if u in checked:
-                continue
-            checked.add(u)
-            if "__" in u or u.startswith("_") or u.endswith("_"):
-                continue
-
-            if not is_valid_username_word(u):
-                attempts += 1
-                continue
-
-            attempts += 1
-
-            if await is_username_free(u, uid):
-                found.append({"username": u, "fragment": "unavailable"})
-                save_history(uid, u, f"По слову: {word}", len(u))
-
-            await asyncio.sleep(0.3)
-
-            now = time.time()
-            if now - last_update > 2.5:
-                last_update = now
-                try:
-                    await msg.edit_text(
-                        f"🎯 <b>По слову: {word}</b>\n\n"
-                        f"🔍 Проверено: <code>{attempts}</code>\n"
-                        f"✅ Найдено: <code>{len(found)}</code>",
-                        parse_mode="HTML"
-                    )
-                except: pass
-
-        elapsed = time.time() - start
-        stats = {"attempts": attempts, "elapsed": elapsed}
-        return found, stats
-
-    except Exception as e:
-        logger.error(f"Word search error: {e}")
-        raise
-
+# ========== ВАЛИДАЦИЯ ==========
 def is_valid_username_default(u):
-    """Валидация для дефолт режима (6 букв)"""
     if len(u) != 6 or not u.isalpha():
         return False
     ul = u.lower()
@@ -900,7 +649,6 @@ def is_valid_username_default(u):
     return True
 
 def is_valid_username_beautiful(u):
-    """Валидация для красивых (5 букв)"""
     if len(u) != 5 or not u.isalpha():
         return False
     ul = u.lower()
@@ -912,8 +660,7 @@ def is_valid_username_beautiful(u):
     return True
 
 def is_valid_username(u):
-    """Общая валидация (5 или 6 букв)"""
-    if len(u) not in [5, 6] or not u.isalpha():
+    if len(u) not in (5, 6) or not u.isalpha():
         return False
     ul = u.lower()
     for w in INVALID_WORDS:
@@ -923,10 +670,136 @@ def is_valid_username(u):
         return False
     return True
 
-def is_valid_username_word(u):
-    """Оставлено для совместимости: теперь допускаются только 5/6 латинских букв, без цифр и подчёркиваний."""
-    return is_valid_username(u)
+def is_valid_telegram_profile_username(u: str) -> bool:
+    if not u:
+        return False
+    u = u.strip().replace("@", "")
+    if len(u) not in (5, 6):
+        return False
+    if not re.match(r"^[a-zA-Z]+$", u):
+        return False
+    return True
 
+# ========== ПРОВЕРКА ЧЕРЕЗ FRAGMENT (асинхронно) ==========
+_TME_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:121.0) Gecko/20100101 Firefox/121.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
+    "Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.6167.164 Mobile Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/121.0.6167.138 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 13; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.6045.163 Mobile Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 OPR/109.0.0.0",
+]
+
+async def check_fragment_async(username: str) -> str:
+    """
+    Проверяет статус username на Fragment.
+    Возвращает:
+      "unavailable" — не выставлен (свободен)
+      "available"   — на продаже
+      "in auction"  — аукцион
+      "sold"        — продан
+      "reserved"    — зарезервирован
+      "unknown"     — ошибка
+    """
+    u = username.strip().replace("@", "").lower()
+    if not u:
+        return "unknown"
+    if http_session is None:
+        return "unknown"
+
+    headers = {"User-Agent": random.choice(_TME_USER_AGENTS)}
+    try:
+        async with http_session.get(f"https://fragment.com/username/{u}", timeout=aiohttp.ClientTimeout(total=8), headers=headers, allow_redirects=True) as resp:
+            if resp.status == 404:
+                return "unavailable"
+            if resp.status != 200:
+                return "unknown"
+            html_text = await resp.text(errors="ignore")
+    except:
+        return "unknown"
+
+    # Ищем статус в HTML
+    status_match = re.search(r'class="tm-section-header-status[^"]*"[^>]*>(.*?)<', html_text, re.I | re.S)
+    status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
+
+    if "auction" in status or "bidding" in status:
+        return "in auction"
+    if "sold" in status or "taken" in status or "owned" in status:
+        return "sold"
+    if "available" in status or "for sale" in status or "buy now" in status:
+        return "available"
+    if "reserved" in status:
+        return "reserved"
+    # Если нет блока статуса, но есть признаки аукциона
+    low = html_text.lower()
+    markers = ['class="auction"', 'place a bid', 'buy now', 'current bid', '~ $']
+    if any(m in low for m in markers):
+        return "available"
+    return "unavailable"
+
+async def check_tme_async(username: str) -> bool:
+    """
+    Проверяет Telegram (t.me). Возвращает True, если свободен.
+    Вызывается только если Fragment вернул "unavailable".
+    """
+    u = username.strip().replace("@", "").lower()
+    if not is_valid_telegram_profile_username(u):
+        return False
+    if http_session is None:
+        return False
+
+    headers = {"User-Agent": random.choice(_TME_USER_AGENTS)}
+    try:
+        async with http_session.get(f"https://t.me/{u}", timeout=aiohttp.ClientTimeout(total=8), headers=headers, allow_redirects=False) as resp:
+            if resp.status == 404:
+                return True
+            if resp.status != 200:
+                return False
+            html_text = await resp.text(errors="ignore")
+            if "if you have telegram, you can contact" in html_text.lower():
+                return True
+            if "tgme_page_photo" in html_text or "tgme_page_title" in html_text:
+                return False
+            return True
+    except:
+        return False
+
+async def check_username_async(username: str) -> bool:
+    """
+    Полная проверка: сначала Fragment, если свободен (unavailable) – проверяем Telegram,
+    иначе сразу возвращаем False (занят).
+    """
+    fragment_status = await check_fragment_async(username)
+    if fragment_status != "unavailable":
+        # Любой статус, кроме unavailable, означает, что ник занят на Fragment
+        return False
+    # Если Fragment не нашёл карточку (unavailable), проверяем Telegram
+    return await check_tme_async(username)
+
+# ========== ФУНКЦИИ ДЛЯ СОВМЕСТИМОСТИ С do_search ==========
+async def is_username_free(u: str, uid=None) -> bool:
+    """Используется в do_search. True – свободен."""
+    return await check_username_async(u)
+
+async def check_username(u: str) -> str:
+    """Для совместимости со старым кодом: возвращает 'free' или 'taken'"""
+    return "free" if await check_username_async(u) else "taken"
+
+# ========== НОВЫЙ СЛОВАРЬ РЕЖИМОВ ПОИСКА ==========
 SEARCH_MODES = {
     "default": {
         "name": "Дефолт",
@@ -934,7 +807,7 @@ SEARCH_MODES = {
         "desc": "6 букв, доступен всем",
         "_default_premium": False,
         "premium": False,
-        "func": gen_default,
+        "func": generate_standard_pattern,
         "validate": is_valid_username_default,
         "disabled": False
     },
@@ -944,17 +817,18 @@ SEARCH_MODES = {
         "desc": "5 букв, стильные паттерны",
         "_default_premium": True,
         "premium": True,
-        "func": gen_beautiful,
+        "func": generate_premium_pattern,
         "validate": is_valid_username_beautiful,
         "disabled": False
     },
 }
 
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ CALLBACK'ОВ (чтобы не ломались) ==========
 SEARCH_MODE_ALIASES = {
     "go_default": "default",
     "default": "default",
     "дефолт": "default",
-    "дeфолт": "default",  # на случай латинской e в старом callback_data
+    "дeфолт": "default",
     "🎲 дефолт": "default",
     "go_beautiful": "beautiful",
     "beautiful": "beautiful",
@@ -964,25 +838,16 @@ SEARCH_MODE_ALIASES = {
 }
 
 def normalize_search_mode_callback(data):
-    """Приводит старые и новые callback_data кнопок поиска к ключам SEARCH_MODES."""
     raw = (data or "").strip()
     if not raw:
         return ""
-
     lowered = raw.lower()
     if lowered in SEARCH_MODE_ALIASES:
         return SEARCH_MODE_ALIASES[lowered]
-
     if lowered.startswith("go_"):
         mode = lowered[3:]
         return mode if mode in SEARCH_MODES else ""
-
     return lowered if lowered in SEARCH_MODES else ""
-
-
-# ═══════════════════════ HARD CALLBACK FIX v5 ═══════════════════════
-# Маркер ниже должен появиться в консоли после запуска. Если его нет — запущен старый файл.
-SEARCH_CALLBACK_FIX_VERSION = "TME_CACHE_LOGS"
 
 def _cb_data(cb):
     return (getattr(cb, "data", "") or "").strip()
@@ -994,7 +859,6 @@ def _is_search_mode_callback(cb):
     return normalize_search_mode_callback(_cb_data(cb)) in SEARCH_MODES
 
 def _print_callback_event(name, cb, extra=""):
-    """Тихий callback-лог: только выбор режима поиска, без лишнего спама."""
     try:
         data = _cb_data(cb)
         mode = normalize_search_mode_callback(data)
@@ -1003,278 +867,18 @@ def _print_callback_event(name, cb, extra=""):
     except Exception:
         pass
 
-INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
-                 "service","security","account","login","password","verify",
-                 "moderator","system","null","undefined","root","user","about","contact",
-                 "info","news","updates","support","status","api","dev","beta","alpha"]
-    
-# ═══════════════════════ ЧЕКЕРЫ ═══════════════════════
+# ========== ФУНКЦИЯ ПРОГРЕСС-БАРА ==========
+def get_progress_bar(current, total, length=10):
+    if total == 0:
+        return "░" * length
+    filled = int((current / total) * length)
+    return "█" * filled + "░" * (length - filled)
 
-async def fast_check_username(u: str) -> str:
-    """Быстрая проверка больше не отдаёт free по одному t.me-запросу."""
-    return await check_username(u)
-
-def is_valid_telegram_profile_username(u: str) -> bool:
-    """Разрешены только буквенные username из рабочих режимов: 5 или 6 латинских букв."""
-    if not u:
-        return False
-    u = u.strip().replace("@", "")
-    if len(u) not in (5, 6):
-        return False
-    if not re.match(r"^[a-zA-Z]+$", u):
-        return False
-    return True
-
-async def check_username_botapi(u: str) -> str:
-    """
-    Дополнительная публичная проверка через Bot API getChat.
-    taken    — Bot API нашёл публичный username;
-    free     — Bot API явно ответил, что чат не найден;
-    unknown  — ошибка сети/лимит/неоднозначный ответ.
-
-    Важно: Bot API не является официальной проверкой установки username,
-    поэтому free здесь используется только вместе с t.me и Fragment.
-    """
-    if not bot:
-        return "unknown"
-    u = (u or "").strip().replace("@", "").lower()
-    if not u:
-        return "unknown"
-    try:
-        await bot.get_chat(f"@{u}")
-        return "taken"
-    except TelegramBadRequest as e:
-        text = str(e).lower()
-        if "chat not found" in text or "not found" in text:
-            return "free"
-        logger.debug(f"[botapi] @{u}: {e}")
-        return "unknown"
-    except Exception as e:
-        logger.debug(f"[botapi] @{u}: {e}")
-        return "unknown"
-
-async def public_username_status(u: str, uid=None) -> str:
-    """
-    Точная проверка по методу пользователя:
-    GET https://t.me/<username>
-    - если в HTML есть tgme_page_title -> username занят;
-    - если tgme_page_title нет -> username свободен;
-    - любая ошибка / таймаут / не-200 -> считаем занятым.
-    """
-    u = (u or "").strip().replace("@", "").lower()
-
-    if not is_valid_telegram_profile_username(u):
-        return "taken"
-    if is_blacklisted(u):
-        return "taken"
-    for w in INVALID_WORDS:
-        if w == u or w in u:
-            return "taken"
-
-    return await check_username_tme(u)
-
-async def check_username(u: str) -> str:
-    """Публичный строгий статус username без Telethon/user-сессий."""
-    u = (u or "").strip().replace("@", "").lower()
-    try:
-        return await public_username_status(u)
-    except Exception as e:
-        logger.debug(f"[check_username] @{u}: {e}")
-        return "unknown"
-        
-async def check_fragment(u: str) -> str:
-    """
-    Точная проверка статуса username на Fragment.
-
-    Возвращает один из:
-      "available"   — выставлен на продажу (Buy Now / Place Bid);
-      "in auction"  — идёт аукцион;
-      "sold"        — продан / уже имеет владельца через Fragment;
-      "reserved"    — зарезервирован;
-      "unavailable" — на Fragment нет карточки (обычный t.me username);
-      "unknown"     — сеть/таймаут/неоднозначно.
-
-    Сначала смотрим строго на класс ``.tm-section-header-status`` —
-    Fragment всегда печатает один из статусов внутри него.
-    Если карточки вообще нет — username не выставлен.
-    """
-    u = (u or "").strip().replace("@", "").lower()
-    if not u:
-        return "unknown"
-
-    now = time.time()
-    cached = _fragment_cache.get(u)
-    if cached and now - cached[1] < _fragment_cache_ttl:
-        return cached[0]
-
-    if http_session is None:
-        return "unknown"
-
-    url = f"https://fragment.com/username/{u}"
-    headers = {
-        "User-Agent": random.choice(_TME_USER_AGENTS),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-
-    try:
-        async with http_session.get(
-            url,
-            timeout=aiohttp.ClientTimeout(total=10),
-            headers=headers,
-            allow_redirects=True,
-        ) as resp:
-            if resp.status == 404:
-                _fragment_cache[u] = ("unavailable", now)
-                return "unavailable"
-            if resp.status != 200:
-                log_event("fragment", f"@{u} HTTP {resp.status} → unknown", logging.WARNING)
-                return "unknown"
-            text = await resp.text(errors="ignore")
-    except asyncio.TimeoutError:
-        log_event("fragment", f"@{u} timeout → unknown", logging.WARNING)
-        return "unknown"
-    except Exception as e:
-        log_event("fragment", f"@{u} error: {e} → unknown", logging.WARNING)
-        return "unknown"
-
-    status_match = re.search(
-        r'class="tm-section-header-status[^"]*"[^>]*>(.*?)<',
-        text, re.I | re.S,
-    )
-    status = re.sub(r"\s+", " ", status_match.group(1)).strip().lower() if status_match else ""
-    low = text.lower()
-
-    if status:
-        if "auction" in status or "bidding" in status:
-            result = "in auction"
-        elif "sold" in status or "taken" in status or "unavailable" in status:
-            result = "sold"
-        elif "available" in status or "for sale" in status or "buy now" in status:
-            result = "available"
-        elif "reserved" in status:
-            result = "reserved"
-        else:
-            result = "unknown"
-    elif "tm-section-header-status" in low:
-        # Карточка есть, но статус нераспознан — лучше не рисковать.
-        result = "unknown"
-    else:
-        # Никакого блока статуса нет → username не выставлен на Fragment.
-        result = "unavailable"
-
-    log_event("fragment", f"@{u} → {result}")
-    _fragment_cache[u] = (result, now)
-    return result
-
-_TME_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) Gecko/20100101 Firefox/126.0",
-]
-
-async def check_username_tme(u: str) -> str:
-    # ОТКЛЮЧЕНО — используйте только сессии Telethon
-    return "unknown"
-
-async def reliable_check(u: str) -> bool:
-    free_votes = 0
-    taken_votes = 0
-
-    for _ in range(3):
-
-        status = await check_username_tme(u)
-
-        if status == "free":
-            free_votes += 1
-
-        elif status == "taken":
-            taken_votes += 1
-
-        await asyncio.sleep(1.3)
-
-    return free_votes >= 2 and taken_votes == 0
-
-async def is_username_free(u: str, uid=None) -> bool:
-    # 1. Быстрая проверка через t.me
-    tme_free = await check_username_tme(u) in ["free", "unknown"]
-    if not tme_free:
-        return False
-    # 2. Точная проверка через пул сессий (если доступен)
-    if pool and pool.has_sessions():
-        try:
-            result = await pool.check(u, uid)
-            return result == "free"
-        except Exception:
-            pass
-    # Если сессий нет или ошибка – доверяем t.me
-    return True
-
-async def get_rechecked_cached_free(mode, count):
-    cached = await get_cached_free(mode, max(count * 3, count))
-    validate_func = SEARCH_MODES.get(mode, {}).get("validate", is_valid_username)
-    found = []
-    rejected = []
-    for u in cached:
-        u = (u or "").strip().replace("@", "").lower()
-        if validate_func(u) and await is_username_free(u):
-            found.append({"username": u, "fragment": "unavailable"})
-            if len(found) >= count:
-                break
-        else:
-            rejected.append(u)
-    if rejected:
-        logger.info(f"Rejected stale cache for mode={mode}: {len(rejected)}")
-    return found
-
-async def check_subscribed(uid):
-    if uid in ADMIN_IDS or not REQUIRED_CHANNELS: return []
-    bad=[]
-    for ch in REQUIRED_CHANNELS:
-        try:
-            m=await bot.get_chat_member(f"@{ch}",uid)
-            if m.status in ("left","kicked"): bad.append(ch)
-        except Exception as e:
-            logger.warning(f"check_subscribed @{ch} uid={uid}: {e}")
-            bad.append(ch)  # при ошибке считаем не подписан
-    return bad
-
-def validate_username(u):
-    return bool(u) and len(u) in [5, 6] and re.match(r'^[a-zA-Z]{5,6}$', u)
-
-def evaluate_username(u):
-    score=0; factors=[]; ul=u.lower(); ln=len(ul)
-    if ln!=5: score+=0
-    if len(set(ul))==1: score+=90; factors.append("🔥 Моно")
-    if ul==ul[::-1]: score+=40; factors.append("🪞 Палиндром")
-    if ul.isalpha(): score+=15; factors.append("🔤 Чистые буквы")
-    vc=sum(1 for c in ul if c in _V)
-    if 0.3<=vc/max(len(ul),1)<=0.6: score+=15; factors.append("🗣 Произносимый")
-    score=min(score,200)
-    if score>=150: pr,ra="$3k+","🔥🔥🔥 ЛЕГЕНДА"
-    elif score>=100: pr,ra="$500-$3k","💎💎 РЕДКИЙ"
-    elif score>=70: pr,ra="$100-$500","💎 ХОРОШИЙ"
-    elif score>=40: pr,ra="$20-$100","✨ СТАНДАРТ"
-    else: pr,ra="$1-$20","📦 ОБЫЧНЫЙ"
-    filled=min(score//20,10)
-    return {"score":score,"bar":"▓"*filled+"░"*(10-filled),"factors":factors,"price":pr,"rarity":ra}
+# ========== ОСНОВНАЯ ФУНКЦИЯ ПОИСКА (do_search) — ОСТАВЛЯЕМ БЕЗ ИЗМЕНЕНИЙ ==========
+# ВНИМАНИЕ: do_search уже должна быть в основе. Если её нет, добавьте её ниже.
+# Но предполагается, что она уже есть. Если же вы удалили её, то вставьте следующий блок:
 
 async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
-    """
-    Точный тихий поиск через GET https://t.me/<username>.
-
-    Правило проверки:
-    - tgme_page_title или already taken / available for purchase -> занят;
-    - нет признаков занятого username -> свободен;
-    - любая ошибка/таймаут/не-200 -> занят.
-
-    Консоль не спамит каждой проверкой. Пишет только:
-    - что взяло из кэша;
-    - что занесло в кэш;
-    - короткий итог, сколько не вошло в кэш/выдачу.
-    """
     found = []
     start = time.time()
     attempts = 0
@@ -1288,38 +892,31 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
     checked = set()
     mode_label = "beautiful" if mode_key == "beautiful" else "default"
 
-    log_event("search", f"▶  start mode={mode_label} uid={uid} need={count}")
+    log_event("search", f"▶ start mode={mode_label} uid={uid} need={count}")
 
-    # 1) Берём старый кэш, но перед выдачей перепроверяем через t.me.
     cached = await get_cached_free(mode_key, max(count * 5, 20))
     for raw in cached:
         if len(found) >= count:
             break
-
         u = (raw or "").strip().replace("@", "").lower()
         if not validate_func(u) or u in checked:
             cache_rejected += 1
             continue
-
         checked.add(u)
         attempts += 1
-
-        ok = await is_username_free(u, uid)
-        
-        if ok:
+        if await is_username_free(u, uid):
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
+            save_found_username(u)
             cache_used += 1
-            log_event("cache", f"💾 hit  @{u} ({mode_label})")
+            log_event("cache", f"💾 hit @{u} ({mode_label})")
         else:
             cache_rejected += 1
-
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(0.5)
 
     if cache_rejected:
-        log_event("cache", f"🗑  stale dropped: {cache_rejected} ({mode_label})", logging.DEBUG)
+        log_event("cache", f"🗑 stale dropped: {cache_rejected} ({mode_label})", logging.DEBUG)
 
-    # 2) Если кэша не хватило — генерируем и проверяем тем же методом.
     max_attempts = 10000
     while len(found) < count and attempts < max_attempts:
         u = None
@@ -1329,7 +926,6 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
             if c and c not in checked and c.isalpha() and validate_func(c):
                 u = c
                 break
-
         if not u:
             attempts += 1
             generated_rejected += 1
@@ -1337,16 +933,13 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
 
         checked.add(u)
         attempts += 1
-        status = await check_username_tme(u)
-
-        ok = await is_username_free(u, uid)
-        
-        if ok:
+        if await is_username_free(u, uid):
             found.append({"username": u, "fragment": "unavailable"})
             save_history(uid, u, mode_name, len(u))
-            await add_free_cache([u], mode_key)
+            save_found_username(u)
+            #await add_free_cache([u], mode_key)
             cached_new += 1
-            log_event("cache", f"✨ add  @{u} ({mode_label})")
+            log_event("cache", f"✨ add @{u} ({mode_label})")
         else:
             generated_rejected += 1
 
@@ -1367,19 +960,17 @@ async def do_search(count, gen_func, msg, mode_name, uid, mode_key="default"):
                 )
             except Exception:
                 pass
-
-        await asyncio.sleep(0.12)
+        await asyncio.sleep(0.7)
 
     elapsed = int(time.time() - start)
     if generated_rejected:
-        log_event("search", f"⏭  rejected (taken): {generated_rejected} ({mode_label})", logging.DEBUG)
+        log_event("search", f"⏭ rejected (taken): {generated_rejected} ({mode_label})", logging.DEBUG)
     log_event(
         "search",
         f"✅ done mode={mode_label} found={len(found)}/{count} "
         f"checked={attempts} hit={cache_used} add={cached_new} "
         f"elapsed={elapsed}s",
     )
-
     return found, {"attempts": attempts, "elapsed": elapsed}
 
 # ═══════════════════════ БАЗА ДАННЫХ ═══════════════════════
@@ -2721,7 +2312,7 @@ def get_max_searches(uid):
         return VIP_SEARCHES_LIMIT
     if has_subscription(uid):
         return PREMIUM_SEARCHES_LIMIT
-    return FREE_SEARCHES_LIMIT + int(user.get("extra_searches", 0) or 0)
+    return FREE_SEARCHES_LIMIT
 
 def get_search_count(uid):
     if uid in ADMIN_IDS:
@@ -2757,7 +2348,7 @@ def use_search(uid):
     if uid in ADMIN_IDS:
         c.execute("UPDATE users SET searches=searches+1 WHERE uid=?", (uid,))
     elif has_subscription(uid) or has_vip(uid):
-        c.execute("UPDATE users SET searches=searches+1, daily_searches_used=daily_searches_used+1 WHERE uid=?", (uid,))
+        c.execute("UPDATE users SET searches=searches+1 WHERE uid=?", (uid,))  # без увеличения daily_searches_used
     else:
         u = get_user(uid)
         if u.get("extra_searches", 0) > 0:
@@ -3155,10 +2746,11 @@ async def register_handlers(dp: Dispatcher):
         _print_callback_event("CALLBACK-SEARCH-MODE", cb)
         uid = cb.from_user.id
         await answer_cb(cb)
+
         if is_banned(uid):
             return
 
-        ok,reason = rate_limiter.check_search(uid)
+        ok, reason = rate_limiter.check_search(uid)
         if not ok:
             await edit_msg(cb.message, "⚠️ Подождите.")
             return
@@ -3168,7 +2760,7 @@ async def register_handlers(dp: Dispatcher):
             kb.button(text="🏪", callback_data="cmd_shop")
             kb.button(text="🔙", callback_data="cmd_menu")
             kb.adjust(1)
-            await edit_msg(cb.message, "⛔️ <b>Закончились!</b>", kb.as_markup())
+            await edit_msg(cb.message, "⛔️ <b>Поиски закончились!</b>", kb.as_markup())
             return
 
         mode = normalize_search_mode_callback(cb.data)
@@ -3176,21 +2768,21 @@ async def register_handlers(dp: Dispatcher):
         if not mi or mi.get("disabled"):
             return
 
-        is_prem = uid in ADMIN_IDS or has_subscription(uid)
-        if mi["premium"] and not is_prem:
+        # Проверка Premium для красивых
+        if mi.get("premium") and not has_subscription(uid) and uid not in ADMIN_IDS:
+            await answer_cb(cb, "🔒 Нужен Premium!", show_alert=True)
             return
 
-        if uid not in ADMIN_IDS:
-            if uid in searching_users:
-                try:
-                    await bot.send_message(uid, "⏳ Уже идёт поиск!")
-                except:
-                    pass
-                return
+        if uid not in ADMIN_IDS and uid in searching_users:
+            try:
+                await bot.send_message(uid, "⏳ Уже идёт поиск!")
+            except:
+                pass
+            return
 
-        cd = user_search_cooldown.get(uid,0)
-        rem = SEARCH_COOLDOWN-(time.time()-cd)
-        if rem>0:
+        cd = user_search_cooldown.get(uid, 0)
+        rem = SEARCH_COOLDOWN - (time.time() - cd)
+        if rem > 0:
             try:
                 await bot.send_message(uid, f"⏳ {int(rem)} сек.")
             except:
@@ -3199,17 +2791,25 @@ async def register_handlers(dp: Dispatcher):
 
         searching_users.add(uid)
         if uid not in ADMIN_IDS:
-            user_search_cooldown[uid]=time.time()
+            user_search_cooldown[uid] = time.time()
+
         try:
-            count = get_search_count(uid)
+            # 👇 ГЛАВНОЕ ИЗМЕНЕНИЕ: всегда 1 ник для Дефолт и Красивые
+            if mode in ("default", "beautiful"):
+                count = 1
+            else:
+                count = get_search_count(uid)  # запас на случай других режимов
+
             found, stats = await do_search(count, mi["func"], cb.message, mi["name"], uid, mode)
             text = format_results(found, stats, mi["name"])
             kb = InlineKeyboardBuilder()
             kb.button(text="🔙 Меню", callback_data="cmd_menu")
             kb.button(text="🔄 Повторить", callback_data=f"go_{mode}")
             kb.adjust(2)
-            try: await cb.message.delete()
-            except: pass
+            try:
+                await cb.message.delete()
+            except:
+                pass
             await send_menu_photo(uid, text, kb.as_markup())
         except Exception as e:
             logger.error(f"Search error {uid}: {e}")
@@ -3219,8 +2819,9 @@ async def register_handlers(dp: Dispatcher):
                 pass
         finally:
             searching_users.discard(uid)
+
         use_search(uid)
-        log_action(uid,"search",mode)
+        log_action(uid, "search", mode)
 
     # ═══ CALLBACKS: Оценка ═══
     
@@ -3272,123 +2873,26 @@ async def register_handlers(dp: Dispatcher):
 
     @dp.callback_query(F.data == "cmd_shop")
     async def cb_shop(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
+        uid = cb.from_user.id
+        await answer_cb(cb)
         bal = get_balance(uid)
 
-        text = (f"🏪 <b>Магазин</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"💰 Баланс: <code>{bal:.1f}⭐</code>\n\n"
-                f"Выберите раздел:\n"
-                f"• 💎 Premium\n"
-                f"• 🌟 VIP\n"
-                f"• 📦 Бандл Premium+VIP")
+        text = (
+            f"💎 <b>Премиум</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            f"⚡️ ФУНКЦИИ:\n♾️ Безлимитный поиск\n🔎 Поиск редких 5-ти буквенных юзов\n\n"
+            f"<b>Цены:</b>\n"
+        )
+        for key, p in PRICES.items():
+            text += f"• {p['label']} — {p['stars']}⭐ / {p['rub']}₽\n"
+        text += f"\n💳 Рубли — @{PAY_CONTACT}\n\n🆔 Ваш ID: <code>{uid}</code>"
 
         kb = InlineKeyboardBuilder()
-        kb.button(text="💎 Premium", callback_data="shop_premium")
-        kb.button(text="🌟 VIP", callback_data="shop_vip")
-        kb.button(text="📦 Бандл Premium+VIP", callback_data="shop_bundle")
+        for key, p in PRICES.items():
+            kb.button(text=f"{p['label']} — {p['stars']}⭐ / {p['rub']}₽", url=SUPPORT_URL)
         kb.button(text="🔙 Меню", callback_data="cmd_menu")
         kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "shop_buy_searches")
-    async def cb_shop_buy(cb: CallbackQuery):
-        await answer_cb(cb, "Раздел отключён", show_alert=True)
-        await cb_shop(cb)
-
-    @dp.callback_query(F.data == "shop_premium")
-    async def cb_shop_prem(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        bal = get_balance(uid)
-
-        text = (f"💎 <b>Premium</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Преимущества:\n\n"
-                f"• {PREMIUM_COUNT} юзов/поиск\n"
-                f"• {PREMIUM_SEARCHES_LIMIT} поисков/день\n"
-                f"• Все режимы\n"
-                f"• Шаблон + Похожие\n"
-                f"<b>Цены:</b>\n\n")
-
-        for p in PRICES.values():
-            text += f"• {p['label']} — <code>{p['stars']}⭐</code>/<code>{p['rub']}₽</code>\n"
-
-        text += f"\n💰 Баланс: <code>{bal:.1f}⭐</code>\n💳 Рубли — @{PAY_CONTACT}"
-
-        kb = InlineKeyboardBuilder()
-        for k,p in PRICES.items():
-            kb.button(text=f"{p['label']} — {p['stars']}⭐/{p['rub']}₽", callback_data=f"buy_{k}")
-        kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
-        kb.button(text="🔙 Магазин", callback_data="cmd_shop")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    # ═══ НОВОЕ: VIP магазин ═══
-    @dp.callback_query(F.data == "shop_vip")
-    async def cb_shop_vip(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        is_prem = has_subscription(uid)
-        bal = get_balance(uid)
-
-        text = (f"🌟 <b>VIP</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"Преимущества:\n\n"
-                f"• {VIP_COUNT} юзов/поиск (вместо {PREMIUM_COUNT})\n"
-                f"• {VIP_SEARCHES_LIMIT} поисков/день (вместо {PREMIUM_SEARCHES_LIMIT})\n"
-                f"• 🎯 Тематический поиск по слову\n\n")
-
-        if not is_prem and uid not in ADMIN_IDS:
-            text += "⚠️ <b>Сначала нужен Premium!</b>\nИли купите бандл Premium+VIP.\n"
-            kb = InlineKeyboardBuilder()
-            kb.button(text="💎 Купить Premium", callback_data="shop_premium")
-            kb.button(text="📦 Бандл", callback_data="shop_bundle")
-            kb.button(text="🔙 Магазин", callback_data="cmd_shop")
-            kb.adjust(1)
-        else:
-            text += f"<b>Цены апгрейда:</b>\n\n"
-            for k, vp in VIP_PRICES.items():
-                rub = int(vp['stars'] * STAR_TO_RUB)
-                text += f"• {vp['label']} — <code>{vp['stars']}⭐</code>/<code>{rub}₽</code>\n"
-            text += f"\n💰 Баланс: <code>{bal:.1f}⭐</code>\n💳 Рубли — @{PAY_CONTACT}"
-            kb = InlineKeyboardBuilder()
-            for k, vp in VIP_PRICES.items():
-                rub = int(vp['stars'] * STAR_TO_RUB)
-                kb.button(text=f"{vp['label']} — {vp['stars']}⭐/{rub}₽", callback_data=f"buyvip_{k}")
-            kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
-            kb.button(text="🔙 Магазин", callback_data="cmd_shop")
-            kb.adjust(1)
 
         await edit_msg(cb.message, text, kb.as_markup())
-
-    # ═══ НОВОЕ: Бандл Premium+VIP ═══
-    @dp.callback_query(F.data == "shop_bundle")
-    async def cb_shop_bundle(cb: CallbackQuery):
-        uid = cb.from_user.id; await answer_cb(cb)
-        bal = get_balance(uid)
-
-        text = (f"📦 <b>Бандл Premium+VIP</b>\n━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                f"💎 Premium + 🌟 VIP в одном!\n"
-                f"<b>Скидка 5%</b> от суммарной цены\n\n"
-                f"<b>Цены:</b>\n\n")
-
-        for k, bp in BUNDLE_PRICES.items():
-            p = PRICES[k]; vp = VIP_PRICES[k]
-            full = p['stars'] + vp['stars']
-            rub = int(bp['stars'] * STAR_TO_RUB)
-            text += f"• {bp['label']} — <code>{bp['stars']}⭐</code>/<code>{rub}₽</code> <s>{full}⭐</s>\n"
-
-        text += f"\n💰 Баланс: <code>{bal:.1f}⭐</code>\n💳 Рубли — @{PAY_CONTACT}"
-
-        kb = InlineKeyboardBuilder()
-        for k, bp in BUNDLE_PRICES.items():
-            rub = int(bp['stars'] * STAR_TO_RUB)
-            kb.button(text=f"{bp['label']} — {bp['stars']}⭐/{rub}₽", callback_data=f"buybundle_{k}")
-        kb.button(text=f"💳 Рубли (@{PAY_CONTACT})", url=f"https://t.me/{PAY_CONTACT}")
-        kb.button(text="🔙 Магазин", callback_data="cmd_shop")
-        kb.adjust(1)
-        await edit_msg(cb.message, text, kb.as_markup())
-
-    @dp.callback_query(F.data == "shop_promo")
-    async def cb_shop_promo(cb: CallbackQuery):
-        await answer_cb(cb, "Раздел отключён", show_alert=True)
-        await cb_shop(cb)
 
     # ═══ ВЫБОР ОПЛАТЫ: БАЛАНС ═══
 
@@ -4187,34 +3691,54 @@ async def register_handlers(dp: Dispatcher):
             return
         await start_search(msg)
 
-    @dp.message(F.document)
-    async def handle_session_file(msg: Message):
-        uid = msg.from_user.id
-        if uid not in ADMIN_IDS:
-            await msg.answer("⛔ Нет прав")
+    @dp.message(Command("vip"))
+    async def vip_command(message: Message):
+        uid = message.from_user.id
+        if not has_vip(uid) and uid not in ADMIN_IDS:
+            await message.answer("❌ У вас нет VIP доступа.")
             return
-    
-        state = user_states.get(uid, {})
-        if state.get("action") != "waiting_session_file":
-            await msg.answer("❌ Сейчас не ожидается загрузка файла. Начните с кнопки '📤 Загрузить сессию' в админ-панели.")
+        now = time.time()
+        last = user_search_cooldown.get(f"vip_{uid}", 0)
+        if now - last < 10:
+            await message.answer(f"⏳ Подождите {int(10 - (now - last))} сек.")
             return
-
-        doc = msg.document
-        if not doc.file_name.endswith(".session"):
-            await msg.answer("❌ Неверный формат. Нужен файл с расширением .session")
+        user_search_cooldown[f"vip_{uid}"] = now
+        if uid in searching_users:
+            await message.answer("⏳ Уже идёт поиск!")
             return
+        searching_users.add(uid)
+        msg = await message.answer("🚀 VIP поиск (5 букв, 3 ника)...")
+        try:
+            found, stats = await do_search(3, generate_premium_pattern, msg, "VIP", uid, "beautiful")
+            if found:
+                lines = [f"🌟 <b>VIP поиск</b>\n", f"✅ Найдено: {len(found)}\n"]
+                for i, item in enumerate(found[:3], 1):
+                    lines.append(f"{i}. <code>@{item['username']}</code>")
+                    lines.append(
+                        f"📱 <a href='https://t.me/{item['username']}'>Telegram</a> · 💎 <a href='https://fragment.com/username/{item['username']}'>Fragment</a>")
+                    lines.append("")
+                lines.append(
+                    f"📊 Проверено: <code>{stats['attempts']}</code>\n⏱ Время: <code>{stats['elapsed']}с</code>")
+                result = "\n".join(lines)
+                kb = InlineKeyboardBuilder()
+                kb.button(text="🔄 Искать ещё", callback_data="vip_search_again")
+                kb.button(text="🏠 Главное меню", callback_data="cmd_menu")
+                kb.adjust(2)
+                await msg.edit_text(result, reply_markup=kb.as_markup(), parse_mode="HTML", disable_web_page_preview=True)
+            else:
+                await msg.edit_text(
+                    f"🌟 VIP поиск\n\n❌ Ничего не найдено\n\n📊 Проверено: <code>{stats['attempts']}</code>\n⏱ Время: <code>{stats['elapsed']}с</code>")
+        finally:
+            searching_users.discard(uid)
 
-        # Сохраняем временный файл
-        temp_path = f"temp_{uid}_{int(time.time())}.session"
-        await bot.download(doc, destination=temp_path)
+    @dp.callback_query(F.data == "vip_search_again")
+    async def vip_again(call: CallbackQuery):
+        await call.message.delete()
+        fake_msg = call.message
+        fake_msg.text = "/vip"
+        await vip_command(fake_msg)
+        await call.answer()
 
-    # Запоминаем временный файл в состоянии
-        user_states[uid] = {
-            "action": "waiting_session_phone",
-            "temp_file": temp_path
-        }
-        await msg.answer("📱 Введите номер телефона этого аккаунта в формате +7XXXXXXXXXX")
-    
     @dp.message(F.text & ~F.text.startswith("/"))
     async def handle_text(msg: Message):
         uid = msg.from_user.id
@@ -4674,6 +4198,11 @@ async def register_handlers(dp: Dispatcher):
                 await msg.answer("❌ Код уже существует")
             return
 
+        if action in ("admin_add_session_api_id", "admin_add_session_api_hash", "admin_add_session_phone"):
+            user_states.pop(uid, None)
+            await msg.answer("⚡ User-сессии удалены. Бот работает только в публичном строгом режиме.")
+            return
+
         if action=="admin_refs_check_input":
             user_states.pop(uid,None); target=find_user(msg.text.strip())
             if not target: await msg.answer("❌"); return
@@ -4718,102 +4247,6 @@ async def register_handlers(dp: Dispatcher):
             config["required_channels"]=channels; save_bot_config(config); apply_config(config)
             log_action(uid,"ch_add",ch); await msg.answer(f"✅ @{ch}"); return
 
-        if action == "admin_add_session_phone":
-            phone = msg.text.strip()
-            if not phone.startswith("+"):
-                phone = "+" + phone
-            # Вызываем метод пула
-            result = await pool.add_new_account(phone, uid, bot, lambda t: msg.answer(t))
-            if result is True:
-                # уже авторизован
-                user_states.pop(uid, None)
-                from aiogram.types import CallbackQuery
-                # Создаём имитацию callback для обновления админ-панели
-                fake_cb = CallbackQuery(id="fake", from_user=msg.from_user, chat_instance="", data="adm_sessions", message=msg)
-                await cb_adm_sessions(fake_cb)  # обновить админ-панель
-            elif result is False:
-                await msg.answer("❌ Ошибка")
-                user_states.pop(uid, None)
-    # если result is None – ждём код, состояние уже установлено в add_new_account
-            return
-
-        if action == "session_code":
-            code = msg.text.strip()
-            client = state.get("client")
-            phone = state.get("phone")
-            if not client:
-                await msg.answer("❌ Сессия потеряна")
-                user_states.pop(uid, None)
-                return
-            try:
-                await client.sign_in(phone, code)
-        # если запросит 2FA, то будет ошибка, обработаем ниже
-        # если успешно – завершаем
-                pool.clients.append(client)
-                pool.phone_numbers.append(phone)
-                idx = len(pool.clients) - 1
-                pool.status[idx] = "active"
-                pool.cooldown_until[idx] = 0
-                await msg.answer(f"✅ Аккаунт {phone} добавлен!")
-                user_states.pop(uid, None)
-                await cb_adm_sessions(msg)
-            except errors.SessionPasswordNeededError:
-                user_states[uid] = {"action": "session_2fa", "client": client, "phone": phone}
-                await msg.answer("🔒 Введите пароль двухфакторной аутентификации:")
-            except Exception as e:
-                await msg.answer(f"❌ Ошибка: {e}")
-                user_states.pop(uid, None)
-            return
-
-        if action == "session_2fa":
-            password = msg.text.strip()
-            client = state.get("client")
-            phone = state.get("phone")
-            if not client:
-                await msg.answer("❌ Ошибка")
-                user_states.pop(uid, None)
-                return
-            try:
-                await client.sign_in(password=password)
-                pool.clients.append(client)
-                pool.phone_numbers.append(phone)
-                idx = len(pool.clients) - 1
-                pool.status[idx] = "active"
-                pool.cooldown_until[idx] = 0
-                await msg.answer(f"✅ Аккаунт {phone} добавлен!")
-                user_states.pop(uid, None)
-                await cb_adm_sessions(msg)
-            except Exception as e:
-                await msg.answer(f"❌ Ошибка: {e}")
-                user_states.pop(uid, None)
-            return
-
-        if action == "waiting_session_phone":
-            phone = msg.text.strip()
-            if not phone.startswith("+"):
-                phone = "+" + phone
-            temp_file = state.get("temp_file")
-            if not temp_file or not os.path.exists(temp_file):
-                await msg.answer("❌ Временный файл потерян. Попробуйте заново.")
-                user_states.pop(uid, None)
-                return
-
-            # Перемещаем файл в папку sessions с правильным именем
-            os.makedirs("sessions", exist_ok=True)
-            dest_path = os.path.join("sessions", f"{phone}.session")
-            shutil.move(temp_file, dest_path)
-
-            # Добавляем клиент в пул (перезагружаем сессии)
-            await pool._add_client(phone)
-    
-            await msg.answer(f"✅ Сессия для {phone} успешно добавлена!")
-            user_states.pop(uid, None)
-    
-            # Обновляем админ-панель сессий
-            fake_cb = CallbackQuery(id="fake", from_user=msg.from_user, chat_instance="", data="adm_sessions", message=msg)
-            await cb_adm_sessions(fake_cb)
-            return
-        
         # Дефолт
         ns=await check_subscribed(uid)
         if ns: t,k=build_sub_kb(ns)
@@ -4937,26 +4370,11 @@ async def register_handlers(dp: Dispatcher):
 
         kb = InlineKeyboardBuilder()
         kb.button(text="🔄 Обновить", callback_data="adm_sessions")
-        kb.button(text="📤 Загрузить сессию", callback_data="upload_session")
-        kb.button(text="➕ Добавить аккаунт", callback_data="a_add_session")
         kb.button(text="🔙 Админ", callback_data="cmd_admin")
+        kb.adjust(1)
 
         await edit_msg(cb.message, text, kb.as_markup())
 
-    @dp.callback_query(F.data == "upload_session")
-    async def cb_upload_session(cb: CallbackQuery):
-        if cb.from_user.id not in ADMIN_IDS:
-            await cb.answer("⛔ Нет прав", show_alert=True)
-            return
-        await cb.answer()
-        user_states[cb.from_user.id] = {"action": "waiting_session_file"}
-        await cb.message.edit_text(
-            "📤 Отправьте мне файл сессии (.session)\n\n"
-            "Файл должен быть создан заранее (например, через Telethon).\n"
-            "После загрузки я запрошу номер телефона для этого аккаунта.",
-            reply_markup=InlineKeyboardBuilder().button(text="❌ Отмена", callback_data="adm_sessions").as_markup()
-        )
-        
     @dp.callback_query(F.data == "a_toggle_checker")
     async def cb_toggle_checker(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS:
@@ -5208,15 +4626,12 @@ async def register_handlers(dp: Dispatcher):
         await cb_asessions(cb)
 
     @dp.callback_query(F.data == "a_add_session")
-    async def cb_add_session(cb: CallbackQuery):
-        if cb.from_user.id not in ADMIN_IDS:
-            return
+    async def cb_add_sess(cb: CallbackQuery):
+        if cb.from_user.id not in ADMIN_IDS: return
         await answer_cb(cb)
-        user_states[cb.from_user.id] = {"action": "admin_add_session_phone"}
-        kb = InlineKeyboardBuilder()
-        kb.button(text="❌", callback_data="adm_sessions")
-        await edit_msg(cb.message, "📱 Введите номер телефона в формате +7XXXXXXXXXX:", kb.as_markup())
-    
+        kb = InlineKeyboardBuilder(); kb.button(text="🔙", callback_data="a_sessions")
+        await edit_msg(cb.message, "⚡ <b>User-сессии удалены. Добавление аккаунтов отключено.</b>", kb.as_markup())
+
     @dp.callback_query(F.data == "a_keys")
     async def cb_akeys(cb: CallbackQuery):
         if cb.from_user.id not in ADMIN_IDS: return
@@ -6066,26 +5481,61 @@ async def free_cache_warmer_loop():
 # ═══════════════════════ SYSTEMD ═══════════════════════
 
 def setup_systemd():
-    sp="/etc/systemd/system/hunter.service"
-    if os.path.exists(sp): return
-    if os.geteuid()!=0: logger.warning("Не root — systemd не настроен"); return
-    bp=os.path.abspath(__file__); bd=os.path.dirname(bp); pp=sys.executable
-    try:
-        with open(sp,"w") as f:
-            f.write(f"[Unit]\nDescription=Hunter Bot\nAfter=network.target\n\n[Service]\nType=simple\nUser=root\nWorkingDirectory={bd}\nExecStart={pp} {bp}\nRestart=always\nRestartSec=3\nEnvironment=PYTHONUNBUFFERED=1\n\n[Install]\nWantedBy=multi-user.target\n")
-        subprocess.run(["systemctl","daemon-reload"],check=True)
-        subprocess.run(["systemctl","enable","hunter"],check=True)
-        logger.info("✅ Systemd OK")
-    except Exception as e: logger.error(f"Systemd: {e}")
+    if os.name != "posix" or not hasattr(os, "geteuid"):
+        logger.warning("Windows — systemd не настраивается")
+        return
 
+    sp = "/etc/systemd/system/hunter.service"
+    if os.path.exists(sp):
+        return
+    if os.geteuid() != 0:
+        logger.warning("Не root — systemd не настроен")
+        return
+
+    bp = os.path.abspath(__file__)
+    bd = os.path.dirname(bp)
+    pp = sys.executable
+    try:
+        with open(sp, "w") as f:
+            f.write(f"[Unit]\nDescription=Hunter Bot\nAfter=network.target\n\n[Service]\nType=simple\nUser=root\nWorkingDirectory={bd}\nExecStart={pp} {bp}\nRestart=always\nRestartSec=3\nEnvironment=PYTHONUNBUFFERED=1\n\n[Install]\nWantedBy=multi-user.target\n")
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        subprocess.run(["systemctl", "enable", "hunter"], check=True)
+        logger.info("Systemd OK")
+    except Exception as e:
+        logger.error(f"Systemd: {e}")
 
 # ═══════════════════════ MAIN ═══════════════════════
+async def daily_reset_task():
+    now = datetime.now()
+    target = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    if now >= target:
+        target += timedelta(days=1)
+    await asyncio.sleep((target - now).total_seconds())
+    while True:
+        try:
+            conn = sqlite3.connect(DB)
+            c = conn.cursor()
+            today = datetime.now().strftime("%Y-%m-%d")
+            # Сбрасываем только тех, у кого нет Premium и нет VIP
+            c.execute("UPDATE users SET daily_searches_used=0, daily_searches_date=? WHERE (sub_end IS NULL OR sub_end='') AND (vip_end IS NULL OR vip_end='')", (today,))
+            conn.commit()
+            c.execute("SELECT uid FROM users WHERE (sub_end IS NULL OR sub_end='') AND (vip_end IS NULL OR vip_end='')")
+            users = c.fetchall()
+            conn.close()
+            for (uid,) in users:
+                try:
+                    await bot.send_message(uid, "🎁 Ваши бесплатные попытки восстановлены!\n\n🔘 Доступно: 3 попыток на сегодня.\n\nНажмите 🔍 ПОИСК чтобы начать!")
+                except:
+                    pass
+        except Exception as e:
+            logger.error(f"daily reset error: {e}")
+        await asyncio.sleep(86400)
 
 async def main():
     global http_session, bot_info, pool
     dp = Dispatcher()
     pool = AccountPool()
-    init_db(); await pool.init(); setup_systemd()
+    init_db(); setup_systemd()
     config=load_bot_config(); apply_config(config)
     if "prices" in config:
         for k,v in config["prices"].items():
@@ -6107,6 +5557,7 @@ async def main():
     asyncio.create_task(session_watchdog())
     asyncio.create_task(daily_report_loop())
     asyncio.create_task(free_cache_warmer_loop())
+    asyncio.create_task(daily_reset_task())
     try:
         await bot.delete_webhook(drop_pending_updates=True)
         await dp.start_polling(bot)
