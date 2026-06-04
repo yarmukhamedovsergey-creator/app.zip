@@ -44,7 +44,7 @@ bot_info = None
 
 # ═══════════════════════ НАСТРОЙКИ ═══════════════════════
 
-MAIN_TOKEN = "8796662755:AAF8iR8j4DIHqBnsgfP67ixFVgp2avDGWPk"
+MAIN_TOKEN = "8796662755:AAHZbCh34pUgfsPUx_K-rIRzymZMP9yULYE"
 ADMIN_IDS = [8746165041, 7894051808, 8477431361, 5969266721]
 ADMIN_CONTACT = "emeuw"
 
@@ -66,6 +66,7 @@ MIN_WITHDRAW = 50
 SEARCH_PRICE_STARS = 5
 PAY_CONTACT = "Soveqk"
 REQUIRED_CHANNELS = ["SwordSearch"]
+CHANNEL_ID = "@SwordSearch"
 SUPPORT_URL = "https://t.me/Soveqk"
 MONITOR_CHECK_INTERVAL = 1800
 MONITOR_MAX_FREE = 0
@@ -291,6 +292,19 @@ async def send_menu_photo(chat_id, text, kb=None):
         await bot.send_photo(chat_id, photo=photo, caption=text, reply_markup=kb, parse_mode="HTML")
     except Exception:
         await bot.send_message(chat_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+
+async def send_channel_message(text, kb=None, photo_path=None):
+    """Отправляет сообщение в канал (настроенный в конфиге)"""
+    channel_id = "@SwordSearch"   # замените на ваш канал или числовой ID
+    try:
+        if photo_path and os.path.exists(photo_path):
+            photo = FSInputFile(photo_path)
+            await bot.send_photo(channel_id, photo=photo, caption=text, reply_markup=kb, parse_mode="HTML")
+        else:
+            await bot.send_message(channel_id, text, reply_markup=kb, parse_mode="HTML", disable_web_page_preview=True)
+        log_event("channel", "Сообщение отправлено в канал")
+    except Exception as e:
+        log_event("channel", f"Ошибка: {e}", logging.ERROR)
 
 async def edit_to_photo(msg, text, kb=None):
     try:
@@ -605,7 +619,6 @@ class AccountPool:
         return None
 
 
-# ========== НОВЫЕ ГЕНЕРАТОРЫ (из bot (8).txt) ==========
 # ========== СПИСОК ЗАПРЕЩЁННЫХ СЛОВ ==========
 INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
                  "service","security","account","login","password","verify",
@@ -616,17 +629,22 @@ INVALID_WORDS = ["admin","support","help","test","telegram","bot","official",
 premium_pattern_mode = 0
 
 def generate_premium_pattern(length=5):
-    """Генерация ника по паттерну VCCVV без двух одинаковых гласных подряд"""
-    vowels = 'aeiouy'
-    consonants = 'bcdfghjklmnprstvxz'
-    while True:
-        v1 = random.choice(vowels)
-        c1 = random.choice(consonants)
-        c2 = random.choice(consonants)
-        v2 = random.choice(vowels)
-        v3 = random.choice(vowels)
-        if v2 != v3:   # гласные на позициях 3 и 4 не должны совпадать
-            return v1 + c1 + c2 + v2 + v3
+    """Красивый паттерн VCCVV (гласная-согласная-согласная-гласная-гласная)"""
+    global premium_pattern_mode
+    good_consonants = 'bcdfghjklmnprstvxz'
+    good_vowels = 'aeiou'
+    for _ in range(200):
+        # Генерируем по шаблону: гласная, согласная, согласная, гласная, гласная
+        username = (random.choice(good_vowels) +
+                    random.choice(good_consonants) +
+                    random.choice(good_consonants) +
+                    random.choice(good_vowels) +
+                    random.choice(good_vowels))
+        if is_valid_username(username):
+            premium_pattern_mode = 1 - premium_pattern_mode  # переключаем для совместимости
+            return username
+    # fallback: 5 случайных букв
+    return ''.join(random.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(5))
 
 def generate_standard_pattern(length=6):
     """Обычный паттерн (6 символов) — случайные буквы"""
@@ -5257,6 +5275,29 @@ async def register_handlers(dp: Dispatcher):
             await cb.answer("Кнопка не обработана. Смотри data в консоли.", show_alert=False)
         except Exception:
             pass
+
+    @dp.message(Command("channel_post"))
+    async def cmd_channel_post(message: Message):
+        if message.from_user.id not in ADMIN_IDS:
+            return
+        text = (
+            "🔥 <b>Активно продолжаем выплачивать деньги за ваши видео!</b>\n\n"
+            "📱 <b>Как заработать:</b>\n"
+            "1. Сними видео с нашим ботом (покажи поиск ников)\n"
+            "2. Выложи в TikTok\n"
+            "3. Отправь заявку на проверку\n"
+            "4. После одобрения введи реквизиты СБП для выплаты\n\n"
+            "💰 <b>Каждые 1000 просмотров = 50₽</b>\n\n"
+            "🚀 Скорей приступай!\n\n"
+            "🔗 <b>ТикТок рефералы</b>\n"
+            "👥 <b>Рефералы за подписку</b>"
+        )
+        kb = InlineKeyboardBuilder()
+        kb.button(text="🎥 Как заработать?", url="https://t.me/SwordSearch_bot")
+        kb.button(text="📤 Отправить заявку", url="https://t.me/SwordSearch_bot?start=tiktok")
+        kb.adjust(1)
+        await send_channel_message(text, kb.as_markup(), photo_path="tiktok_promo.png")
+        await message.answer("✅ Пост отправлен в канал!")
 
     # ═══════════════════════ ФОНОВЫЕ ЗАДАЧИ ═══════════════════════
 
