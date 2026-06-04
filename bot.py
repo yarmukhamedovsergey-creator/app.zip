@@ -44,7 +44,7 @@ bot_info = None
 
 # ═══════════════════════ НАСТРОЙКИ ═══════════════════════
 
-MAIN_TOKEN = "8796662755:AAHZbCh34pUgfsPUx_K-rIRzymZMP9yULYE"
+MAIN_TOKEN = "
 ADMIN_IDS = [8746165041, 7894051808, 8477431361, 5969266721]
 ADMIN_CONTACT = "emeuw"
 
