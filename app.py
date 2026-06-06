@@ -11,7 +11,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 logging.basicConfig(level=logging.INFO)
 
 # Конфигурация бота
-BOT_TOKEN = "8660751586:AAGZHf5TMcJVMMS1XR8xJ3XeNb4VTmYvWKQ"  # Замените на токен вашего бота
+BOT_TOKEN = "  # Замените на токен вашего бота
 
 # Список user-agent для ротации
 USER_AGENTS = [
