@@ -6,6 +6,47 @@ USERNAME HUNTER v25.1 — VIP + Тематический поиск + краси
 
 from __future__ import annotations
 
+import os
+import sys
+import subprocess
+import importlib
+
+# ========== АВТОУСТАНОВКА ==========
+def install_package(package):
+    """Устанавливает пакет через pip"""
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "--quiet", package],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return True
+    except:
+        return False
+
+def check_and_install(package, import_name=None):
+    """Проверяет наличие пакета и устанавливает при необходимости"""
+    if import_name is None:
+        import_name = package.replace("-", "_")
+    
+    try:
+        importlib.import_module(import_name)
+        print(f"✅ {package} уже установлен")
+        return True
+    except ImportError:
+        print(f"⚠️ {package} не найден, устанавливаю...")
+        if install_package(package):
+            print(f"✅ {package} успешно установлен")
+            return True
+        else:
+            print(f"❌ Ошибка установки {package}")
+            return False
+
+# Устанавливаем зависимости
+check_and_install("aiogram")
+check_and_install("aiohttp")
+
+# ========== ИМПОРТЫ ==========
 import asyncio
 import random
 import logging
@@ -15,32 +56,28 @@ import time
 import re
 import json
 import html
-import os
-import sys
-import subprocess
 from datetime import datetime, timedelta
-from aiogram.types import FSInputFile
-
-# BOT_TME_STRICT_CACHE_ACTIVE
-CACHE_FILE = "free_usernames_tme_strict.json"
-cache_lock = asyncio.Lock()
 
 import aiohttp
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     Message, CallbackQuery, BufferedInputFile,
-    LabeledPrice, PreCheckoutQuery, InputMediaPhoto
+    LabeledPrice, PreCheckoutQuery, InputMediaPhoto,
+    FSInputFile
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.exceptions import TelegramBadRequest
 
-# Telethon полностью отключён: бот работает без user-сессий.
-HAS_TELETHON = False
+# BOT_TME_STRICT_CACHE_ACTIVE
+CACHE_FILE = "free_usernames_tme_strict.json"
+cache_lock = asyncio.Lock()
 
+HAS_TELETHON = False
 pool = None
 http_session = None
 bot_info = None
+
 
 # ═══════════════════════ НАСТРОЙКИ ═══════════════════════
 
