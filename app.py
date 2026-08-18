@@ -41,7 +41,7 @@ from aiogram.types import CallbackQuery, FSInputFile, InlineKeyboardButton, Inli
 # ═══════════════════════════════ НАСТРОЙКИ ═══════════════════════════════
 
 # Новый токен Telegram-бота от @BotFather. Старый опубликованный токен лучше отозвать.
-BOT_TOKEN = "8660751586:AAG-uIP9U6sCdH26ZPr44KRaR_SwSjqtyUA"
+BOT_TOKEN = ""
 
 # ID администратора — обычное число без кавычек. Можно добавить несколько ID через запятую.
 # Пример: ADMIN_IDS = [5969266721, 123456789]
